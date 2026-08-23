@@ -562,6 +562,22 @@ export async function recalculateStudentTotalPaid(studentId: string): Promise<vo
   await dbPut('students', { ...student, totalPaid, totalOwed, updatedAt: new Date().toISOString() });
 }
 
+/**
+ * تحديث حالة المجموعة تلقائياً بناءً على عدد الطلاب:
+ * - open → full عند اكتمال العدد
+ * - full → open عند توفر مكان
+ * (المجموعات المنتهية 'ended' لا تتغير تلقائياً)
+ */
+export async function syncGroupStatus(groupId: string): Promise<void> {
+  const group = await dbGetById<Group>('groups', groupId);
+  if (!group || group.status === 'ended') return;
+  const shouldBeFull = group.studentIds.length >= group.maxStudents;
+  const newStatus: GroupStatus = shouldBeFull ? 'full' : 'open';
+  if (group.status !== newStatus) {
+    await dbPut('groups', { ...group, status: newStatus, updatedAt: new Date().toISOString() });
+  }
+}
+
 export async function getGroupAttendanceForDate(
   groupId: string,
   date: string

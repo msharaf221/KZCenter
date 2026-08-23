@@ -4,7 +4,7 @@ import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
-import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, recalculateStudentTotalPaid, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
+import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, recalculateStudentTotalPaid, syncGroupStatus, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
 // Utils imported as needed
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
@@ -111,6 +111,7 @@ export default function GroupsPage() {
     if (!group) return;
     const updatedIds = group.studentIds.filter(id => id !== studentId);
     await dbPut('groups', { ...group, studentIds: updatedIds, updatedAt: new Date().toISOString() });
+    await syncGroupStatus(groupId);
     // Update student's enrolledGroups
     const student = students.find(s => s.id === studentId);
     if (student) {
@@ -144,6 +145,7 @@ export default function GroupsPage() {
 
     const updatedIds = [...group.studentIds, studentId];
     await dbPut('groups', { ...group, studentIds: updatedIds, updatedAt: new Date().toISOString() });
+    await syncGroupStatus(groupId);
     
     const student = students.find(s => s.id === studentId);
     if (student) {

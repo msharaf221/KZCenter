@@ -6,7 +6,7 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
-import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
+import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, syncGroupStatus, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
 import { toCSV, downloadCSV, parseCSV, formatDate } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -145,12 +145,14 @@ export default function StudentsPage() {
         const g = groups.find(g => g.id === groupId);
         if (g) {
           await dbPut('groups', { ...g, studentIds: g.studentIds.filter(id => id !== studentId) });
+          await syncGroupStatus(groupId);
         }
       }
       for (const groupId of addedGroups) {
         const g = groups.find(g => g.id === groupId);
         if (g) {
           await dbPut('groups', { ...g, studentIds: [...new Set([...g.studentIds, studentId])] });
+          await syncGroupStatus(groupId);
           
           const paidAmount = initialPayments[groupId] || 0;
           if (paidAmount > 0) {
@@ -192,6 +194,7 @@ export default function StudentsPage() {
           const group = allGroups.find(g => g.id === groupId);
           if (group && group.studentIds.includes(id)) {
             await dbPut('groups', { ...group, studentIds: group.studentIds.filter(sid => sid !== id) });
+            await syncGroupStatus(group.id);
           }
         }
       }
@@ -215,6 +218,7 @@ export default function StudentsPage() {
             if (group && group.studentIds.includes(id)) {
               group.studentIds = group.studentIds.filter(sid => sid !== id);
               await dbPut('groups', group);
+              await syncGroupStatus(group.id);
             }
           }
         }
