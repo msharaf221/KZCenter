@@ -216,7 +216,21 @@ export default function TeachersPage() {
       </Modal>
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف المدرس" message="هل أنت متأكد من حذف هذا المدرس؟"
-        onConfirm={async () => { if (deleteId) { await dbSoftDelete('teachers', deleteId); notify.success('تم الحذف'); loadTeachers(); } setDeleteId(null); }}
+        onConfirm={async () => {
+          if (deleteId) {
+            // حماية: منع حذف مدرس مرتبط بمجموعات نشطة
+            const allGroups = await dbGetAll<Group>('groups');
+            const linkedGroups = allGroups.filter(g => g.teacherId === deleteId && !g.deleted);
+            if (linkedGroups.length > 0) {
+              notify.error(`لا يمكن حذف المدرس - مسؤول عن ${linkedGroups.length} مجموعة. انقل المجموعات لمدرس آخر أولاً`);
+            } else {
+              await dbSoftDelete('teachers', deleteId);
+              notify.success('تم الحذف');
+              loadTeachers();
+            }
+          }
+          setDeleteId(null);
+        }}
         onCancel={() => setDeleteId(null)} danger />
     </Layout>
   );

@@ -105,6 +105,25 @@ export default function StudentsPage() {
     if (!form.parentPhone.trim()) { notify.error('هاتف ولي الأمر مطلوب'); return; }
     if (form.age < 3 || form.age > 18) { notify.error('العمر يجب أن يكون بين 3 و 18 سنة'); return; }
 
+    // فحص المجموعات الجديدة (السعة والحالة) قبل أي حفظ - نفس منطق صفحة المجموعات
+    const oldGroups = editingStudent?.enrolledGroups || [];
+    const newGroups = form.enrolledGroups || [];
+    const removedGroups = oldGroups.filter(g => !newGroups.includes(g));
+    const addedGroups = newGroups.filter(g => !oldGroups.includes(g));
+
+    for (const groupId of addedGroups) {
+      const g = groups.find(g => g.id === groupId);
+      if (!g) continue;
+      if (g.status === 'ended') {
+        notify.error(`المجموعة "${g.name}" منتهية - لا يمكن التسجيل فيها`);
+        return;
+      }
+      if (g.studentIds.length >= g.maxStudents) {
+        notify.error(`المجموعة "${g.name}" مكتملة (${g.studentIds.length}/${g.maxStudents})`);
+        return;
+      }
+    }
+
     try {
       const studentId = editingStudent?.id || generateId();
       
@@ -121,12 +140,6 @@ export default function StudentsPage() {
         await dbAdd('students', { ...newStudentData, createdAt: new Date().toISOString() });
         notifyNewStudent(form.name);
       }
-
-      // Sync Groups
-      const oldGroups = editingStudent?.enrolledGroups || [];
-      const newGroups = form.enrolledGroups || [];
-      const removedGroups = oldGroups.filter(g => !newGroups.includes(g));
-      const addedGroups = newGroups.filter(g => !oldGroups.includes(g));
 
       for (const groupId of removedGroups) {
         const g = groups.find(g => g.id === groupId);
@@ -153,9 +166,13 @@ export default function StudentsPage() {
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString()
             });
-            await recalculateStudentTotalPaid(studentId);
           }
         }
+      }
+
+      // إعادة حساب المدفوع والمستحق دائماً بعد أي تغيير في المجموعات
+      if (addedGroups.length > 0 || removedGroups.length > 0) {
+        await recalculateStudentTotalPaid(studentId);
       }
 
       setShowModal(false);

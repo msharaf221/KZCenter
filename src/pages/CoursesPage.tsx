@@ -241,7 +241,21 @@ export default function CoursesPage() {
       </Modal>
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف الكورس" message="هل أنت متأكد؟"
-        onConfirm={async () => { if (deleteId) { await dbSoftDelete('courses', deleteId); notify.success('تم الحذف'); load(); } setDeleteId(null); }}
+        onConfirm={async () => {
+          if (deleteId) {
+            // حماية: منع حذف كورس مرتبط بمجموعات نشطة
+            const allGroups = await dbGetAll<Group>('groups');
+            const linkedGroups = allGroups.filter(g => g.courseId === deleteId && !g.deleted);
+            if (linkedGroups.length > 0) {
+              notify.error(`لا يمكن حذف الكورس - مرتبط بـ ${linkedGroups.length} مجموعة. احذف المجموعات أولاً`);
+            } else {
+              await dbSoftDelete('courses', deleteId);
+              notify.success('تم الحذف');
+              load();
+            }
+          }
+          setDeleteId(null);
+        }}
         onCancel={() => setDeleteId(null)} danger />
     </Layout>
   );

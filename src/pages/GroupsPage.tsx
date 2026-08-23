@@ -115,6 +115,7 @@ export default function GroupsPage() {
     const student = students.find(s => s.id === studentId);
     if (student) {
       await dbPut('students', { ...student, enrolledGroups: student.enrolledGroups.filter(g => g !== groupId), updatedAt: new Date().toISOString() });
+      await recalculateStudentTotalPaid(studentId);
     }
     notify.success('تم إزالة الطالب من المجموعة');
     load();
@@ -128,6 +129,11 @@ export default function GroupsPage() {
     
     if (group.studentIds.length >= group.maxStudents) {
       notify.error('المجموعة مكتملة');
+      return;
+    }
+
+    if (group.status === 'ended') {
+      notify.error('لا يمكن التسجيل في مجموعة منتهية');
       return;
     }
 
@@ -389,8 +395,28 @@ export default function GroupsPage() {
         </Modal>
       )}
 
-      <ConfirmDialog isOpen={!!deleteId} title="حذف المجموعة" message="هل أنت متأكد؟"
-        onConfirm={async () => { if (deleteId) { await dbSoftDelete('groups', deleteId); notify.success('تم الحذف'); load(); } setDeleteId(null); }}
+      <ConfirmDialog isOpen={!!deleteId} title="حذف المجموعة" message="هل أنت متأكد؟ سيتم إلغاء تسجيل جميع الطلاب من هذه المجموعة وإعادة حساب مستحقاتهم."
+        onConfirm={async () => {
+          if (deleteId) {
+            const group = groups.find(g => g.id === deleteId);
+            // Cascade: إزالة المجموعة من enrolledGroups لكل الطلاب + إعادة حساب المستحقات
+            if (group) {
+              const enrolledStudents = students.filter(s => s.enrolledGroups?.includes(deleteId));
+              for (const st of enrolledStudents) {
+                await dbPut('students', {
+                  ...st,
+                  enrolledGroups: st.enrolledGroups.filter(gid => gid !== deleteId),
+                  updatedAt: new Date().toISOString(),
+                });
+                await recalculateStudentTotalPaid(st.id);
+              }
+            }
+            await dbSoftDelete('groups', deleteId);
+            notify.success('تم الحذف');
+            load();
+          }
+          setDeleteId(null);
+        }}
         onCancel={() => setDeleteId(null)} danger />
     </Layout>
   );
