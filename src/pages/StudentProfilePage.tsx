@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { GraduationCap, ArrowRight, BookOpen, CreditCard, ClipboardCheck, Phone, PhoneCall } from 'lucide-react';
+import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall } from 'lucide-react';
 import Layout from '../components/layout/Layout';
-import { dbGetById, dbGetAll, Student, Group, Course, Payment, Attendance, Teacher } from '../lib/db';
-import { formatCurrency, formatDate, getWhatsAppLink } from '../lib/utils';
+import { dbGetById, dbGetAll, Student, Group, Course, Payment, Teacher } from '../lib/db';
+import { formatDate, getWhatsAppLink } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 
 export default function StudentProfilePage() {
@@ -15,7 +15,6 @@ export default function StudentProfilePage() {
   const [student, setStudent] = useState<Student | null>(null);
   const [groups, setGroups] = useState<(Group & { courseName: string, teacherName: string })[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
-  const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadData = useCallback(async () => {
@@ -39,9 +38,6 @@ export default function StudentProfilePage() {
 
       const allPayments = await dbGetAll<Payment>('payments');
       setPayments(allPayments.filter(p => p.studentId === id && !p.deleted).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-
-      const allAttendance = await dbGetAll<Attendance>('attendance');
-      setAttendance(allAttendance.filter(a => a.studentId === id).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
 
     } finally {
       setLoading(false);
@@ -70,9 +66,11 @@ export default function StudentProfilePage() {
             <h1 className="text-2xl font-bold text-gray-900 mb-2">{student.name}</h1>
             <p className="text-gray-500 mb-4">{student.age} سنة</p>
             <div className="flex flex-wrap gap-4 text-sm font-medium">
-              <a href={getWhatsAppLink(student.phone)} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-xl border border-gray-100 hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
-                <Phone size={16} /> هاتف الطالب
-              </a>
+              {student.phone && (
+                <a href={getWhatsAppLink(student.phone)} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-xl border border-gray-100 hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
+                  <Phone size={16} /> هاتف الطالب
+                </a>
+              )}
               <a href={getWhatsAppLink(student.parentPhone)} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-xl border border-gray-100 hover:bg-green-50 hover:text-green-600 transition-colors">
                 <PhoneCall size={16} /> ولي الأمر
               </a>

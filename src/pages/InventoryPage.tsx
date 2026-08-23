@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Search, Edit2, Trash2, Book, Archive, RefreshCcw, DollarSign } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2 } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -190,7 +190,7 @@ export default function InventoryPage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">النوع</label>
-              <select value={form.type} onChange={e => setForm({...form, type: e.target.value as any})}
+              <select value={form.type} onChange={e => setForm({...form, type: e.target.value as InventoryItem['type']})}
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white focus:outline-none">
                 <option value="handout">ملزمة</option>
                 <option value="book">كتاب</option>

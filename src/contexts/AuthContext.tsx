@@ -4,7 +4,7 @@ import { User, UserRole, seedDefaultData, getUserByUsername, dbGetAll, dbPut, db
 import { notify } from '../lib/notifications';
 
 interface AuthContextType {
-  user: User | null;
+  user: SessionUser | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
@@ -22,6 +22,14 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 const SESSION_KEY = 'educenter_session';
 
+// Safe session shape: never persist the password hash
+type SessionUser = Omit<User, 'passwordHash'>;
+
+function toSessionUser(u: User): SessionUser {
+  const { passwordHash: _ph, ...safe } = u;
+  return safe;
+}
+
 const ADMIN_PERMISSIONS = [
   'students', 'teachers', 'courses', 'groups',
   'payments', 'attendance', 'reports', 'settings',
@@ -31,7 +39,7 @@ const ADMIN_PERMISSIONS = [
 const TEACHER_PERMISSIONS = ['attendance', 'students_view', 'reports_view'];
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [allUsers, setAllUsers] = useState<User[]>([]);
 
@@ -40,25 +48,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function initApp() {
-    console.log('🚀 Initializing app...');
     try {
       await seedDefaultData();
-      console.log('✅ Default data seeded');
-      
-      // Try to restore session
+
+      // Try to restore session (strip any legacy passwordHash)
       const savedSession = sessionStorage.getItem(SESSION_KEY);
       if (savedSession) {
         try {
           const parsed = JSON.parse(savedSession);
+          delete parsed.passwordHash;
           setUser(parsed);
-          console.log('✅ Session restored');
         } catch {
           sessionStorage.removeItem(SESSION_KEY);
         }
       }
       await refreshUsers();
     } catch (e) {
-      console.error('❌ initApp error:', e);
+      console.error('initApp error:', e);
     } finally {
       setLoading(false);
     }
@@ -68,38 +74,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const users = await dbGetAll<User>('users');
       setAllUsers(users);
-      console.log('✅ Users loaded:', users.length);
     } catch (e) {
       console.error('refreshUsers error:', e);
     }
   }
 
   async function login(username: string, password: string): Promise<boolean> {
-    console.log('🔐 Attempting login for:', username);
     try {
       const foundUser = await getUserByUsername(username);
-      console.log('👤 Found user:', foundUser ? 'yes' : 'no');
-      
+
       if (!foundUser) {
-        console.log('❌ User not found');
         return false;
       }
 
-      console.log('🔑 Comparing passwords...');
       const match = bcrypt.compareSync(password, foundUser.passwordHash);
-      console.log('🔑 Password match:', match);
-      
+
       if (!match) {
-        console.log('❌ Password mismatch');
         return false;
       }
 
-      setUser(foundUser);
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify(foundUser));
-      console.log('✅ Login successful');
+      const sessionUser = toSessionUser(foundUser);
+      setUser(sessionUser);
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
       return true;
     } catch (e) {
-      console.error('❌ login error:', e);
+      console.error('login error:', e);
       return false;
     }
   }
@@ -162,12 +161,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const passwordHash = bcrypt.hashSync(newPassword, 10);
     await dbPut('users', { ...userToUpdate, passwordHash, updatedAt: new Date().toISOString() });
     await refreshUsers();
-    // If resetting own password, update session
-    if (user?.id === id) {
-      const updated = { ...user, passwordHash };
-      setUser(updated);
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify(updated));
-    }
     notify.success('تم تغيير كلمة المرور بنجاح');
   }
 

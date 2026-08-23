@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import Layout from '../components/layout/Layout';
 import { StatCard } from '../components/ui/Card';
-import { dbGetPaginated, dbGetAll, dbGetByIndex, recalculateStudentTotalPaid, Student, Teacher, Group, Course, Payment, Expense } from '../lib/db';
+import { dbGetAll, recalculateStudentTotalPaid, Student, Teacher, Group, Course, Payment } from '../lib/db';
 import { formatDate, formatCurrency, getStatusLabel } from '../lib/utils';
 import { requestNotificationPermission } from '../lib/notifications';
 import { useApp } from '../contexts/AppContext';
@@ -150,8 +150,7 @@ export default function DashboardPage() {
           await recalculateStudentTotalPaid(s.id);
         }
         localStorage.setItem('migration_balances_v1', 'true');
-        console.log('Migrated all student balances');
-        loadDashboardData();
+        loadDashboard();
       } catch (e) {
         console.error('Migration failed', e);
       }

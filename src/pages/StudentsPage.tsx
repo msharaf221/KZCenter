@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, MessageCircle, BookOpen, Users } from 'lucide-react';
+import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
-import { toCSV, downloadCSV, parseCSV, formatDate, getWhatsAppLink } from '../lib/utils';
+import { toCSV, downloadCSV, parseCSV, formatDate } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyNewStudent } from '../lib/notifications';
 
 const PAGE_SIZE = 24;
@@ -21,6 +22,8 @@ const INITIAL_FORM: Omit<Student, 'id' | 'createdAt' | 'updatedAt'> = {
 export default function StudentsPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
+  const { isAdmin } = useAuth();
+  const canEdit = isAdmin(); // المدرس: عرض فقط
   const [students, setStudents] = useState<Student[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -97,12 +100,13 @@ export default function StudentsPage() {
   }
 
   async function handleSave() {
+    if (!canEdit) { notify.error('ليس لديك صلاحية التعديل'); return; }
     if (!form.name.trim()) { notify.error('الاسم مطلوب'); return; }
     if (!form.parentPhone.trim()) { notify.error('هاتف ولي الأمر مطلوب'); return; }
     if (form.age < 3 || form.age > 18) { notify.error('العمر يجب أن يكون بين 3 و 18 سنة'); return; }
 
     try {
-      let studentId = editingStudent?.id || generateId();
+      const studentId = editingStudent?.id || generateId();
       
       const newStudentData = {
         id: studentId,
@@ -162,6 +166,7 @@ export default function StudentsPage() {
   }
 
   async function handleDelete(id: string) {
+    if (!canEdit) { notify.error('ليس لديك صلاحية الحذف'); return; }
     try {
       const student = students.find(s => s.id === id);
       if (student && student.enrolledGroups) {
@@ -182,6 +187,7 @@ export default function StudentsPage() {
   }
 
   async function handleBulkDelete() {
+    if (!canEdit) { notify.error('ليس لديك صلاحية الحذف'); return; }
     try {
       const allGroups = await dbGetAll<Group>('groups');
       for (const id of selectedIds) {
@@ -241,6 +247,7 @@ export default function StudentsPage() {
   }
 
   async function handleImportCSV(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!canEdit) { notify.error('ليس لديك صلاحية الاستيراد'); return; }
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -353,7 +360,7 @@ export default function StudentsPage() {
             </div>
 
             {/* Bulk delete */}
-            {selectedIds.length > 0 && (
+            {canEdit && selectedIds.length > 0 && (
               <button
                 onClick={() => setShowBulkDelete(true)}
                 className="flex items-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 rounded-xl text-sm font-medium hover:bg-red-100 transition-colors"
@@ -364,30 +371,36 @@ export default function StudentsPage() {
             )}
 
             <div className="flex gap-2 mr-auto">
-              <button onClick={downloadTemplate} className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition-colors">
-                <Download size={16} />
-                <span className="hidden sm:inline">نموذج CSV</span>
-              </button>
+              {canEdit && (
+                <>
+                  <button onClick={downloadTemplate} className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+                    <Download size={16} />
+                    <span className="hidden sm:inline">نموذج CSV</span>
+                  </button>
 
-              <label className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer">
-                <Upload size={16} />
-                <span className="hidden sm:inline">استيراد CSV</span>
-                <input type="file" accept=".csv" onChange={handleImportCSV} className="hidden" />
-              </label>
+                  <label className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition-colors cursor-pointer">
+                    <Upload size={16} />
+                    <span className="hidden sm:inline">استيراد CSV</span>
+                    <input type="file" accept=".csv" onChange={handleImportCSV} className="hidden" />
+                  </label>
+                </>
+              )}
 
               <button onClick={exportCSV} className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition-colors">
                 <Download size={16} />
                 <span className="hidden sm:inline">تصدير</span>
               </button>
 
-              <button
-                onClick={openAdd}
-                className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium transition-colors"
-                style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}
-              >
-                <Plus size={16} />
-                إضافة طالب
-              </button>
+              {canEdit && (
+                <button
+                  onClick={openAdd}
+                  className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium transition-colors"
+                  style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}
+                >
+                  <Plus size={16} />
+                  إضافة طالب
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -466,12 +479,16 @@ export default function StudentsPage() {
                         <button onClick={() => navigate(`/students/${student.id}`)} className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-600 transition-colors" title="عرض">
                           <Eye size={15} />
                         </button>
-                        <button onClick={() => openEdit(student)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600 transition-colors" title="تعديل">
-                          <Edit2 size={15} />
-                        </button>
-                        <button onClick={() => setDeleteId(student.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="حذف">
-                          <Trash2 size={15} />
-                        </button>
+                        {canEdit && (
+                          <>
+                            <button onClick={() => openEdit(student)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600 transition-colors" title="تعديل">
+                              <Edit2 size={15} />
+                            </button>
+                            <button onClick={() => setDeleteId(student.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="حذف">
+                              <Trash2 size={15} />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>

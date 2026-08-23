@@ -208,11 +208,27 @@ ALTER TABLE public.inventory_transactions ADD CONSTRAINT fk_invtrans_item FOREIG
 */
 
 -- ==================== ROW LEVEL SECURITY (RLS) ====================
+-- RLS مفعّل افتراضياً على كل الجداول.
+-- ⚠️ تحذير: بدون RLS، أي شخص معه الـ anon key يقدر يقرأ ويعدّل كل البيانات.
+-- السياسات أدناه تسمح بالوصول للمستخدمين المسجّلين فقط (Supabase Auth).
+-- لو التطبيق لا يستخدم Supabase Auth بعد، استبدل TO authenticated
+-- بسياسات تناسب طريقة المصادقة عندك — لكن لا تترك الجداول مفتوحة أبداً.
 
--- Turn off RLS temporarily if you are migrating data or don't need user-specific access control yet
--- Or turn it on and create policies if you want true secure Supabase setup:
-
--- ALTER TABLE public.students ENABLE ROW LEVEL SECURITY;
--- CREATE POLICY "Enable read access for all users" ON public.students FOR SELECT USING (true);
--- CREATE POLICY "Enable insert for authenticated users only" ON public.students FOR INSERT WITH CHECK (auth.role() = 'authenticated');
--- ... repeat for other tables as needed.
+DO $$
+DECLARE
+  t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'students', 'teachers', 'courses', 'groups', 'payments',
+    'attendance', 'users', 'settings', 'expenses', 'exams',
+    'grades', 'inventory_items', 'inventory_transactions'
+  ]
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP POLICY IF EXISTS "authenticated_full_access" ON public.%I', t);
+    EXECUTE format(
+      'CREATE POLICY "authenticated_full_access" ON public.%I FOR ALL TO authenticated USING (true) WITH CHECK (true)',
+      t
+    );
+  END LOOP;
+END $$;
