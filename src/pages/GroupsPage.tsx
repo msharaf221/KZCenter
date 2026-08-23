@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Plus, Users, Search } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
@@ -20,6 +21,7 @@ const DAYS = [
 ];
 
 export default function GroupsPage() {
+  const navigate = useNavigate();
   const { settings } = useApp();
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -379,10 +381,10 @@ export default function GroupsPage() {
               if (!student) return null;
               return (
                 <div key={sid} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 cursor-pointer group" onClick={() => navigate(`/students/${sid}`)} title="عرض ملف الطالب">
                     <span className="text-xl">{student.gender === 'male' ? '👦' : '👧'}</span>
                     <div>
-                      <p className="text-sm font-semibold">{student.name}</p>
+                      <p className="text-sm font-semibold group-hover:text-indigo-600 group-hover:underline transition-colors">{student.name}</p>
                       <p className="text-xs text-gray-500">{student.parentPhone}</p>
                     </div>
                   </div>
