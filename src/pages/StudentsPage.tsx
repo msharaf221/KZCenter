@@ -6,7 +6,7 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
-import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
+import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, syncGroupStatus, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
 import { toCSV, downloadCSV, parseCSV, formatDate } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -105,6 +105,25 @@ export default function StudentsPage() {
     if (!form.parentPhone.trim()) { notify.error('هاتف ولي الأمر مطلوب'); return; }
     if (form.age < 3 || form.age > 18) { notify.error('العمر يجب أن يكون بين 3 و 18 سنة'); return; }
 
+    // فحص المجموعات الجديدة (السعة والحالة) قبل أي حفظ - نفس منطق صفحة المجموعات
+    const oldGroups = editingStudent?.enrolledGroups || [];
+    const newGroups = form.enrolledGroups || [];
+    const removedGroups = oldGroups.filter(g => !newGroups.includes(g));
+    const addedGroups = newGroups.filter(g => !oldGroups.includes(g));
+
+    for (const groupId of addedGroups) {
+      const g = groups.find(g => g.id === groupId);
+      if (!g) continue;
+      if (g.status === 'ended') {
+        notify.error(`المجموعة "${g.name}" منتهية - لا يمكن التسجيل فيها`);
+        return;
+      }
+      if (g.studentIds.length >= g.maxStudents) {
+        notify.error(`المجموعة "${g.name}" مكتملة (${g.studentIds.length}/${g.maxStudents})`);
+        return;
+      }
+    }
+
     try {
       const studentId = editingStudent?.id || generateId();
       
@@ -122,22 +141,18 @@ export default function StudentsPage() {
         notifyNewStudent(form.name);
       }
 
-      // Sync Groups
-      const oldGroups = editingStudent?.enrolledGroups || [];
-      const newGroups = form.enrolledGroups || [];
-      const removedGroups = oldGroups.filter(g => !newGroups.includes(g));
-      const addedGroups = newGroups.filter(g => !oldGroups.includes(g));
-
       for (const groupId of removedGroups) {
         const g = groups.find(g => g.id === groupId);
         if (g) {
           await dbPut('groups', { ...g, studentIds: g.studentIds.filter(id => id !== studentId) });
+          await syncGroupStatus(groupId);
         }
       }
       for (const groupId of addedGroups) {
         const g = groups.find(g => g.id === groupId);
         if (g) {
           await dbPut('groups', { ...g, studentIds: [...new Set([...g.studentIds, studentId])] });
+          await syncGroupStatus(groupId);
           
           const paidAmount = initialPayments[groupId] || 0;
           if (paidAmount > 0) {
@@ -153,9 +168,13 @@ export default function StudentsPage() {
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString()
             });
-            await recalculateStudentTotalPaid(studentId);
           }
         }
+      }
+
+      // إعادة حساب المدفوع والمستحق دائماً بعد أي تغيير في المجموعات
+      if (addedGroups.length > 0 || removedGroups.length > 0) {
+        await recalculateStudentTotalPaid(studentId);
       }
 
       setShowModal(false);
@@ -175,6 +194,7 @@ export default function StudentsPage() {
           const group = allGroups.find(g => g.id === groupId);
           if (group && group.studentIds.includes(id)) {
             await dbPut('groups', { ...group, studentIds: group.studentIds.filter(sid => sid !== id) });
+            await syncGroupStatus(group.id);
           }
         }
       }
@@ -198,6 +218,7 @@ export default function StudentsPage() {
             if (group && group.studentIds.includes(id)) {
               group.studentIds = group.studentIds.filter(sid => sid !== id);
               await dbPut('groups', group);
+              await syncGroupStatus(group.id);
             }
           }
         }

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Save, Download, Upload, Bell, Cloud, Database, RefreshCw } from 'lucide-react';
+import { Save, Download, Upload, Bell, Cloud, Database, RefreshCw, Wrench } from 'lucide-react';
 import Layout from '../components/layout/Layout';
-import { exportAllData, importAllData } from '../lib/db';
+import { exportAllData, importAllData, runIntegrityFix, IntegrityReport } from '../lib/db';
 import { downloadJSON, COLORS } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -25,6 +25,26 @@ export default function SettingsPage() {
   const [passwordForm, setPasswordForm] = useState({ newPass: '', confirm: '' });
   const [importing, setImporting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
+
+  async function handleIntegrityCheck() {
+    setChecking(true);
+    try {
+      const report = await runIntegrityFix();
+      setIntegrityReport(report);
+      const totalFixed = report.staleEnrollments + report.staleGroupMembers;
+      if (totalFixed > 0) {
+        notify.success(`تم إصلاح ${totalFixed} رابط تالف وإعادة حساب ${report.recalculatedStudents} طالب`);
+      } else {
+        notify.success('البيانات سليمة - لا توجد روابط تالفة ✓');
+      }
+    } catch {
+      notify.error('حدث خطأ أثناء الفحص');
+    } finally {
+      setChecking(false);
+    }
+  }
 
   useEffect(() => {
     if (settings) {
@@ -348,6 +368,37 @@ export default function SettingsPage() {
             style={{ backgroundColor: primaryColor }}>
             <Save size={16} /> تغيير كلمة المرور
           </button>
+        </div>
+
+        {/* Data Integrity */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <h2 className="text-lg font-bold text-gray-900 mb-2 flex items-center gap-2">
+            <Wrench size={20} /> فحص سلامة البيانات
+          </h2>
+          <p className="text-sm text-gray-500 mb-4">
+            يفحص الروابط بين الطلاب والمجموعات والكورسات والمدرسين، ويصلح أي روابط تالفة (مثل تسجيلات في مجموعات محذوفة) ويعيد حساب المستحقات تلقائياً.
+          </p>
+          <button onClick={handleIntegrityCheck} disabled={checking}
+            className={`flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium ${checking ? 'opacity-60' : ''}`}
+            style={{ backgroundColor: primaryColor }}>
+            <RefreshCw size={16} className={checking ? 'animate-spin' : ''} />
+            {checking ? 'جاري الفحص والإصلاح...' : 'فحص وإصلاح الآن'}
+          </button>
+
+          {integrityReport && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-100 space-y-1 text-sm">
+              <p className="font-bold text-gray-900 mb-2">نتيجة الفحص:</p>
+              <p className="text-gray-600">• تسجيلات تالفة تم تنظيفها من ملفات الطلاب: <strong>{integrityReport.staleEnrollments}</strong></p>
+              <p className="text-gray-600">• طلاب محذوفون تم إزالتهم من المجموعات: <strong>{integrityReport.staleGroupMembers}</strong></p>
+              <p className="text-gray-600">• طلاب أعيد حساب مستحقاتهم: <strong>{integrityReport.recalculatedStudents}</strong></p>
+              {integrityReport.orphanGroupCourses.length > 0 && (
+                <p className="text-red-600">⚠️ مجموعات مرتبطة بكورس محذوف (تحتاج تدخل يدوي): {integrityReport.orphanGroupCourses.join('، ')}</p>
+              )}
+              {integrityReport.orphanGroupTeachers.length > 0 && (
+                <p className="text-red-600">⚠️ مجموعات مرتبطة بمدرس محذوف (تحتاج تدخل يدوي): {integrityReport.orphanGroupTeachers.join('، ')}</p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Backup */}

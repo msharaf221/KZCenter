@@ -3,7 +3,7 @@ import { Plus, Edit2, Trash2, Search } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, generateId, Course, CourseLevel, Group } from '../lib/db';
+import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, generateId, recalculateStudentTotalPaid, Course, CourseLevel, Group, Student } from '../lib/db';
 import { formatCurrency, COLORS } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
@@ -75,8 +75,25 @@ export default function CoursesPage() {
     if (!form.name.trim()) { notify.error('اسم الكورس مطلوب'); return; }
     try {
       if (editing) {
+        const priceChanged = editing.price !== form.price;
         await dbPut('courses', { ...editing, ...form, updatedAt: new Date().toISOString() });
         notify.success('تم تحديث الكورس');
+
+        // عند تغيير السعر: إعادة حساب مستحقات كل الطلاب المسجلين في مجموعات هذا الكورس
+        if (priceChanged) {
+          const allGroups = await dbGetAll<Group>('groups');
+          const courseGroupIds = new Set(allGroups.filter(g => g.courseId === editing.id).map(g => g.id));
+          if (courseGroupIds.size > 0) {
+            const allStudents = await dbGetAll<Student>('students');
+            const affected = allStudents.filter(s => s.enrolledGroups?.some(gid => courseGroupIds.has(gid)));
+            for (const st of affected) {
+              await recalculateStudentTotalPaid(st.id);
+            }
+            if (affected.length > 0) {
+              notify.info(`تم تحديث مستحقات ${affected.length} طالب بالسعر الجديد`);
+            }
+          }
+        }
       } else {
         await dbAdd('courses', { id: generateId(), ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         notify.success('تم إضافة الكورس');
@@ -241,7 +258,21 @@ export default function CoursesPage() {
       </Modal>
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف الكورس" message="هل أنت متأكد؟"
-        onConfirm={async () => { if (deleteId) { await dbSoftDelete('courses', deleteId); notify.success('تم الحذف'); load(); } setDeleteId(null); }}
+        onConfirm={async () => {
+          if (deleteId) {
+            // حماية: منع حذف كورس مرتبط بمجموعات نشطة
+            const allGroups = await dbGetAll<Group>('groups');
+            const linkedGroups = allGroups.filter(g => g.courseId === deleteId && !g.deleted);
+            if (linkedGroups.length > 0) {
+              notify.error(`لا يمكن حذف الكورس - مرتبط بـ ${linkedGroups.length} مجموعة. احذف المجموعات أولاً`);
+            } else {
+              await dbSoftDelete('courses', deleteId);
+              notify.success('تم الحذف');
+              load();
+            }
+          }
+          setDeleteId(null);
+        }}
         onCancel={() => setDeleteId(null)} danger />
     </Layout>
   );

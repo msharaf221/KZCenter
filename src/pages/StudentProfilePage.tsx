@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall } from 'lucide-react';
+import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall, ClipboardCheck, GraduationCap } from 'lucide-react';
 import Layout from '../components/layout/Layout';
-import { dbGetById, dbGetAll, Student, Group, Course, Payment, Teacher } from '../lib/db';
+import { dbGetById, dbGetAll, Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher } from '../lib/db';
 import { formatDate, getWhatsAppLink } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 
@@ -15,6 +15,8 @@ export default function StudentProfilePage() {
   const [student, setStudent] = useState<Student | null>(null);
   const [groups, setGroups] = useState<(Group & { courseName: string, teacherName: string })[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [attendance, setAttendance] = useState<Attendance[]>([]);
+  const [examResults, setExamResults] = useState<(Grade & { examName: string; maxGrade: number; examDate: string })[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadData = useCallback(async () => {
@@ -39,6 +41,24 @@ export default function StudentProfilePage() {
       const allPayments = await dbGetAll<Payment>('payments');
       setPayments(allPayments.filter(p => p.studentId === id && !p.deleted).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
 
+      // سجل الحضور
+      const allAttendance = await dbGetAll<Attendance>('attendance');
+      setAttendance(allAttendance.filter(a => a.studentId === id).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+
+      // نتائج الامتحانات (امتحانات مجموعات الطالب + درجة الطالب فيها)
+      const allExams = await dbGetAll<Exam>('exams');
+      const allGrades = await dbGetAll<Grade>('grades');
+      const studentGrades = allGrades.filter(g => g.studentId === id);
+      const results = studentGrades
+        .map(g => {
+          const exam = allExams.find(e => e.id === g.examId);
+          if (!exam) return null;
+          return { ...g, examName: exam.name, maxGrade: exam.maxGrade, examDate: exam.date };
+        })
+        .filter((r): r is Grade & { examName: string; maxGrade: number; examDate: string } => r !== null)
+        .sort((a, b) => new Date(b.examDate).getTime() - new Date(a.examDate).getTime());
+      setExamResults(results);
+
     } finally {
       setLoading(false);
     }
@@ -50,6 +70,17 @@ export default function StudentProfilePage() {
   if (!student) return null;
 
   const remaining = (student.totalOwed || 0) - student.totalPaid;
+
+  // إحصائيات الحضور
+  const attStats = {
+    present: attendance.filter(a => a.status === 'present').length,
+    absent: attendance.filter(a => a.status === 'absent').length,
+    late: attendance.filter(a => a.status === 'late').length,
+    excused: attendance.filter(a => a.status === 'excused').length,
+  };
+  const attTotal = attendance.length;
+  const attRate = attTotal > 0 ? Math.round(((attStats.present + attStats.late) / attTotal) * 100) : null;
+
 
   return (
     <Layout title={`ملف الطالب: ${student.name}`}>
@@ -116,6 +147,79 @@ export default function StudentProfilePage() {
                       <td className="py-3 text-center">{formatDate(p.date)}</td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* ملخص الحضور */}
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden flex flex-col">
+            <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <ClipboardCheck className="text-indigo-500" /> سجل الحضور
+              {attRate !== null && (
+                <span className={`text-sm px-3 py-1 rounded-full mr-auto ${attRate >= 75 ? 'bg-green-50 text-green-600' : attRate >= 50 ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'}`}>
+                  نسبة الحضور {attRate}%
+                </span>
+              )}
+            </h2>
+            {attTotal === 0 ? (
+              <p className="py-4 text-center text-gray-400 text-sm">لا يوجد سجل حضور بعد</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-4 gap-2 mb-4 text-center text-sm">
+                  <div className="bg-green-50 rounded-xl p-3"><p className="font-bold text-green-600 text-lg">{attStats.present}</p><p className="text-gray-500 text-xs">حضور</p></div>
+                  <div className="bg-red-50 rounded-xl p-3"><p className="font-bold text-red-600 text-lg">{attStats.absent}</p><p className="text-gray-500 text-xs">غياب</p></div>
+                  <div className="bg-yellow-50 rounded-xl p-3"><p className="font-bold text-yellow-600 text-lg">{attStats.late}</p><p className="text-gray-500 text-xs">تأخير</p></div>
+                  <div className="bg-blue-50 rounded-xl p-3"><p className="font-bold text-blue-600 text-lg">{attStats.excused}</p><p className="text-gray-500 text-xs">استئذان</p></div>
+                </div>
+                <div className="overflow-auto flex-1 max-h-[200px]">
+                  <table className="w-full text-right">
+                    <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-2 font-semibold">التاريخ</th><th className="pb-2 font-semibold text-center">الحالة</th></tr></thead>
+                    <tbody className="divide-y divide-gray-50 text-sm">
+                      {attendance.slice(0, 15).map(a => (
+                        <tr key={a.id} className="hover:bg-gray-50">
+                          <td className="py-2">{formatDate(a.date)}</td>
+                          <td className="py-2 text-center">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              a.status === 'present' ? 'bg-green-50 text-green-600' :
+                              a.status === 'absent' ? 'bg-red-50 text-red-600' :
+                              a.status === 'late' ? 'bg-yellow-50 text-yellow-600' : 'bg-blue-50 text-blue-600'
+                            }`}>
+                              {a.status === 'present' ? 'حاضر' : a.status === 'absent' ? 'غائب' : a.status === 'late' ? 'متأخر' : 'مستأذن'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* نتائج الامتحانات */}
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden flex flex-col">
+            <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><GraduationCap className="text-indigo-500" /> نتائج الامتحانات</h2>
+            <div className="overflow-auto flex-1 max-h-[300px]">
+              <table className="w-full text-right">
+                <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">الامتحان</th><th className="pb-3 font-semibold text-center">الدرجة</th><th className="pb-3 font-semibold text-center">النسبة</th><th className="pb-3 font-semibold text-center">التاريخ</th></tr></thead>
+                <tbody className="divide-y divide-gray-50 text-sm">
+                  {examResults.length === 0 ? <tr><td colSpan={4} className="py-4 text-center text-gray-400">لا توجد نتائج بعد</td></tr> :
+                   examResults.map(r => {
+                    const pct = r.maxGrade > 0 ? Math.round((r.grade / r.maxGrade) * 100) : 0;
+                    return (
+                      <tr key={r.id} className="hover:bg-gray-50">
+                        <td className="py-3 font-medium">{r.examName}</td>
+                        <td className="py-3 text-center font-bold">{r.grade} / {r.maxGrade}</td>
+                        <td className="py-3 text-center">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${pct >= 75 ? 'bg-green-50 text-green-600' : pct >= 50 ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'}`}>{pct}%</span>
+                        </td>
+                        <td className="py-3 text-center text-gray-500">{formatDate(r.examDate)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

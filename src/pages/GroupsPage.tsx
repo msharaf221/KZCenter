@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Plus, Users, Search } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
-import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, recalculateStudentTotalPaid, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
+import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, recalculateStudentTotalPaid, syncGroupStatus, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
 // Utils imported as needed
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
@@ -20,6 +21,7 @@ const DAYS = [
 ];
 
 export default function GroupsPage() {
+  const navigate = useNavigate();
   const { settings } = useApp();
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -111,10 +113,12 @@ export default function GroupsPage() {
     if (!group) return;
     const updatedIds = group.studentIds.filter(id => id !== studentId);
     await dbPut('groups', { ...group, studentIds: updatedIds, updatedAt: new Date().toISOString() });
+    await syncGroupStatus(groupId);
     // Update student's enrolledGroups
     const student = students.find(s => s.id === studentId);
     if (student) {
       await dbPut('students', { ...student, enrolledGroups: student.enrolledGroups.filter(g => g !== groupId), updatedAt: new Date().toISOString() });
+      await recalculateStudentTotalPaid(studentId);
     }
     notify.success('تم إزالة الطالب من المجموعة');
     load();
@@ -131,6 +135,11 @@ export default function GroupsPage() {
       return;
     }
 
+    if (group.status === 'ended') {
+      notify.error('لا يمكن التسجيل في مجموعة منتهية');
+      return;
+    }
+
     if (group.studentIds.includes(studentId)) {
       notify.error('الطالب موجود بالفعل في المجموعة');
       return;
@@ -138,6 +147,7 @@ export default function GroupsPage() {
 
     const updatedIds = [...group.studentIds, studentId];
     await dbPut('groups', { ...group, studentIds: updatedIds, updatedAt: new Date().toISOString() });
+    await syncGroupStatus(groupId);
     
     const student = students.find(s => s.id === studentId);
     if (student) {
@@ -371,10 +381,10 @@ export default function GroupsPage() {
               if (!student) return null;
               return (
                 <div key={sid} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 cursor-pointer group" onClick={() => navigate(`/students/${sid}`)} title="عرض ملف الطالب">
                     <span className="text-xl">{student.gender === 'male' ? '👦' : '👧'}</span>
                     <div>
-                      <p className="text-sm font-semibold">{student.name}</p>
+                      <p className="text-sm font-semibold group-hover:text-indigo-600 group-hover:underline transition-colors">{student.name}</p>
                       <p className="text-xs text-gray-500">{student.parentPhone}</p>
                     </div>
                   </div>
@@ -389,8 +399,28 @@ export default function GroupsPage() {
         </Modal>
       )}
 
-      <ConfirmDialog isOpen={!!deleteId} title="حذف المجموعة" message="هل أنت متأكد؟"
-        onConfirm={async () => { if (deleteId) { await dbSoftDelete('groups', deleteId); notify.success('تم الحذف'); load(); } setDeleteId(null); }}
+      <ConfirmDialog isOpen={!!deleteId} title="حذف المجموعة" message="هل أنت متأكد؟ سيتم إلغاء تسجيل جميع الطلاب من هذه المجموعة وإعادة حساب مستحقاتهم."
+        onConfirm={async () => {
+          if (deleteId) {
+            const group = groups.find(g => g.id === deleteId);
+            // Cascade: إزالة المجموعة من enrolledGroups لكل الطلاب + إعادة حساب المستحقات
+            if (group) {
+              const enrolledStudents = students.filter(s => s.enrolledGroups?.includes(deleteId));
+              for (const st of enrolledStudents) {
+                await dbPut('students', {
+                  ...st,
+                  enrolledGroups: st.enrolledGroups.filter(gid => gid !== deleteId),
+                  updatedAt: new Date().toISOString(),
+                });
+                await recalculateStudentTotalPaid(st.id);
+              }
+            }
+            await dbSoftDelete('groups', deleteId);
+            notify.success('تم الحذف');
+            load();
+          }
+          setDeleteId(null);
+        }}
         onCancel={() => setDeleteId(null)} danger />
     </Layout>
   );
