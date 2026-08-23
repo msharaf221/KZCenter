@@ -106,7 +106,7 @@ export default function StudentsPage() {
     if (form.age < 3 || form.age > 18) { notify.error('العمر يجب أن يكون بين 3 و 18 سنة'); return; }
 
     try {
-      let studentId = editingStudent?.id || generateId();
+      const studentId = editingStudent?.id || generateId();
       
       const newStudentData = {
         id: studentId,

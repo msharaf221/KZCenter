@@ -5,7 +5,7 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
-import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, dbGetById, recalculateStudentTotalPaid, generateId, Payment, PaymentStatus, PaymentType, Student, Course } from '../lib/db';
+import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, dbGetById, recalculateStudentTotalPaid, generateId, Payment, PaymentStatus, PaymentType, Student, Course, Settings } from '../lib/db';
 import { formatDate, formatCurrency, toCSV, downloadCSV, getWhatsAppLink } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify, notifyLatePayment, notifyPaymentReceived } from '../lib/notifications';
@@ -120,7 +120,7 @@ export default function PaymentsPage() {
     
     win.document.write('<html dir="rtl"><head><title>جاري التحميل...</title></head><body style="font-family:sans-serif; text-align:center; padding: 20px;">جاري تجهيز الإيصال...</body></html>');
 
-    const freshSettings = await dbGetById<any>('settings', 'main');
+    const freshSettings = await dbGetById<Settings>('settings', 'main');
     const student = students.find(s => s.id === payment.studentId);
     const course = courses.find(c => c.id === payment.courseId);
     const date = formatDate(payment.date);
