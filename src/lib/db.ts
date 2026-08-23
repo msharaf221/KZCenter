@@ -213,7 +213,7 @@ export async function getDB(): Promise<IDBPDatabase<any>> {
   if (dbInstance) return dbInstance;
 
   dbInstance = await openDB(DB_NAME, DB_VERSION, {
-    upgrade(db, oldVersion) {
+    upgrade(db) {
       // Students
       if (!db.objectStoreNames.contains('students')) {
         const s = db.createObjectStore('students', { keyPath: 'id' });
@@ -314,16 +314,12 @@ export async function getDB(): Promise<IDBPDatabase<any>> {
 // ==================== SEED DATA ====================
 
 export async function seedDefaultData(): Promise<void> {
-  console.log('🌱 Seeding default data...');
   const db = await getDB();
 
   const users = await db.getAll('users');
-  console.log('👥 Existing users:', users.length);
-  
+
   if (users.length === 0) {
-    console.log('🔐 Creating admin user...');
     const passwordHash = bcrypt.hashSync('admin123', 10);
-    console.log('🔑 Password hash created');
     const adminUser: User = {
       id: generateId(),
       username: 'admin',
@@ -333,9 +329,6 @@ export async function seedDefaultData(): Promise<void> {
       updatedAt: new Date().toISOString(),
     };
     await db.add('users', adminUser);
-    console.log('✅ Admin user created');
-  } else {
-    console.log('👤 Admin user already exists');
   }
 
   const settings = await db.get('settings', 'main');
@@ -363,6 +356,10 @@ export async function seedDefaultData(): Promise<void> {
 // ==================== UTILS ====================
 
 export function generateId(): string {
+  // crypto.randomUUID is collision-safe (unlike Date.now + Math.random)
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
   return Date.now().toString(36) + Math.random().toString(36).substring(2);
 }
 
@@ -371,7 +368,8 @@ export function generateId(): string {
 type StoreName =
   | 'students' | 'teachers' | 'courses' | 'groups'
   | 'payments' | 'attendance' | 'users' | 'settings'
-  | 'expenses' | 'exams' | 'grades';
+  | 'expenses' | 'exams' | 'grades'
+  | 'inventory' | 'inventory_transactions';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function dbGetAll<T = any>(storeName: StoreName): Promise<T[]> {

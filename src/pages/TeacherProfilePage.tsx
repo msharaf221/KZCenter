@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Users2, ArrowRight, GraduationCap, DollarSign, CalendarDays } from 'lucide-react';
+import { Users2, ArrowRight, GraduationCap } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import { dbGetById, dbGetAll, Teacher, Group, Student, Course } from '../lib/db';
-import { formatCurrency, formatDate } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 
 export default function TeacherProfilePage() {

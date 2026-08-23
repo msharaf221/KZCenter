@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { Bell, Moon, Sun, Search, Menu, CheckCircle2, Trash2, X } from 'lucide-react';
+import { Bell, Moon, Sun, Search, Menu, Trash2, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useApp } from '../../contexts/AppContext';
 import { getAppNotifications, markAppNotificationsAsRead, clearAppNotifications, AppNotification } from '../../lib/notifications';
-import { formatDate } from '../../lib/utils';
+import { formatDateTime } from '../../lib/utils';
 
 interface HeaderProps {
   title: string;
@@ -132,7 +132,7 @@ export default function Header({ title }: HeaderProps) {
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-bold text-gray-900 mb-1">{notif.title}</p>
                               <p className="text-sm text-gray-600 mb-2 leading-relaxed">{notif.message}</p>
-                              <p className="text-xs text-gray-400" dir="ltr">{formatDate(notif.date, true)}</p>
+                              <p className="text-xs text-gray-400" dir="ltr">{formatDateTime(notif.date)}</p>
                             </div>
                           </div>
                         </div>

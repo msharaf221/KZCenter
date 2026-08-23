@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, MessageCircle, BookOpen, Users } from 'lucide-react';
+import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
-import { toCSV, downloadCSV, parseCSV, formatDate, getWhatsAppLink } from '../lib/utils';
+import { toCSV, downloadCSV, parseCSV, formatDate } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify, notifyNewStudent } from '../lib/notifications';
 
