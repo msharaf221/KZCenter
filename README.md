@@ -89,6 +89,8 @@ npm run build
 |----------|-------------|-------|
 | admin | admin123 | مسؤول |
 
+> ⚠️ **مهم**: بيانات الدخول الافتراضية تظهر في صفحة الدخول في وضع التطوير فقط. غيّر كلمة مرور admin فور أول تسجيل دخول من صفحة الإعدادات.
+
 ## 🗄️ قاعدة البيانات
 
 النظام يستخدم **IndexedDB** للتخزين المحلي في المتصفح.
@@ -111,12 +113,16 @@ npm run build
 يدعم النظام Supabase للتخزين السحابي. للتفعيل:
 
 1. أنشئ مشروع على [supabase.com](https://supabase.com)
-2. شغل SQL Schema الموجود في الإعدادات
-3. أضف متغيرات البيئة:
+2. شغل `supabase_schema.sql` في SQL Editor (يفعّل RLS تلقائياً)
+3. انسخ `.env.example` باسم `.env` وأضف القيم:
 ```
 VITE_SUPABASE_URL=your_supabase_url
 VITE_SUPABASE_ANON_KEY=your_anon_key
 ```
+
+> 🔒 **أمان**: لا تضع المفاتيح في الكود أبداً. ملف `.env` مستثنى من Git تلقائياً. لا تعطّل RLS على الجداول — بدونها أي شخص معه الـ anon key يستطيع قراءة وتعديل كل البيانات.
+
+> ⚠️ **تنبيه**: البيانات محفوظة محلياً في متصفحك (IndexedDB). مسح بيانات المتصفح يعني فقدان كل البيانات — احرص على النسخ الاحتياطي الدوري من صفحة الإعدادات.
 
 ## 📁 هيكل المشروع
 
@@ -167,6 +173,10 @@ src/
 - **Notifications**: React Hot Toast
 - **Auth**: bcryptjs
 - **Export**: xlsx, jspdf
+
+## 🤖 CI (اختياري)
+
+ملف GitHub Actions جاهز في `docs/github-actions-ci.yml` — انسخه إلى `.github/workflows/ci.yml` لتفعيل الفحص التلقائي (typecheck + lint + build) على كل push.
 
 ## 📝 الترخيص
 
