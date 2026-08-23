@@ -1,8 +1,9 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './contexts/AuthContext';
 import { AppProvider } from './contexts/AppContext';
 import ProtectedRoute from './components/ProtectedRoute';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Pages
 import LoginPage from './pages/LoginPage';
@@ -25,8 +26,10 @@ import TeacherProfilePage from './pages/TeacherProfilePage';
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
+    <ErrorBoundary>
+      {/* HashRouter: يعمل مع بناء الملف الواحد على أي استضافة بدون إعدادات rewrite */}
+      <HashRouter>
+        <AuthProvider>
         <AppProvider>
           <Toaster
             position="top-center"
@@ -124,6 +127,7 @@ export default function App() {
           </Routes>
         </AppProvider>
       </AuthProvider>
-    </BrowserRouter>
+      </HashRouter>
+    </ErrorBoundary>
   );
 }
