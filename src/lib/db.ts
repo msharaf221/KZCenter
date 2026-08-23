@@ -578,6 +578,75 @@ export async function syncGroupStatus(groupId: string): Promise<void> {
   }
 }
 
+/**
+ * فحص وإصلاح سلامة الروابط بين الكيانات:
+ * - تسجيلات طلاب في مجموعات محذوفة/غير موجودة
+ * - طلاب محذوفون ما زالوا في قوائم المجموعات
+ * - مجموعات مرتبطة بكورسات أو مدرسين محذوفين (تقرير فقط)
+ * ثم إعادة حساب الأرصدة وحالات المجموعات المتأثرة.
+ */
+export interface IntegrityReport {
+  staleEnrollments: number;
+  staleGroupMembers: number;
+  orphanGroupCourses: string[];
+  orphanGroupTeachers: string[];
+  recalculatedStudents: number;
+}
+
+export async function runIntegrityFix(): Promise<IntegrityReport> {
+  const [students, groups, courses, teachers] = await Promise.all([
+    dbGetAll<Student>('students'),
+    dbGetAll<Group>('groups'),
+    dbGetAll<Course>('courses'),
+    dbGetAll<Teacher>('teachers'),
+  ]);
+
+  const activeGroupIds = new Set(groups.map(g => g.id));
+  const activeStudentIds = new Set(students.map(s => s.id));
+  const activeCourseIds = new Set(courses.map(c => c.id));
+  const activeTeacherIds = new Set(teachers.map(t => t.id));
+
+  const report: IntegrityReport = {
+    staleEnrollments: 0,
+    staleGroupMembers: 0,
+    orphanGroupCourses: [],
+    orphanGroupTeachers: [],
+    recalculatedStudents: 0,
+  };
+
+  const affectedStudentIds = new Set<string>();
+
+  // 1) تنظيف enrolledGroups عند الطلاب
+  for (const s of students) {
+    const cleaned = (s.enrolledGroups || []).filter(gid => activeGroupIds.has(gid));
+    if (cleaned.length !== (s.enrolledGroups || []).length) {
+      report.staleEnrollments += (s.enrolledGroups || []).length - cleaned.length;
+      await dbPut('students', { ...s, enrolledGroups: cleaned, updatedAt: new Date().toISOString() });
+      affectedStudentIds.add(s.id);
+    }
+  }
+
+  // 2) تنظيف studentIds في المجموعات + رصد الكورسات/المدرسين المفقودين
+  for (const g of groups) {
+    const cleaned = g.studentIds.filter(sid => activeStudentIds.has(sid));
+    if (cleaned.length !== g.studentIds.length) {
+      report.staleGroupMembers += g.studentIds.length - cleaned.length;
+      await dbPut('groups', { ...g, studentIds: cleaned, updatedAt: new Date().toISOString() });
+      await syncGroupStatus(g.id);
+    }
+    if (!activeCourseIds.has(g.courseId)) report.orphanGroupCourses.push(g.name);
+    if (!activeTeacherIds.has(g.teacherId)) report.orphanGroupTeachers.push(g.name);
+  }
+
+  // 3) إعادة حساب أرصدة الطلاب المتأثرين
+  for (const sid of affectedStudentIds) {
+    await recalculateStudentTotalPaid(sid);
+    report.recalculatedStudents++;
+  }
+
+  return report;
+}
+
 export async function getGroupAttendanceForDate(
   groupId: string,
   date: string
