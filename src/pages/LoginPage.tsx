@@ -21,9 +21,7 @@ export default function LoginPage() {
     }
     setLoading(true);
     try {
-      console.log('📝 Submitting login form...');
       const success = await login(username, password);
-      console.log('📝 Login result:', success);
       if (success) {
         notify.success('مرحباً بك! تم تسجيل الدخول بنجاح');
         navigate('/');
@@ -47,7 +45,6 @@ export default function LoginPage() {
       // Delete the IndexedDB database
       const deleteRequest = indexedDB.deleteDatabase('EduCenterProDB');
       deleteRequest.onsuccess = () => {
-        console.log('✅ Database deleted');
         notify.success('تم إعادة تعيين قاعدة البيانات. سيتم تحديث الصفحة...');
         setTimeout(() => window.location.reload(), 1500);
       };
@@ -139,23 +136,26 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-6 p-4 bg-gray-50 rounded-xl">
-            <p className="text-xs text-gray-500 font-medium mb-1">بيانات الدخول الافتراضية:</p>
-            <p className="text-xs text-gray-600">المستخدم: <strong>admin</strong></p>
-            <p className="text-xs text-gray-600">كلمة المرور: <strong>admin123</strong></p>
-          </div>
-
-          {/* Reset Database Button */}
-          <div className="mt-4 text-center">
-            <button
-              onClick={handleResetDatabase}
-              disabled={resetting}
-              className="text-xs text-gray-400 hover:text-red-500 flex items-center justify-center gap-1 mx-auto transition-colors"
-            >
-              <RefreshCw size={12} className={resetting ? 'animate-spin' : ''} />
-              {resetting ? 'جاري إعادة التعيين...' : 'إعادة تعيين قاعدة البيانات'}
-            </button>
-          </div>
+          {import.meta.env.DEV && (
+            <div className="mt-6 p-4 bg-gray-50 rounded-xl">
+              <p className="text-xs text-gray-500 font-medium mb-1">بيانات الدخول الافتراضية:</p>
+              <p className="text-xs text-gray-600">المستخدم: <strong>admin</strong></p>
+              <p className="text-xs text-gray-600">كلمة المرور: <strong>admin123</strong></p>
+            </div>
+          )}
+          {/* Reset Database Button (dev only - dangerous) */}
+          {import.meta.env.DEV && (
+            <div className="mt-4 text-center">
+              <button
+                onClick={handleResetDatabase}
+                disabled={resetting}
+                className="text-xs text-gray-400 hover:text-red-500 flex items-center justify-center gap-1 mx-auto transition-colors"
+              >
+                <RefreshCw size={12} className={resetting ? 'animate-spin' : ''} />
+                {resetting ? 'جاري إعادة التعيين...' : 'إعادة تعيين قاعدة البيانات'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

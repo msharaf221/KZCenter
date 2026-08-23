@@ -1,18 +1,18 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // ==================== SUPABASE CONFIG ====================
-// يمكن تغيير هذه القيم لاحقاً للاتصال بمشروع Supabase حقيقي
-// حالياً النظام يعمل بـ IndexedDB محلياً
+// التهيئة تتم عبر متغيرات البيئة فقط - انظر .env.example
+// لا تضع المفاتيح هنا مباشرة أبداً (أي مفتاح في الكود يعتبر مسرّباً)
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://kypwixehrnfbbqjkwlgm.supabase.co';
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cHdpeGVocm5mYmJxamt3bGdtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1MzQ0MDAsImV4cCI6MjEwMjExMDQwMH0.OInu1QTVyZ8EKa06I4xXGKyW-aLoNLSo1p8S5ZieGYU';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
 // Check if Supabase is configured
 export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 // Create client only if configured
 export const supabase: SupabaseClient | null = isSupabaseConfigured
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  ? createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!)
   : null;
 
 // ==================== DATABASE TYPES ====================
