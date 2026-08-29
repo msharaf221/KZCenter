@@ -143,7 +143,7 @@ npm run build
 ```bash
 docker-compose up -d
 ```
-
+```npm run electron:build:win
 ## 🔑 بيانات الدخول الافتراضية
 
 | المستخدم | كلمة المرور | الدور |
