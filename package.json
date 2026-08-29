@@ -105,9 +105,7 @@
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",
       "installerLanguages": ["arabic", "english"],
-      "language": "1025",
-      "license": "LICENSE",
-      "installerSidebar": "build/installer-sidebar.bmp"
+      "language": "1025"
     },
     "mac": {
       "target": [
@@ -131,12 +129,7 @@
         }
       ],
       "icon": "build/icon.png",
-      "category": "Education",
-      "desktop": {
-        "Name": "EduCenter Pro",
-        "Comment": "نظام إدارة المركز التعليمي",
-        "Keywords": "education;school;center;"
-      }
+      "category": "Education"
     },
     "dmg": {
       "contents": [
