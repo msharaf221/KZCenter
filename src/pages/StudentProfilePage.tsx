@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall, ClipboardCheck, GraduationCap } from 'lucide-react';
 import Layout from '../components/layout/Layout';
-import { dbGetById, dbGetAll, Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher } from '../lib/db';
+import { dbGetById, dbGetAll, dbGetByIndex, Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher } from '../lib/db';
 import { formatDate, getWhatsAppLink } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 
@@ -38,12 +38,12 @@ export default function StudentProfilePage() {
       }));
       setGroups(enrichedGroups);
 
-      const allPayments = await dbGetAll<Payment>('payments');
-      setPayments(allPayments.filter(p => p.studentId === id && !p.deleted).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+      const studentPayments = await dbGetByIndex<Payment>('payments', 'by-studentId', id);
+      setPayments(studentPayments.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
 
-      // سجل الحضور
-      const allAttendance = await dbGetAll<Attendance>('attendance');
-      setAttendance(allAttendance.filter(a => a.studentId === id).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+      // سجل الحضور (using index for efficiency)
+      const studentAttendance = await dbGetByIndex<Attendance>('attendance', 'by-studentId', id);
+      setAttendance(studentAttendance.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
 
       // نتائج الامتحانات (امتحانات مجموعات الطالب + درجة الطالب فيها)
       const allExams = await dbGetAll<Exam>('exams');

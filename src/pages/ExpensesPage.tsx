@@ -5,7 +5,7 @@ import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Pagination from '../components/ui/Pagination';
-import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, generateId, Expense, ExpenseCategory } from '../lib/db';
+import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, Expense, ExpenseCategory } from '../lib/db';
 import { formatDate, formatCurrency } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
@@ -39,8 +39,8 @@ export default function ExpensesPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const all = await dbGetPaginated<Expense>('expenses', 1, 10000);
-      setAllExpenses(all.items);
+      const all = await dbGetAll<Expense>('expenses');
+      setAllExpenses(all);
       const result = await dbGetPaginated<Expense>('expenses', page, PAGE_SIZE, (e: Expense) => {
         const q = search.toLowerCase();
         const matchSearch = !q || e.description.toLowerCase().includes(q);

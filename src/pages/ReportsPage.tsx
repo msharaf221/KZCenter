@@ -71,7 +71,7 @@ export default function ReportsPage() {
 
   // Course enrollment
   const courseData = courses.map(c => ({
-    name: c.name.substring(0, 15),
+    name: c.name.length > 20 ? c.name.substring(0, 18) + '…' : c.name,
     students: groups.filter(g => g.courseId === c.id).reduce((sum, g) => sum + g.studentIds.length, 0),
   })).sort((a, b) => b.students - a.students);
 
@@ -79,7 +79,7 @@ export default function ReportsPage() {
   const groupFillData = groups.map(g => {
     const course = courses.find(c => c.id === g.courseId);
     return {
-      name: g.name.substring(0, 12),
+      name: g.name.length > 18 ? g.name.substring(0, 16) + '…' : g.name,
       fill: g.maxStudents > 0 ? Math.round((g.studentIds.length / g.maxStudents) * 100) : 0,
       course: course?.name || '',
     };
@@ -99,7 +99,7 @@ export default function ReportsPage() {
   const teacherData = teachers.map(t => {
     const teacherGroups = groups.filter(g => g.teacherId === t.id);
     const teacherStudents = teacherGroups.reduce((sum, g) => sum + g.studentIds.length, 0);
-    return { name: t.name.substring(0, 12), groups: teacherGroups.length, students: teacherStudents };
+    return { name: t.name.length > 18 ? t.name.substring(0, 16) + '…' : t.name, groups: teacherGroups.length, students: teacherStudents };
   }).filter(t => t.groups > 0);
 
   // Expense categories

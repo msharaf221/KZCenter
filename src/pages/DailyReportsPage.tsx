@@ -5,7 +5,7 @@ import {
   PieChart, Pie, Cell, Legend, LineChart, Line,
 } from 'recharts';
 import Layout from '../components/layout/Layout';
-import { dbGetAll } from '../lib/db';
+import { dbGetAll, dbGetByIndex } from '../lib/db';
 import type { Payment, Expense, Student, Course } from '../lib/db';
 import { formatCurrency, formatDate, toCSV, downloadCSV } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
@@ -31,21 +31,23 @@ export default function DailyReportsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [p, e, s, c] = await Promise.all([
+      const [allP, allE, s, c] = await Promise.all([
         dbGetAll<Payment>('payments'),
         dbGetAll<Expense>('expenses'),
         dbGetAll<Student>('students'),
         dbGetAll<Course>('courses'),
       ]);
       
-      setAllPayments(p);
-      setAllExpenses(e);
+      setAllPayments(allP);
+      setAllExpenses(allE);
       setStudents(s);
       setCourses(c);
       
-      // Filter for selected date
-      const dayPayments = p.filter(pay => pay.date === selectedDate);
-      const dayExpenses = e.filter(exp => exp.date === selectedDate);
+      // Use indexed queries for selected date's data
+      const [dayPayments, dayExpenses] = await Promise.all([
+        dbGetByIndex<Payment>('payments', 'by-date', selectedDate),
+        dbGetByIndex<Expense>('expenses', 'by-date', selectedDate),
+      ]);
       
       setPayments(dayPayments);
       setExpenses(dayExpenses);

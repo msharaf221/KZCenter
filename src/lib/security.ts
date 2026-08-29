@@ -22,6 +22,16 @@ function loadRateLimitMap(): Map<string, RateLimitEntry> {
     const raw = localStorage.getItem(RATE_LIMIT_KEY);
     if (!raw) return new Map();
     const obj = JSON.parse(raw) as Record<string, RateLimitEntry>;
+    const now = Date.now();
+    // Purge expired entries so localStorage doesn't grow unbounded
+    for (const [key, entry] of Object.entries(obj)) {
+      const windowExpired = now - entry.firstAttempt > WINDOW_DURATION;
+      const blockExpired = !entry.blockedUntil || now >= entry.blockedUntil;
+      if (windowExpired && blockExpired) {
+        delete obj[key];
+      }
+    }
+    localStorage.setItem(RATE_LIMIT_KEY, JSON.stringify(obj));
     return new Map(Object.entries(obj));
   } catch {
     return new Map();
