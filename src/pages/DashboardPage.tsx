@@ -13,6 +13,7 @@ import { dbGetAll, recalculateStudentTotalPaid, Student, Teacher, Group, Course,
 import { formatDate, formatCurrency, getStatusLabel } from '../lib/utils';
 import { requestNotificationPermission } from '../lib/notifications';
 import { useApp } from '../contexts/AppContext';
+import { showBackupReminder } from '../lib/autoBackup';
 import dayjs from 'dayjs';
 
 const DAYS_AR: Record<string, string> = {
@@ -44,6 +45,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     requestNotificationPermission();
+    showBackupReminder();
   }, []);
 
   useEffect(() => {
@@ -141,13 +143,18 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    // Migration: Recalculate balances for all students (runs once)
+    // Migration: Recalculate balances for all students (runs once, non-blocking)
     const runMigration = async () => {
       if (localStorage.getItem('migration_balances_v1')) return;
       try {
         const students = await dbGetAll<Student>('students');
+        // Run sequentially in batches to avoid freezing the UI
         for (const s of students) {
           await recalculateStudentTotalPaid(s.id);
+          // Yield to the event loop every 10 records
+          if (students.indexOf(s) % 10 === 9) {
+            await new Promise(resolve => setTimeout(resolve, 0));
+          }
         }
         localStorage.setItem('migration_balances_v1', 'true');
         loadDashboard();
@@ -156,7 +163,7 @@ export default function DashboardPage() {
       }
     };
     runMigration();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
     return (

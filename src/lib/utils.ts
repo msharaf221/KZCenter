@@ -213,38 +213,59 @@ export async function exportToPDF(
 
   doc.setFontSize(16);
   doc.text(title, 14, 20);
-  doc.setFontSize(10);
+  doc.setFontSize(8);
 
   const headerLabels = headers.map(h => h.label);
   const rows = data.map(row => headers.map(h => String(row[h.key] ?? '')));
 
   let y = 35;
-  const colWidth = (doc.internal.pageSize.width - 28) / headers.length;
+  const pageWidth = doc.internal.pageSize.width - 28;
+  const colWidth = pageWidth / headers.length;
+  const cellPadX = 2;
 
   // Draw header
   doc.setFillColor(99, 102, 241);
-  doc.rect(14, y - 5, doc.internal.pageSize.width - 28, 10, 'F');
+  doc.rect(14, y - 5, pageWidth, 10, 'F');
   doc.setTextColor(255, 255, 255);
   headerLabels.forEach((label, i) => {
-    doc.text(label.substring(0, 12), 14 + i * colWidth, y);
+    // Truncate header labels to reasonable width
+    const maxChars = Math.floor(colWidth / 2.5);
+    const truncated = label.length > maxChars ? label.substring(0, maxChars - 1) + '…' : label;
+    doc.text(truncated, 14 + i * colWidth + cellPadX, y);
   });
 
   y += 10;
   doc.setTextColor(0, 0, 0);
 
   rows.forEach((row, rowIndex) => {
-    if (y > doc.internal.pageSize.height - 20) {
+    // Calculate row height based on longest wrapped cell
+    let maxLines = 1;
+    row.forEach((cell) => {
+      const maxCellWidth = colWidth - cellPadX * 2;
+      const lines = doc.splitTextToSize(cell, maxCellWidth);
+      if (lines.length > maxLines) maxLines = lines.length;
+    });
+    const rowHeight = Math.max(10, maxLines * 4.5);
+
+    // Check page break
+    if (y + rowHeight > doc.internal.pageSize.height - 20) {
       doc.addPage();
       y = 20;
     }
+
     if (rowIndex % 2 === 0) {
       doc.setFillColor(248, 250, 252);
-      doc.rect(14, y - 5, doc.internal.pageSize.width - 28, 10, 'F');
+      doc.rect(14, y - 5, pageWidth, rowHeight, 'F');
     }
+
     row.forEach((cell, i) => {
-      doc.text(String(cell).substring(0, 15), 14 + i * colWidth, y);
+      const maxCellWidth = colWidth - cellPadX * 2;
+      const lines = doc.splitTextToSize(cell, maxCellWidth);
+      lines.forEach((line: string, lineIdx: number) => {
+        doc.text(line, 14 + i * colWidth + cellPadX, y + lineIdx * 4.5);
+      });
     });
-    y += 10;
+    y += rowHeight;
   });
 
   doc.save(`${title}.pdf`);

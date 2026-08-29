@@ -3,7 +3,7 @@ import { Plus, Edit2, Trash2, Search } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, generateId, recalculateStudentTotalPaid, Course, CourseLevel, Group, Student } from '../lib/db';
+import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, recalculateStudentTotalPaid, Course, CourseLevel, Group, Student } from '../lib/db';
 import { formatCurrency, COLORS } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
@@ -30,10 +30,11 @@ export default function CoursesPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await dbGetPaginated<Course>('courses', 1, 100, (c: Course) =>
-        !search || c.name.toLowerCase().includes(search.toLowerCase())
-      );
-      setCourses(result.items);
+      const allCourses = await dbGetAll<Course>('courses');
+      const filtered = search
+        ? allCourses.filter(c => c.name.toLowerCase().includes(search.toLowerCase()))
+        : allCourses;
+      setCourses(filtered);
       const groups = await dbGetAll<Group>('groups');
       const gc: Record<string, number> = {};
       const sc: Record<string, number> = {};

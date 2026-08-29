@@ -3,7 +3,7 @@ import { Plus, Edit2, Trash2, ClipboardList } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import { dbGetAll, dbPut, dbSoftDelete, dbAdd, dbGetByIndex, generateId, Exam, Grade, Group, Course, Student } from '../lib/db';
+import { dbGetAll, dbPut, dbSoftDelete, dbAdd, dbGetByIndex, getGroupStudents, generateId, Exam, Grade, Group, Course, Student } from '../lib/db';
 import { formatDate } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
@@ -14,7 +14,7 @@ export default function ExamsPage() {
   const [exams, setExams] = useState<Exam[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
+  const [, setStudents] = useState<Student[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [showGradesModal, setShowGradesModal] = useState(false);
   const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
@@ -53,8 +53,7 @@ export default function ExamsPage() {
     if (!selectedExam) return;
     try {
       const existingGrades = await dbGetByIndex<Grade>('grades', 'by-examId', selectedExam.id);
-      const group = groups.find(g => g.id === selectedExam.groupId);
-      const groupStudents = students.filter(s => group?.studentIds.includes(s.id));
+      const groupStudents = await getGroupStudents(selectedExam.groupId);
 
       for (const student of groupStudents) {
         const grade = grades[student.id];
@@ -90,8 +89,15 @@ export default function ExamsPage() {
     } catch { notify.error('حدث خطأ'); }
   }
 
-  const selectedGroup = selectedExam ? groups.find(g => g.id === selectedExam.groupId) : null;
-  const examGroupStudents = selectedGroup ? students.filter(s => selectedGroup.studentIds.includes(s.id)) : [];
+  // Load enrolled students from enrollments table when exam is selected
+  const [examGroupStudents, setExamGroupStudents] = useState<Student[]>([]);
+  useEffect(() => {
+    if (selectedExam) {
+      getGroupStudents(selectedExam.groupId).then(setExamGroupStudents);
+    } else {
+      setExamGroupStudents([]);
+    }
+  }, [selectedExam]);
 
   return (
     <Layout title="الاختبارات والدرجات">

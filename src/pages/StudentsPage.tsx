@@ -6,11 +6,13 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
-import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, syncGroupStatus, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
+import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
 import { toCSV, downloadCSV, parseCSV, formatDate } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyNewStudent } from '../lib/notifications';
+import { useDebounce } from '../hooks';
+import { addAuditEntry } from '../lib/security';
 
 const PAGE_SIZE = 24;
 
@@ -29,6 +31,7 @@ export default function StudentsPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, 300);
   const [statusFilter, setStatusFilter] = useState('');
   const [groupFilter, setGroupFilter] = useState('');
   const [courseFilter, setCourseFilter] = useState('');
@@ -51,7 +54,7 @@ export default function StudentsPage() {
       setCourses(allCourses);
 
       const result = await dbGetPaginated<Student>('students', page, PAGE_SIZE, (s: Student) => {
-        const q = search.toLowerCase();
+        const q = debouncedSearch.toLowerCase();
         const matchSearch = !q || s.name.toLowerCase().includes(q) || s.parentPhone.includes(q);
         const matchStatus = !statusFilter || s.status === statusFilter;
         const matchGroup = !groupFilter || s.enrolledGroups?.includes(groupFilter);
@@ -69,7 +72,7 @@ export default function StudentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter, groupFilter, courseFilter]);
+  }, [page, debouncedSearch, statusFilter, groupFilter, courseFilter]);
 
   useEffect(() => {
     loadStudents();
@@ -136,39 +139,43 @@ export default function StudentsPage() {
       if (editingStudent) {
         await dbPut('students', { ...editingStudent, ...newStudentData });
         notify.success('تم تحديث بيانات الطالب');
+        addAuditEntry({
+          userId: 'current',
+          username: 'current',
+          action: 'update',
+          entity: 'student',
+          entityId: studentId,
+          details: `تعديل بيانات الطالب: ${form.name}`,
+        });
       } else {
         await dbAdd('students', { ...newStudentData, createdAt: new Date().toISOString() });
         notifyNewStudent(form.name);
+        addAuditEntry({
+          userId: 'current',
+          username: 'current',
+          action: 'create',
+          entity: 'student',
+          entityId: studentId,
+          details: `إضافة طالب جديد: ${form.name}`,
+        });
       }
 
       for (const groupId of removedGroups) {
-        const g = groups.find(g => g.id === groupId);
-        if (g) {
-          await dbPut('groups', { ...g, studentIds: g.studentIds.filter(id => id !== studentId) });
-          await syncGroupStatus(groupId);
+        try {
+          await unenrollStudent(studentId, groupId, 'تعديل بيانات الطالب');
+        } catch (e) {
+          console.error(`Failed to unenroll ${studentId} from ${groupId}:`, e);
         }
       }
       for (const groupId of addedGroups) {
-        const g = groups.find(g => g.id === groupId);
-        if (g) {
-          await dbPut('groups', { ...g, studentIds: [...new Set([...g.studentIds, studentId])] });
-          await syncGroupStatus(groupId);
-          
-          const paidAmount = initialPayments[groupId] || 0;
-          if (paidAmount > 0) {
-            const paymentId = generateId();
-            await dbAdd('payments', {
-              id: paymentId,
-              studentId: studentId,
-              courseId: g.courseId,
-              amount: paidAmount,
-              date: new Date().toISOString().split('T')[0],
-              type: 'subscription',
-              status: 'paid',
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString()
-            });
+        const paidAmount = initialPayments[groupId] || 0;
+        try {
+          const result = await enrollStudent(studentId, groupId, paidAmount > 0 ? paidAmount : undefined);
+          if (!result.success) {
+            console.error(`Failed to enroll ${studentId} in ${groupId}:`, result.error);
           }
+        } catch (e) {
+          console.error(`Failed to enroll ${studentId} in ${groupId}:`, e);
         }
       }
 
@@ -189,12 +196,11 @@ export default function StudentsPage() {
     try {
       const student = students.find(s => s.id === id);
       if (student && student.enrolledGroups) {
-        const allGroups = await dbGetAll<Group>('groups');
         for (const groupId of student.enrolledGroups) {
-          const group = allGroups.find(g => g.id === groupId);
-          if (group && group.studentIds.includes(id)) {
-            await dbPut('groups', { ...group, studentIds: group.studentIds.filter(sid => sid !== id) });
-            await syncGroupStatus(group.id);
+          try {
+            await unenrollStudent(id, groupId, 'حذف الطالب');
+          } catch (e) {
+            console.error(`Failed to unenroll ${id} from ${groupId}:`, e);
           }
         }
       }
@@ -209,16 +215,14 @@ export default function StudentsPage() {
   async function handleBulkDelete() {
     if (!canEdit) { notify.error('ليس لديك صلاحية الحذف'); return; }
     try {
-      const allGroups = await dbGetAll<Group>('groups');
       for (const id of selectedIds) {
         const student = students.find(s => s.id === id);
         if (student && student.enrolledGroups) {
           for (const groupId of student.enrolledGroups) {
-            const group = allGroups.find(g => g.id === groupId);
-            if (group && group.studentIds.includes(id)) {
-              group.studentIds = group.studentIds.filter(sid => sid !== id);
-              await dbPut('groups', group);
-              await syncGroupStatus(group.id);
+            try {
+              await unenrollStudent(id, groupId, 'حذف جماعي');
+            } catch (e) {
+              console.error(`Failed to unenroll ${id} from ${groupId}:`, e);
             }
           }
         }

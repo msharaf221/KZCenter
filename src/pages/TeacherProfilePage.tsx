@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Users2, ArrowRight, GraduationCap } from 'lucide-react';
 import Layout from '../components/layout/Layout';
-import { dbGetById, dbGetAll, Teacher, Group, Student, Course } from '../lib/db';
+import { dbGetById, dbGetAll, getGroupStudents, Teacher, Group, Student, Course } from '../lib/db';
 import { useApp } from '../contexts/AppContext';
 
 export default function TeacherProfilePage() {
@@ -33,12 +33,16 @@ export default function TeacherProfilePage() {
       }));
       setGroups(enrichedGroups);
 
-      // Get all students enrolled in these groups
-      const allStudents = await dbGetAll<Student>('students');
-      const groupIds = teacherGroups.map(g => g.id);
-      const teacherStudents = allStudents.filter(s => 
-        !s.deleted && s.enrolledGroups?.some(gid => groupIds.includes(gid))
-      );
+      // Get enrolled students from enrollments table (source of truth)
+      const teacherStudents: Student[] = [];
+      for (const g of teacherGroups) {
+        const groupStudents = await getGroupStudents(g.id);
+        for (const s of groupStudents) {
+          if (!teacherStudents.some(ts => ts.id === s.id)) {
+            teacherStudents.push(s);
+          }
+        }
+      }
       setStudents(teacherStudents);
 
     } finally {

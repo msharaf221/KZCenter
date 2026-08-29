@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, GraduationCap, BookOpen,
   Users2, CreditCard, ClipboardCheck, BarChart3,
   Settings, LogOut, ChevronRight, ChevronLeft,
-  Wallet, FileText, UserCog, CalendarDays, Archive
+  Wallet, FileText, UserCog, CalendarDays, Archive, Shield
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useApp } from '../../contexts/AppContext';
@@ -29,6 +29,7 @@ const navItems: NavItem[] = [
   { path: '/daily-reports', label: 'التقرير اليومي', icon: <CalendarDays size={20} />, adminOnly: true },
   { path: '/reports', label: 'التقارير', icon: <BarChart3 size={20} /> },
   { path: '/users', label: 'المستخدمون', icon: <UserCog size={20} />, adminOnly: true },
+  { path: '/audit-log', label: 'سجل المراجعة', icon: <Shield size={20} />, adminOnly: true },
   { path: '/settings', label: 'الإعدادات', icon: <Settings size={20} />, adminOnly: true },
 ];
 

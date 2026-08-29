@@ -4,14 +4,14 @@
  * يتم اختيار المخزن تلقائياً بناءً على التهيئة
  */
 
-import { supabase, isSupabaseConfigured } from './supabase';
+import { getSupabaseClient, getSupabaseConfigured } from './supabase';
 import * as localDB from './db';
 import { notify } from './notifications';
 
 // Storage mode
 export type StorageMode = 'local' | 'cloud' | 'hybrid';
 
-let currentMode: StorageMode = isSupabaseConfigured ? 'cloud' : 'local';
+let currentMode: StorageMode = getSupabaseConfigured() ? 'cloud' : 'local';
 
 export function getStorageMode(): StorageMode {
   return currentMode;
@@ -21,11 +21,21 @@ export function setStorageMode(mode: StorageMode) {
   currentMode = mode;
 }
 
+// Helper to check if cloud is available
+function isCloudReady(): boolean {
+  return getSupabaseConfigured() && getSupabaseClient() !== null;
+}
+
+function getClient() {
+  return getSupabaseClient();
+}
+
 // ==================== GENERIC OPERATIONS ====================
 
 type TableName = 'students' | 'teachers' | 'courses' | 'groups' | 
                  'payments' | 'attendance' | 'users' | 'settings' | 
-                 'expenses' | 'exams' | 'grades';
+                 'expenses' | 'exams' | 'grades' | 'inventory' | 'inventory_transactions' |
+                 'enrollments';
 
 // Convert camelCase to snake_case for Supabase
 function toSnakeCase(str: string): string {
@@ -49,8 +59,9 @@ function transformKeys(obj: Record<string, unknown>, transformer: (key: string) 
 // ==================== CLOUD OPERATIONS ====================
 
 async function cloudGetAll<T>(table: TableName): Promise<T[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
+  const client = getClient();
+  if (!client) return [];
+  const { data, error } = await client
     .from(table)
     .select('*')
     .eq('deleted', false)
@@ -66,8 +77,9 @@ async function cloudGetAll<T>(table: TableName): Promise<T[]> {
 }
 
 async function cloudGetById<T>(table: TableName, id: string): Promise<T | undefined> {
-  if (!supabase) return undefined;
-  const { data, error } = await supabase
+  const client = getClient();
+  if (!client) return undefined;
+  const { data, error } = await client
     .from(table)
     .select('*')
     .eq('id', id)
@@ -82,9 +94,10 @@ async function cloudGetById<T>(table: TableName, id: string): Promise<T | undefi
 }
 
 async function cloudAdd<T extends Record<string, unknown>>(table: TableName, item: T): Promise<void> {
-  if (!supabase) return;
+  const client = getClient();
+  if (!client) return;
   const transformed = transformKeys(item, toSnakeCase);
-  const { error } = await supabase.from(table).insert(transformed);
+  const { error } = await client.from(table).insert(transformed);
   
   if (error) {
     console.error(`Cloud add(${table}) error:`, error);
@@ -93,12 +106,13 @@ async function cloudAdd<T extends Record<string, unknown>>(table: TableName, ite
 }
 
 async function cloudUpdate<T extends Record<string, unknown>>(table: TableName, item: T): Promise<void> {
-  if (!supabase) return;
+  const client = getClient();
+  if (!client) return;
   const transformed = transformKeys(item, toSnakeCase);
   const id = transformed.id as string;
   delete transformed.id;
   
-  const { error } = await supabase
+  const { error } = await client
     .from(table)
     .update({ ...transformed, updated_at: new Date().toISOString() })
     .eq('id', id);
@@ -110,8 +124,9 @@ async function cloudUpdate<T extends Record<string, unknown>>(table: TableName, 
 }
 
 async function cloudSoftDelete(table: TableName, id: string): Promise<void> {
-  if (!supabase) return;
-  const { error } = await supabase
+  const client = getClient();
+  if (!client) return;
+  const { error } = await client
     .from(table)
     .update({ deleted: true, updated_at: new Date().toISOString() })
     .eq('id', id);
@@ -128,9 +143,10 @@ async function cloudGetPaginated<T>(
   pageSize: number,
   filters?: Record<string, unknown>
 ): Promise<{ items: T[]; total: number }> {
-  if (!supabase) return { items: [], total: 0 };
+  const client = getClient();
+  if (!client) return { items: [], total: 0 };
   
-  let query = supabase
+  let query = client
     .from(table)
     .select('*', { count: 'exact' })
     .eq('deleted', false);
@@ -163,21 +179,21 @@ async function cloudGetPaginated<T>(
 
 export const storage = {
   async getAll<T>(table: TableName): Promise<T[]> {
-    if (currentMode === 'cloud' && isSupabaseConfigured) {
+    if (currentMode === 'cloud' && isCloudReady()) {
       return cloudGetAll<T>(table);
     }
     return localDB.dbGetAll<T>(table);
   },
 
   async getById<T>(table: TableName, id: string): Promise<T | undefined> {
-    if (currentMode === 'cloud' && isSupabaseConfigured) {
+    if (currentMode === 'cloud' && isCloudReady()) {
       return cloudGetById<T>(table, id);
     }
     return localDB.dbGetById<T>(table, id);
   },
 
   async add<T extends Record<string, unknown>>(table: TableName, item: T): Promise<void> {
-    if (currentMode === 'cloud' && isSupabaseConfigured) {
+    if (currentMode === 'cloud' && isCloudReady()) {
       await cloudAdd(table, item);
     } else {
       await localDB.dbAdd(table, item);
@@ -186,7 +202,7 @@ export const storage = {
     // Sync to other storage in hybrid mode
     if (currentMode === 'hybrid') {
       try {
-        if (isSupabaseConfigured) {
+        if (isCloudReady()) {
           await cloudAdd(table, item);
         }
       } catch (e) {
@@ -196,7 +212,7 @@ export const storage = {
   },
 
   async update<T extends Record<string, unknown>>(table: TableName, item: T): Promise<void> {
-    if (currentMode === 'cloud' && isSupabaseConfigured) {
+    if (currentMode === 'cloud' && isCloudReady()) {
       await cloudUpdate(table, item);
     } else {
       await localDB.dbPut(table, item);
@@ -204,7 +220,7 @@ export const storage = {
   },
 
   async softDelete(table: TableName, id: string): Promise<void> {
-    if (currentMode === 'cloud' && isSupabaseConfigured) {
+    if (currentMode === 'cloud' && isCloudReady()) {
       await cloudSoftDelete(table, id);
     } else {
       await localDB.dbSoftDelete(table, id);
@@ -217,17 +233,17 @@ export const storage = {
     pageSize: number,
     filterFn?: (item: T) => boolean
   ): Promise<{ items: T[]; total: number }> {
-    if (currentMode === 'cloud' && isSupabaseConfigured) {
+    if (currentMode === 'cloud' && isCloudReady()) {
       return cloudGetPaginated<T>(table, page, pageSize);
     }
     return localDB.dbGetPaginated<T>(table, page, pageSize, filterFn);
   },
 
   async getByIndex<T>(table: TableName, indexName: string, value: IDBValidKey): Promise<T[]> {
-    // Supabase doesn't have indexes in the same way, use filter
-    if (currentMode === 'cloud' && isSupabaseConfigured && supabase) {
+    const client = getClient();
+    if (currentMode === 'cloud' && isCloudReady() && client) {
       const column = toSnakeCase(indexName.replace('by-', ''));
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from(table)
         .select('*')
         .eq(column, value)
@@ -243,9 +259,10 @@ export const storage = {
   },
 
   async bulkAdd<T extends Record<string, unknown>>(table: TableName, items: T[]): Promise<void> {
-    if (currentMode === 'cloud' && isSupabaseConfigured && supabase) {
+    const client = getClient();
+    if (currentMode === 'cloud' && isCloudReady() && client) {
       const transformed = items.map(item => transformKeys(item, toSnakeCase));
-      const { error } = await supabase.from(table).insert(transformed);
+      const { error } = await client.from(table).insert(transformed);
       if (error) throw error;
     } else {
       await localDB.dbBulkAdd(table, items);
@@ -253,9 +270,9 @@ export const storage = {
   },
 
   async clear(table: TableName): Promise<void> {
-    if (currentMode === 'cloud' && isSupabaseConfigured && supabase) {
-      // In cloud mode, we don't actually clear - just mark as deleted
-      const { error } = await supabase
+    const client = getClient();
+    if (currentMode === 'cloud' && isCloudReady() && client) {
+      const { error } = await client
         .from(table)
         .update({ deleted: true })
         .neq('deleted', true);
@@ -269,14 +286,16 @@ export const storage = {
 // ==================== SYNC UTILITIES ====================
 
 export async function syncLocalToCloud(): Promise<void> {
-  if (!isSupabaseConfigured || !supabase) {
-    notify.error('Supabase غير مهيأ');
+  const client = getClient();
+  if (!isCloudReady() || !client) {
+    notify.error('Supabase غير مهيأ. يرجى إعداد الاتصال من صفحة الإعدادات.');
     return;
   }
 
   const tables: TableName[] = [
     'students', 'teachers', 'courses', 'groups',
-    'payments', 'attendance', 'expenses', 'exams', 'grades'
+    'payments', 'attendance', 'expenses', 'exams', 'grades',
+    'enrollments'
   ];
 
   const loadingToast = notify.loading('جاري المزامنة مع السحابة...');
@@ -288,7 +307,7 @@ export async function syncLocalToCloud(): Promise<void> {
         const transformed = localData.map(item => 
           transformKeys(item as Record<string, unknown>, toSnakeCase)
         );
-        const { error } = await supabase.from(table).upsert(transformed);
+        const { error } = await client.from(table).upsert(transformed);
         if (error) console.error(`Sync ${table} error:`, error);
       }
     }
@@ -302,21 +321,23 @@ export async function syncLocalToCloud(): Promise<void> {
 }
 
 export async function syncCloudToLocal(): Promise<void> {
-  if (!isSupabaseConfigured || !supabase) {
-    notify.error('Supabase غير مهيأ');
+  const client = getClient();
+  if (!isCloudReady() || !client) {
+    notify.error('Supabase غير مهيأ. يرجى إعداد الاتصال من صفحة الإعدادات.');
     return;
   }
 
   const tables: TableName[] = [
     'students', 'teachers', 'courses', 'groups',
-    'payments', 'attendance', 'expenses', 'exams', 'grades'
+    'payments', 'attendance', 'expenses', 'exams', 'grades',
+    'enrollments'
   ];
 
   const loadingToast = notify.loading('جاري تنزيل البيانات من السحابة...');
 
   try {
     for (const table of tables) {
-      const { data, error } = await supabase.from(table).select('*');
+      const { data, error } = await client.from(table).select('*');
       if (error) {
         console.error(`Download ${table} error:`, error);
         continue;

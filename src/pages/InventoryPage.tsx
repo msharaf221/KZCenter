@@ -34,8 +34,8 @@ export default function InventoryPage() {
         dbGetAll<InventoryItem>('inventory'),
         dbGetAll<Course>('courses')
       ]);
-      setItems(invData.filter(i => !i.deleted).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
-      setCourses(coursesData.filter(c => !c.deleted));
+      setItems(invData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      setCourses(coursesData);
     } catch {
       notify.error('حدث خطأ أثناء تحميل المخزن');
     } finally {

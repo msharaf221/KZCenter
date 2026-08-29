@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Clock, AlertCircle, LogOut, Save, MessageCircle } from 'lucide-react';
 import Layout from '../components/layout/Layout';
-import { dbGetAll, dbAdd, dbPut, getGroupAttendanceForDate, generateId, Group, Student, Course, Attendance, AttendanceStatus } from '../lib/db';
+import { dbGetAll, dbAdd, dbPut, getGroupAttendanceForDate, getGroupStudents, generateId, Group, Student, Course, Attendance, AttendanceStatus } from '../lib/db';
 import { formatDate, getWhatsAppLink } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify, notifyAttendanceSaved, notifyAbsence } from '../lib/notifications';
@@ -11,12 +11,12 @@ export default function AttendancePage() {
   const { settings } = useApp();
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
   const [selectedGroup, setSelectedGroup] = useState('');
   const [selectedDate, setSelectedDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [existingAttendance, setExistingAttendance] = useState<Attendance[]>([]);
   const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceStatus>>({});
   const [saving, setSaving] = useState(false);
+  const [groupStudents, setGroupStudents] = useState<Student[]>([]);
 
   useEffect(() => {
     loadData();
@@ -29,14 +29,12 @@ export default function AttendancePage() {
   }, [selectedGroup, selectedDate]);
 
   async function loadData() {
-    const [g, c, s] = await Promise.all([
+    const [g, c] = await Promise.all([
       dbGetAll<Group>('groups'),
       dbGetAll<Course>('courses'),
-      dbGetAll<Student>('students'),
     ]);
     setGroups(g);
     setCourses(c);
-    setStudents(s);
     if (g.length > 0) setSelectedGroup(g[0].id);
   }
 
@@ -46,10 +44,14 @@ export default function AttendancePage() {
     const map: Record<string, AttendanceStatus> = {};
     records.forEach(r => { map[r.studentId] = r.status; });
     setAttendanceMap(map);
+    // Load enrolled students via enrollments table (source of truth)
+    if (selectedGroup) {
+      const enrolled = await getGroupStudents(selectedGroup);
+      setGroupStudents(enrolled);
+    }
   }
 
   const group = groups.find(g => g.id === selectedGroup);
-  const groupStudents = students.filter(s => group?.studentIds.includes(s.id));
 
   function setStatus(studentId: string, status: AttendanceStatus) {
     setAttendanceMap(prev => ({ ...prev, [studentId]: status }));
