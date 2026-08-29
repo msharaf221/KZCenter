@@ -40,7 +40,9 @@ export function saveAppNotification(notif: Omit<AppNotification, 'id' | 'date' |
   const notifications = getAppNotifications();
   const newNotif: AppNotification = {
     ...notif,
-    id: Date.now().toString() + Math.random().toString(),
+    id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Date.now().toString(36) + Math.random().toString(36).substring(2),
     date: new Date().toISOString(),
     read: false,
   };

@@ -40,8 +40,11 @@ export default function PaymentsPage() {
       setStudents(allStudents);
       setCourses(allCourses);
 
+      // Build Map for O(1) lookups instead of O(n) find per row
+      const studentMap = new Map(allStudents.map(s => [s.id, s]));
+
       const result = await dbGetPaginated<Payment>('payments', page, PAGE_SIZE, (p: Payment) => {
-        const student = allStudents.find(s => s.id === p.studentId);
+        const student = studentMap.get(p.studentId);
         const q = search.toLowerCase();
         const matchSearch = !q || (student?.name || '').toLowerCase().includes(q);
         const matchStatus = !statusFilter || p.status === statusFilter;

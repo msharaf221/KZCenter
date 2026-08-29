@@ -1,19 +1,27 @@
 import { useState, useEffect } from 'react';
-import { Save, Download, Upload, Bell, Cloud, Database, RefreshCw, Wrench } from 'lucide-react';
+import { Save, Download, Upload, Bell, Cloud, Database, RefreshCw, Wrench, Eye, EyeOff, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import Layout from '../components/layout/Layout';
-import { exportAllData, importAllData, runIntegrityFix, IntegrityReport } from '../lib/db';
-import { downloadJSON, COLORS } from '../lib/utils';
+import BackupManager from '../components/BackupManager';
+import { runIntegrityFix, IntegrityReport } from '../lib/db';
+import { COLORS } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
-import { SQL_SCHEMA } from '../lib/supabase';
+import {
+  SQL_SCHEMA,
+  getStoredSupabaseConfig,
+  saveSupabaseConfig,
+  clearSupabaseConfig,
+  testSupabaseConnection,
+  isSupabaseConfigured,
+} from '../lib/supabase';
 import { syncLocalToCloud, syncCloudToLocal } from '../lib/storage';
 
 export default function SettingsPage() {
-  const { 
-    settings, updateSettings, 
+  const {
+    settings, updateSettings,
     notificationsEnabled, enableNotifications,
-    storageMode, changeStorageMode, isCloudEnabled 
+    storageMode, changeStorageMode, isCloudEnabled
   } = useApp();
   const { user, resetPassword } = useAuth();
   const [form, setForm] = useState({
@@ -23,10 +31,17 @@ export default function SettingsPage() {
     notifyNewStudent: true, notifyAbsence: true, notifyLatePayment: true,
   });
   const [passwordForm, setPasswordForm] = useState({ newPass: '', confirm: '' });
-  const [importing, setImporting] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [checking, setChecking] = useState(false);
   const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
+
+  // Supabase config state
+  const [supabaseUrl, setSupabaseUrl] = useState('');
+  const [supabaseKey, setSupabaseKey] = useState('');
+  const [showKey, setShowKey] = useState(false);
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [supabaseExpanded, setSupabaseExpanded] = useState(false);
 
   async function handleIntegrityCheck() {
     setChecking(true);
@@ -65,6 +80,13 @@ export default function SettingsPage() {
     }
   }, [settings]);
 
+  // Load Supabase config
+  useEffect(() => {
+    const config = getStoredSupabaseConfig();
+    setSupabaseUrl(config.url);
+    setSupabaseKey(config.anonKey);
+  }, []);
+
   async function handleSaveGeneral() {
     try {
       await updateSettings(form);
@@ -90,31 +112,53 @@ export default function SettingsPage() {
     }
   }
 
-  async function handleExportBackup() {
+  async function handleTestConnection() {
+    if (!supabaseUrl || !supabaseKey) {
+      notify.error('يرجى إدخال URL و Anon Key');
+      return;
+    }
+    setTestingConnection(true);
+    setConnectionStatus('idle');
     try {
-      const data = await exportAllData();
-      downloadJSON(data, `eduCenter_backup_${new Date().toISOString().split('T')[0]}.json`);
-      notify.success('تم تصدير نسخة احتياطية بنجاح');
-    } catch { notify.error('حدث خطأ أثناء التصدير'); }
+      // Save config first so test can use it
+      saveSupabaseConfig(supabaseUrl, supabaseKey);
+      const success = await testSupabaseConnection();
+      setConnectionStatus(success ? 'success' : 'error');
+      if (success) {
+        notify.success('الاتصال بـ Supabase ناجح! 🎉');
+      } else {
+        notify.error('فشل الاتصال. تأكد من صحة البيانات.');
+      }
+    } catch {
+      setConnectionStatus('error');
+      notify.error('حدث خطأ أثناء اختبار الاتصال');
+    } finally {
+      setTestingConnection(false);
+    }
   }
 
-  async function handleImportBackup(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!window.confirm('هل أنت متأكد من استيراد هذه البيانات؟ سيتم استبدال جميع البيانات الحالية.')) return;
-    setImporting(true);
-    try {
-      const text = await file.text();
-      const data = JSON.parse(text);
-      await importAllData(data);
-      notify.success('تم استيراد البيانات بنجاح. يُنصح بإعادة تحميل الصفحة.');
-      setTimeout(() => window.location.reload(), 1500);
-    } catch {
-      notify.error('حدث خطأ أثناء الاستيراد. تأكد من صحة الملف.');
-    } finally {
-      setImporting(false);
-      e.target.value = '';
+  function handleSaveSupabaseConfig() {
+    if (!supabaseUrl || !supabaseKey) {
+      notify.error('يرجى إدخال URL و Anon Key');
+      return;
     }
+    saveSupabaseConfig(supabaseUrl, supabaseKey);
+    notify.success('تم حفظ إعدادات Supabase. يُنصح بإعادة تحميل الصفحة.');
+    // Show reload prompt
+    setTimeout(() => {
+      if (confirm('هل تريد إعادة تحميل الصفحة لتطبيق الإعدادات؟')) {
+        window.location.reload();
+      }
+    }, 1000);
+  }
+
+  function handleClearSupabaseConfig() {
+    if (!confirm('هل أنت متأكد من حذف إعدادات Supabase؟')) return;
+    clearSupabaseConfig();
+    setSupabaseUrl('');
+    setSupabaseKey('');
+    setConnectionStatus('idle');
+    notify.success('تم حذف إعدادات Supabase. يُنصح بإعادة تحميل الصفحة.');
   }
 
   async function handleSyncToCloud() {
@@ -283,18 +327,147 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        {/* Cloud Storage */}
+        {/* Cloud Storage - Supabase Configuration */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
           <h2 className="text-lg font-bold text-gray-900 mb-5 flex items-center gap-2">
-            <Cloud size={20} /> التخزين السحابي
+            <Cloud size={20} /> التخزين السحابي - Supabase
           </h2>
 
           {/* Status */}
-          <div className={`p-4 rounded-xl mb-4 ${isCloudEnabled ? 'bg-green-50 border border-green-100' : 'bg-yellow-50 border border-yellow-100'}`}>
-            <p className={`text-sm font-medium ${isCloudEnabled ? 'text-green-700' : 'text-yellow-700'}`}>
-              {isCloudEnabled ? '✓ Supabase متصل' : '⚠️ Supabase غير مهيأ - النظام يعمل محلياً'}
-            </p>
+          <div className={`p-4 rounded-xl mb-5 ${isCloudEnabled ? 'bg-green-50 border border-green-100' : 'bg-yellow-50 border border-yellow-100'}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {isCloudEnabled ? (
+                  <CheckCircle size={18} className="text-green-600" />
+                ) : (
+                  <XCircle size={18} className="text-yellow-600" />
+                )}
+                <p className={`text-sm font-medium ${isCloudEnabled ? 'text-green-700' : 'text-yellow-700'}`}>
+                  {isCloudEnabled ? '✓ Supabase متصل ومهيأ' : '⚠️ Supabase غير مهيأ - النظام يعمل محلياً فقط'}
+                </p>
+              </div>
+              <button
+                onClick={() => setSupabaseExpanded(!supabaseExpanded)}
+                className="text-xs text-gray-500 hover:text-gray-700 underline"
+              >
+                {supabaseExpanded ? 'إخفاء' : 'إعدادات الاتصال'}
+              </button>
+            </div>
           </div>
+
+          {/* Supabase URL & Key Configuration */}
+          {supabaseExpanded && (
+            <div className="mb-5 p-5 bg-gray-50 rounded-xl border border-gray-200 space-y-4">
+              <h3 className="text-sm font-bold text-gray-900 mb-3">إعدادات الاتصال بـ Supabase</h3>
+              
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                  Project URL
+                  <span className="text-xs font-normal text-gray-400 mr-2">(VITE_SUPABASE_URL)</span>
+                </label>
+                <input
+                  type="url"
+                  value={supabaseUrl}
+                  onChange={e => { setSupabaseUrl(e.target.value); setConnectionStatus('idle'); }}
+                  placeholder="https://xxxxx.supabase.co"
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                  dir="ltr"
+                />
+                <p className="text-xs text-gray-400 mt-1">
+                  تجده في: Supabase Dashboard → Settings → API → Project URL
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                  Anon Public Key
+                  <span className="text-xs font-normal text-gray-400 mr-2">(VITE_SUPABASE_ANON_KEY)</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showKey ? 'text' : 'password'}
+                    value={supabaseKey}
+                    onChange={e => { setSupabaseKey(e.target.value); setConnectionStatus('idle'); }}
+                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    className="w-full px-3 py-2.5 pl-10 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    dir="ltr"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey(!showKey)}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+                <p className="text-xs text-gray-400 mt-1">
+                  تجده في: Supabase Dashboard → Settings → API → anon public key
+                </p>
+              </div>
+
+              {/* Connection Status */}
+              {connectionStatus === 'success' && (
+                <div className="p-3 bg-green-50 border border-green-100 rounded-xl flex items-center gap-2">
+                  <CheckCircle size={16} className="text-green-600" />
+                  <span className="text-sm text-green-700">الاتصال ناجح! ✓</span>
+                </div>
+              )}
+              {connectionStatus === 'error' && (
+                <div className="p-3 bg-red-50 border border-red-100 rounded-xl flex items-center gap-2">
+                  <XCircle size={16} className="text-red-600" />
+                  <span className="text-sm text-red-700">فشل الاتصال. تأكد من صحة البيانات.</span>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={handleTestConnection}
+                  disabled={testingConnection || !supabaseUrl || !supabaseKey}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 text-blue-600 rounded-xl text-sm font-medium hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {testingConnection ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <RefreshCw size={16} />
+                  )}
+                  {testingConnection ? 'جاري الاختبار...' : 'اختبار الاتصال'}
+                </button>
+
+                <button
+                  onClick={handleSaveSupabaseConfig}
+                  disabled={!supabaseUrl || !supabaseKey}
+                  className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ backgroundColor: primaryColor }}
+                >
+                  <Save size={16} /> حفظ الإعدادات
+                </button>
+
+                {isSupabaseConfigured && (
+                  <button
+                    onClick={handleClearSupabaseConfig}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 rounded-xl text-sm font-medium hover:bg-red-100"
+                  >
+                    حذف الإعدادات
+                  </button>
+                )}
+              </div>
+
+              {/* Setup Guide */}
+              <div className="mt-3 p-3 bg-blue-50 rounded-xl border border-blue-100">
+                <p className="text-xs font-bold text-blue-800 mb-2">📋 خطوات التفعيل:</p>
+                <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
+                  <li>أنشئ مشروع على <a href="https://supabase.com" target="_blank" rel="noopener" className="underline">supabase.com</a></li>
+                  <li>اذهب لـ SQL Editor وأنشئ الجداول (اضغط "نسخ SQL Schema" أدناه)</li>
+                  <li>انسخ Project URL و Anon Key من Settings → API</li>
+                  <li>الصقهما هنا واختبر الاتصال ثم احفظ</li>
+                </ol>
+                <button onClick={copySchema} className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:underline font-medium">
+                  📋 نسخ SQL Schema (املأه في SQL Editor)
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Storage Mode */}
           <div className="mb-4">
@@ -327,21 +500,6 @@ export default function SettingsPage() {
               <button onClick={handleSyncFromCloud} disabled={syncing}
                 className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-purple-50 text-purple-600 rounded-xl text-sm font-medium hover:bg-purple-100 disabled:opacity-50">
                 <Download size={16} /> تنزيل من السحابة
-              </button>
-            </div>
-          )}
-
-          {/* Setup instructions */}
-          {!isCloudEnabled && (
-            <div className="mt-4 p-4 bg-gray-50 rounded-xl">
-              <p className="text-sm font-semibold text-gray-700 mb-2">لتفعيل التخزين السحابي:</p>
-              <ol className="text-xs text-gray-600 space-y-1 list-decimal list-inside">
-                <li>أنشئ مشروع على <a href="https://supabase.com" target="_blank" className="text-indigo-600 underline">supabase.com</a></li>
-                <li>انسخ الـ Schema وأنشئ الجداول</li>
-                <li>أضف VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY</li>
-              </ol>
-              <button onClick={copySchema} className="mt-3 text-xs text-indigo-600 hover:underline">
-                📋 نسخ SQL Schema
               </button>
             </div>
           )}
@@ -401,34 +559,8 @@ export default function SettingsPage() {
           )}
         </div>
 
-        {/* Backup */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
-          <h2 className="text-lg font-bold text-gray-900 mb-5">النسخ الاحتياطي</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="p-4 border border-dashed border-gray-200 rounded-xl text-center">
-              <Download size={24} className="text-gray-400 mx-auto mb-2" />
-              <p className="text-sm font-medium text-gray-700 mb-3">تصدير نسخة احتياطية كاملة</p>
-              <button onClick={handleExportBackup}
-                className="flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-medium mx-auto"
-                style={{ backgroundColor: primaryColor }}>
-                <Download size={16} /> تصدير JSON
-              </button>
-            </div>
-            <div className="p-4 border border-dashed border-gray-200 rounded-xl text-center">
-              <Upload size={24} className="text-gray-400 mx-auto mb-2" />
-              <p className="text-sm font-medium text-gray-700 mb-3">استيراد نسخة احتياطية</p>
-              <label className={`flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-medium mx-auto cursor-pointer ${importing ? 'opacity-60' : ''}`}
-                style={{ backgroundColor: '#8b5cf6' }}>
-                <Upload size={16} />
-                {importing ? 'جاري الاستيراد...' : 'استيراد JSON'}
-                <input type="file" accept=".json" onChange={handleImportBackup} className="hidden" disabled={importing} />
-              </label>
-            </div>
-          </div>
-          <div className="mt-4 p-4 bg-yellow-50 rounded-xl border border-yellow-100">
-            <p className="text-xs text-yellow-700">⚠️ تحذير: استيراد نسخة احتياطية سيستبدل جميع البيانات الحالية. تأكد من عمل نسخة احتياطية أولاً.</p>
-          </div>
-        </div>
+        {/* Backup Manager */}
+        <BackupManager />
       </div>
     </Layout>
   );

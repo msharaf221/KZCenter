@@ -62,6 +62,55 @@
 - إعدادات الإشعارات
 - نسخ احتياطي (تصدير/استيراد JSON)
 
+### 🆕 المميزات الجديدة
+
+#### 🔒 أمان متقدم
+- **Rate Limiting**: حماية من هجمات brute force على صفحة الدخول (5 محاولات ثم حظر 5 دقائق)
+- **Session Expiry**: انتهاء صلاحية الجلسة تلقائياً بعد 8 ساعات
+- **تغيير كلمة المرور الإجباري**: يُطلب تغيير كلمة المرور الافتراضية فور الدخول الأول
+- **Password Strength**: مؤشر قوة كلمة المرور مع اقتراحات
+- **RLS Policies**: سياسات أمان على مستوى الصفوف في Supabase
+
+#### 📋 سجل المراجعة (Audit Log)
+- تسجيل جميع العمليات (إنشاء، تعديل، حذف، دخول، خروج)
+- بحث وتصفية السجلات
+- تصدير السجل إلى CSV
+- إحصائيات سريعة
+
+#### 🌍 نظام التعريب (i18n)
+- دعم اللغتين العربية والإنجليزية
+- تغيير الاتجاه تلقائياً (RTL/LTR)
+- ملفات ترجمة منفصلة
+
+#### 🚀 تحسينات الأداء
+- **Lazy Loading**: تحميل الصفحات عند الحاجة فقط
+- **Debounce للبحث**: تأخير البحث 300ms لتحسين الأداء
+- **Custom Hooks**: فصل المنطق عن الواجهة
+
+#### 💾 النسخ الاحتياطي التلقائي
+- تنبيه تلقائي بعد أسبوع بدون نسخ احتياطي
+- حساب حجم البيانات
+
+#### 📱 PWA Support
+- إمكانية التثبيت كتطبيق على الموبايل
+- manifest.json كامل
+- Service Worker (جاهز للتفعيل)
+
+#### 🧪 اختبارات
+- **67 اختبار** يغطون: الأدوات، الأمان، الهوكات، التعريب، النسخ الاحتياطي
+- Vitest + Testing Library
+- Coverage reports
+
+#### 🐳 DevOps
+- **Dockerfile**: بناء Docker multi-stage
+- **docker-compose.yml**: تشغيل سهل
+- **nginx.conf**: إعدادات Nginx محسنة مع security headers
+- **CI/CD Pipeline**: GitHub Actions (lint → test → build → deploy)
+
+#### 🛡️ RLS Policies محسنة
+- سياسات أمان مفصلة لكل دور (admin/teacher)
+- عزل البيانات بين المستخدمين
+
 ## 🚀 التشغيل
 
 ### المتطلبات
@@ -78,9 +127,21 @@ npm install
 npm run dev
 ```
 
+### الاختبارات
+```bash
+npm run test           # تشغيل الاختبارات
+npm run test:watch     # تشغيل مع مراقبة
+npm run test:coverage  # تغطية الاختبارات
+```
+
 ### البناء للإنتاج
 ```bash
 npm run build
+```
+
+### Docker
+```bash
+docker-compose up -d
 ```
 
 ## 🔑 بيانات الدخول الافتراضية
@@ -89,7 +150,7 @@ npm run build
 |----------|-------------|-------|
 | admin | admin123 | مسؤول |
 
-> ⚠️ **مهم**: بيانات الدخول الافتراضية تظهر في صفحة الدخول في وضع التطوير فقط. غيّر كلمة مرور admin فور أول تسجيل دخول من صفحة الإعدادات.
+> ⚠️ **مهم**: سيتم طلب تغيير كلمة المرور الافتراضية فور أول تسجيل دخول.
 
 ## 🗄️ قاعدة البيانات
 
@@ -107,6 +168,8 @@ npm run build
 - `grades` - الدرجات
 - `users` - المستخدمون
 - `settings` - الإعدادات
+- `inventory` - المخزون
+- `inventory_transactions` - حركات المخزون
 
 ## ☁️ التخزين السحابي (اختياري)
 
@@ -135,12 +198,21 @@ src/
 ├── contexts/          # React Contexts
 │   ├── AuthContext.tsx
 │   └── AppContext.tsx
+├── hooks/             # Custom Hooks
+│   └── index.ts
+├── i18n/              # نظام التعريب
+│   ├── index.ts
+│   └── locales/       # ملفات الترجمة
+│       ├── ar.json
+│       └── en.json
 ├── lib/               # المكتبات والأدوات
 │   ├── db.ts          # IndexedDB
 │   ├── utils.ts       # وظائف مساعدة
+│   ├── security.ts    # أدوات الأمان
 │   ├── notifications.ts
 │   ├── storage.ts
-│   └── supabase.ts
+│   ├── supabase.ts
+│   └── autoBackup.ts
 ├── pages/             # الصفحات
 │   ├── LoginPage.tsx
 │   ├── DashboardPage.tsx
@@ -153,8 +225,19 @@ src/
 │   ├── ExpensesPage.tsx
 │   ├── ExamsPage.tsx
 │   ├── ReportsPage.tsx
+│   ├── DailyReportsPage.tsx
 │   ├── UsersPage.tsx
-│   └── SettingsPage.tsx
+│   ├── SettingsPage.tsx
+│   ├── AuditLogPage.tsx
+│   ├── StudentProfilePage.tsx
+│   └── TeacherProfilePage.tsx
+├── test/              # الاختبارات
+│   ├── setup.ts
+│   ├── utils.test.ts
+│   ├── security.test.ts
+│   ├── hooks.test.ts
+│   ├── i18n.test.ts
+│   └── autoBackup.test.ts
 ├── App.tsx            # نقطة الدخول
 ├── main.tsx
 └── index.css
@@ -165,7 +248,7 @@ src/
 - **Frontend**: React 19, TypeScript, Vite
 - **Styling**: Tailwind CSS 4
 - **State**: React Context API
-- **Routing**: React Router v6
+- **Routing**: React Router v6/v7
 - **Storage**: IndexedDB (idb)
 - **Charts**: Recharts
 - **Icons**: Lucide React
@@ -173,10 +256,18 @@ src/
 - **Notifications**: React Hot Toast
 - **Auth**: bcryptjs
 - **Export**: xlsx, jspdf
+- **Testing**: Vitest, Testing Library
+- **DevOps**: Docker, GitHub Actions
 
-## 🤖 CI (اختياري)
+## 🤖 CI/CD
 
-ملف GitHub Actions جاهز في `docs/github-actions-ci.yml` — انسخه إلى `.github/workflows/ci.yml` لتفعيل الفحص التلقائي (typecheck + lint + build) على كل push.
+ملف GitHub Actions جاهز في `.github/workflows/ci.yml` — يشمل:
+- TypeScript type checking
+- ESLint
+- Unit tests
+- Build verification
+- Docker build
+- GitHub Pages deployment
 
 ## 📝 الترخيص
 

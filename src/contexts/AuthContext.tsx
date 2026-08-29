@@ -1,12 +1,21 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import bcrypt from 'bcryptjs';
 import { User, UserRole, seedDefaultData, getUserByUsername, dbGetAll, dbPut, dbAdd, dbRemove, generateId } from '../lib/db';
 import { notify } from '../lib/notifications';
+import {
+  checkRateLimit,
+  recordLoginAttempt,
+  isSessionExpired,
+  refreshSession,
+  clearSession,
+  addAuditEntry,
+  checkPasswordStrength,
+} from '../lib/security';
 
 interface AuthContextType {
   user: SessionUser | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<boolean>;
+  login: (username: string, password: string) => Promise<{ success: boolean; mustChangePassword?: boolean }>;
   logout: () => void;
   isAdmin: () => boolean;
   isTeacher: () => boolean;
@@ -16,11 +25,15 @@ interface AuthContextType {
   deleteUser: (id: string) => Promise<void>;
   resetPassword: (id: string, newPassword: string) => Promise<void>;
   refreshUsers: () => Promise<void>;
+  changePassword: (oldPassword: string, newPassword: string) => Promise<boolean>;
+  rateLimitInfo: { remainingAttempts: number; blockedUntil?: number } | null;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
 const SESSION_KEY = 'educenter_session';
+const SESSION_TIMESTAMP_KEY = 'educenter_session_ts';
+const MUST_CHANGE_PASSWORD_KEY = 'educenter_must_change_pw';
 
 // Safe session shape: never persist the password hash
 type SessionUser = Omit<User, 'passwordHash'>;
@@ -33,19 +46,39 @@ function toSessionUser(u: User): SessionUser {
 const ADMIN_PERMISSIONS = [
   'students', 'teachers', 'courses', 'groups',
   'payments', 'attendance', 'reports', 'settings',
-  'users', 'expenses', 'exams',
+  'users', 'expenses', 'exams', 'inventory', 'daily_reports', 'audit',
 ];
 
-const TEACHER_PERMISSIONS = ['attendance', 'students_view', 'reports_view'];
+const TEACHER_PERMISSIONS = ['attendance', 'students_view', 'reports_view', 'exams'];
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [rateLimitInfo, setRateLimitInfo] = useState<{ remainingAttempts: number; blockedUntil?: number } | null>(null);
+  const sessionCheckRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     initApp();
+    return () => {
+      if (sessionCheckRef.current) clearInterval(sessionCheckRef.current);
+    };
   }, []);
+
+  // Check session expiry periodically
+  useEffect(() => {
+    if (user) {
+      sessionCheckRef.current = setInterval(() => {
+        if (isSessionExpired()) {
+          notify.warning('انتهت صلاحية الجلسة. يرجى تسجيل الدخول مرة أخرى.');
+          logout();
+        }
+      }, 60000); // Check every minute
+    }
+    return () => {
+      if (sessionCheckRef.current) clearInterval(sessionCheckRef.current);
+    };
+  }, [user]);
 
   async function initApp() {
     try {
@@ -57,9 +90,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         try {
           const parsed = JSON.parse(savedSession);
           delete parsed.passwordHash;
-          setUser(parsed);
+
+          // Check session expiry
+          if (isSessionExpired()) {
+            sessionStorage.removeItem(SESSION_KEY);
+            sessionStorage.removeItem(SESSION_TIMESTAMP_KEY);
+          } else {
+            setUser(parsed);
+            refreshSession();
+          }
         } catch {
           sessionStorage.removeItem(SESSION_KEY);
+          sessionStorage.removeItem(SESSION_TIMESTAMP_KEY);
         }
       }
       await refreshUsers();
@@ -79,33 +121,83 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function login(username: string, password: string): Promise<boolean> {
+  async function login(username: string, password: string): Promise<{ success: boolean; mustChangePassword?: boolean }> {
     try {
+      // Rate limiting
+      const rateCheck = checkRateLimit(username);
+      setRateLimitInfo(rateCheck);
+
+      if (!rateCheck.allowed) {
+        const blockedMinutes = rateCheck.blockedUntil
+          ? Math.ceil((rateCheck.blockedUntil - Date.now()) / 60000)
+          : 5;
+        notify.error(`تم حظر المحاولات. حاول مرة أخرى بعد ${blockedMinutes} دقيقة`);
+        return { success: false };
+      }
+
       const foundUser = await getUserByUsername(username);
 
       if (!foundUser) {
-        return false;
+        recordLoginAttempt(username, false);
+        setRateLimitInfo(checkRateLimit(username));
+        return { success: false };
       }
 
       const match = bcrypt.compareSync(password, foundUser.passwordHash);
 
       if (!match) {
-        return false;
+        recordLoginAttempt(username, false);
+        setRateLimitInfo(checkRateLimit(username));
+        const remaining = checkRateLimit(username).remainingAttempts;
+        if (remaining > 0 && remaining <= 2) {
+          notify.warning(`متبقي ${remaining} محاولات قبل الحظر`);
+        }
+        return { success: false };
       }
+
+      // Success
+      recordLoginAttempt(username, true);
+      setRateLimitInfo(null);
 
       const sessionUser = toSessionUser(foundUser);
       setUser(sessionUser);
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
-      return true;
+      sessionStorage.setItem(SESSION_TIMESTAMP_KEY, Date.now().toString());
+
+      // Check if must change password (default password)
+      const isDefaultPassword = bcrypt.compareSync('admin123', foundUser.passwordHash);
+      if (isDefaultPassword) {
+        sessionStorage.setItem(MUST_CHANGE_PASSWORD_KEY, 'true');
+      }
+
+      // Audit log
+      addAuditEntry({
+        userId: foundUser.id,
+        username: foundUser.username,
+        action: 'login',
+        entity: 'session',
+        details: `تسجيل دخول ناجح - الدور: ${foundUser.role}`,
+      });
+
+      return { success: true, mustChangePassword: isDefaultPassword };
     } catch (e) {
       console.error('login error:', e);
-      return false;
+      return { success: false };
     }
   }
 
   function logout() {
+    if (user) {
+      addAuditEntry({
+        userId: user.id,
+        username: user.username,
+        action: 'logout',
+        entity: 'session',
+      });
+    }
     setUser(null);
-    sessionStorage.removeItem(SESSION_KEY);
+    clearSession();
+    sessionStorage.removeItem(MUST_CHANGE_PASSWORD_KEY);
     notify.info('تم تسجيل الخروج');
   }
 
@@ -124,10 +216,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return false;
   }
 
+  async function changePassword(oldPassword: string, newPassword: string): Promise<boolean> {
+    if (!user) return false;
+
+    const foundUser = await getUserByUsername(user.username);
+    if (!foundUser) return false;
+
+    const match = bcrypt.compareSync(oldPassword, foundUser.passwordHash);
+    if (!match) {
+      notify.error('كلمة المرور الحالية غير صحيحة');
+      return false;
+    }
+
+    const strength = checkPasswordStrength(newPassword);
+    if (strength.score < 2) {
+      notify.error(`كلمة المرور ضعيفة: ${strength.suggestions.join('، ')}`);
+      return false;
+    }
+
+    const passwordHash = bcrypt.hashSync(newPassword, 10);
+    await dbPut('users', { ...foundUser, passwordHash, updatedAt: new Date().toISOString() });
+
+    sessionStorage.removeItem(MUST_CHANGE_PASSWORD_KEY);
+
+    addAuditEntry({
+      userId: user.id,
+      username: user.username,
+      action: 'update',
+      entity: 'user',
+      entityId: user.id,
+      details: 'تغيير كلمة المرور',
+    });
+
+    notify.success('تم تغيير كلمة المرور بنجاح');
+    return true;
+  }
+
   async function addUser(username: string, password: string, role: UserRole): Promise<void> {
     // Check duplicate
     const existing = await getUserByUsername(username);
     if (existing) throw new Error('اسم المستخدم موجود بالفعل');
+
+    const strength = checkPasswordStrength(password);
+    if (strength.score < 2) {
+      throw new Error(`كلمة المرور ضعيفة: ${strength.suggestions.join('، ')}`);
+    }
 
     const passwordHash = bcrypt.hashSync(password, 10);
     const newUser: User = {
@@ -140,6 +273,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
     await dbAdd('users', newUser);
     await refreshUsers();
+
+    addAuditEntry({
+      userId: user?.id || 'system',
+      username: user?.username || 'system',
+      action: 'create',
+      entity: 'user',
+      entityId: newUser.id,
+      details: `إضافة مستخدم جديد: ${username} (${role})`,
+    });
+
     notify.success('تم إضافة المستخدم بنجاح');
   }
 
@@ -152,15 +295,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     await dbRemove('users', id);
     await refreshUsers();
+
+    addAuditEntry({
+      userId: user?.id || 'system',
+      username: user?.username || 'system',
+      action: 'delete',
+      entity: 'user',
+      entityId: id,
+      details: `حذف مستخدم: ${target?.username}`,
+    });
+
     notify.success('تم حذف المستخدم');
   }
 
   async function resetPassword(id: string, newPassword: string): Promise<void> {
     const userToUpdate = allUsers.find(u => u.id === id);
     if (!userToUpdate) throw new Error('المستخدم غير موجود');
+
+    const strength = checkPasswordStrength(newPassword);
+    if (strength.score < 2) {
+      throw new Error(`كلمة المرور ضعيفة: ${strength.suggestions.join('، ')}`);
+    }
+
     const passwordHash = bcrypt.hashSync(newPassword, 10);
     await dbPut('users', { ...userToUpdate, passwordHash, updatedAt: new Date().toISOString() });
     await refreshUsers();
+
+    addAuditEntry({
+      userId: user?.id || 'system',
+      username: user?.username || 'system',
+      action: 'update',
+      entity: 'user',
+      entityId: id,
+      details: `إعادة تعيين كلمة مرور: ${userToUpdate.username}`,
+    });
+
     notify.success('تم تغيير كلمة المرور بنجاح');
   }
 
@@ -169,6 +338,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user, loading, login, logout,
       isAdmin, isTeacher, hasPermission,
       allUsers, addUser, deleteUser, resetPassword, refreshUsers,
+      changePassword, rateLimitInfo,
     }}>
       {children}
     </AuthContext.Provider>
@@ -180,3 +350,5 @@ export function useAuth() {
   if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
   return ctx;
 }
+
+

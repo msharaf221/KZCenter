@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { Settings, dbGetById, dbPut } from '../lib/db';
 import { requestNotificationPermission, updateNotificationSettings } from '../lib/notifications';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { getSupabaseConfigured } from '../lib/supabase';
 import { getStorageMode, setStorageMode, StorageMode } from '../lib/storage';
 
 interface AppContextType {
@@ -134,7 +134,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       darkMode,
       toggleDarkMode,
       refreshSettings,
-      isCloudEnabled: isSupabaseConfigured,
+      isCloudEnabled: getSupabaseConfigured(),
       storageMode,
       changeStorageMode,
       notificationsEnabled,

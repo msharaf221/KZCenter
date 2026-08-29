@@ -200,10 +200,29 @@ export interface InventoryTransaction {
   createdAt: string;
 }
 
+// ==================== ENROLLMENT (Single Source of Truth) ====================
+
+export type EnrollmentStatus = 'active' | 'transferred' | 'dropped' | 'completed';
+
+export interface Enrollment {
+  id: string;
+  studentId: string;
+  groupId: string;
+  status: EnrollmentStatus;
+  enrolledAt: string;
+  droppedAt?: string;
+  dropReason?: string;
+  initialPayment?: number;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
 // ==================== DB INIT ====================
 
 const DB_NAME = 'EduCenterProDB';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let dbInstance: IDBPDatabase<any> | null = null;
@@ -305,6 +324,15 @@ export async function getDB(): Promise<IDBPDatabase<any>> {
         s.createIndex('by-itemId', 'itemId');
         s.createIndex('by-date', 'date');
       }
+
+      // Enrollments (Single Source of Truth for student-group relationship)
+      if (!db.objectStoreNames.contains('enrollments')) {
+        const s = db.createObjectStore('enrollments', { keyPath: 'id' });
+        s.createIndex('by-studentId', 'studentId');
+        s.createIndex('by-groupId', 'groupId');
+        s.createIndex('by-status', 'status');
+        s.createIndex('by-studentGroup', ['studentId', 'groupId']);
+      }
     },
   });
 
@@ -369,7 +397,8 @@ type StoreName =
   | 'students' | 'teachers' | 'courses' | 'groups'
   | 'payments' | 'attendance' | 'users' | 'settings'
   | 'expenses' | 'exams' | 'grades'
-  | 'inventory' | 'inventory_transactions';
+  | 'inventory' | 'inventory_transactions'
+  | 'enrollments';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function dbGetAll<T = any>(storeName: StoreName): Promise<T[]> {
@@ -509,6 +538,290 @@ export async function dbGetByIndex<T = any>(
   }
 }
 
+// ==================== ENROLLMENT MANAGEMENT ====================
+
+/**
+ * تسجيل طالب في مجموعة (Atomic Operation)
+ * يضمن التزامن بين enrollments و student.enrolledGroups و group.studentIds
+ */
+export async function enrollStudent(
+  studentId: string,
+  groupId: string,
+  initialPayment?: number
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // 1. Validate
+    const [student, group] = await Promise.all([
+      dbGetById<Student>('students', studentId),
+      dbGetById<Group>('groups', groupId),
+    ]);
+
+    if (!student) return { success: false, error: 'الطالب غير موجود' };
+    if (!group) return { success: false, error: 'المجموعة غير موجودة' };
+    if (group.status === 'ended') return { success: false, error: 'المجموعة منتهية' };
+    if (group.status === 'full') return { success: false, error: 'المجموعة مكتملة' };
+
+    // 2. Check if already enrolled
+    const existingEnrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, groupId]);
+    const activeEnrollment = existingEnrollments.find(e => e.status === 'active' && !e.deleted);
+    if (activeEnrollment) {
+      return { success: false, error: 'الطالب مسجل بالفعل في هذه المجموعة' };
+    }
+
+    // 3. Check capacity
+    if (group.studentIds.length >= group.maxStudents) {
+      return { success: false, error: 'المجموعة مكتملة' };
+    }
+
+    // 4. Create enrollment record (Single Source of Truth)
+    const enrollmentId = generateId();
+    const now = new Date().toISOString();
+    const enrollment: Enrollment = {
+      id: enrollmentId,
+      studentId,
+      groupId,
+      status: 'active',
+      enrolledAt: now,
+      initialPayment: initialPayment || 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await dbAdd('enrollments', enrollment);
+
+    // 5. Update denormalized arrays (for performance)
+    await dbPut('groups', {
+      ...group,
+      studentIds: [...new Set([...group.studentIds, studentId])],
+      updatedAt: now,
+    });
+
+    await dbPut('students', {
+      ...student,
+      enrolledGroups: [...new Set([...student.enrolledGroups, groupId])],
+      updatedAt: now,
+    });
+
+    // 6. Create payment if provided
+    if (initialPayment && initialPayment > 0) {
+      await dbAdd('payments', {
+        id: generateId(),
+        studentId,
+        courseId: group.courseId,
+        amount: initialPayment,
+        date: now.split('T')[0],
+        type: 'subscription',
+        status: 'paid',
+        notes: `تسجيل في ${group.name}`,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    // 7. Sync group status
+    await syncGroupStatus(groupId);
+
+    // 8. Recalculate student totals
+    await recalculateStudentTotalPaid(studentId);
+
+    return { success: true };
+  } catch (error) {
+    console.error('enrollStudent error:', error);
+    return { success: false, error: String(error) };
+  }
+}
+
+/**
+ * إزالة طالب من مجموعة (Atomic Operation)
+ */
+export async function unenrollStudent(
+  studentId: string,
+  groupId: string,
+  reason?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // 1. Find active enrollment
+    const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, groupId]);
+    const activeEnrollment = enrollments.find(e => e.status === 'active' && !e.deleted);
+    
+    if (!activeEnrollment) {
+      return { success: false, error: 'الطالب غير مسجل في هذه المجموعة' };
+    }
+
+    // 2. Update enrollment status
+    const now = new Date().toISOString();
+    await dbPut('enrollments', {
+      ...activeEnrollment,
+      status: 'dropped',
+      droppedAt: now,
+      dropReason: reason || 'إزالة يدوية',
+      updatedAt: now,
+    });
+
+    // 3. Update denormalized arrays
+    const [student, group] = await Promise.all([
+      dbGetById<Student>('students', studentId),
+      dbGetById<Group>('groups', groupId),
+    ]);
+
+    if (student) {
+      await dbPut('students', {
+        ...student,
+        enrolledGroups: student.enrolledGroups.filter(gid => gid !== groupId),
+        updatedAt: now,
+      });
+    }
+
+    if (group) {
+      await dbPut('groups', {
+        ...group,
+        studentIds: group.studentIds.filter(sid => sid !== studentId),
+        updatedAt: now,
+      });
+      await syncGroupStatus(groupId);
+    }
+
+    // 4. Recalculate student totals
+    await recalculateStudentTotalPaid(studentId);
+
+    return { success: true };
+  } catch (error) {
+    console.error('unenrollStudent error:', error);
+    return { success: false, error: String(error) };
+  }
+}
+
+/**
+ * نقل طالب من مجموعة لأخرى
+ */
+export async function transferStudent(
+  studentId: string,
+  fromGroupId: string,
+  toGroupId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Validate target group
+    const toGroup = await dbGetById<Group>('groups', toGroupId);
+    if (!toGroup) return { success: false, error: 'المجموعة الوجهة غير موجودة' };
+    if (toGroup.status === 'ended') return { success: false, error: 'المجموعة الوجهة منتهية' };
+    if (toGroup.studentIds.length >= toGroup.maxStudents) {
+      return { success: false, error: 'المجموعة الوجهة مكتملة' };
+    }
+
+    // Check if already in target group
+    const existingEnrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, toGroupId]);
+    if (existingEnrollments.some(e => e.status === 'active')) {
+      return { success: false, error: 'الطالب مسجل بالفعل في المجموعة الوجهة' };
+    }
+
+    // Save the original enrollment for rollback
+    const sourceEnrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, fromGroupId]);
+    const originalEnrollment = sourceEnrollments.find(e => e.status === 'active' && !e.deleted);
+
+    // Unenroll from source
+    const unenrollResult = await unenrollStudent(studentId, fromGroupId, 'نقل لمجموعة أخرى');
+    if (!unenrollResult.success) return unenrollResult;
+
+    // Enroll in target
+    const enrollResult = await enrollStudent(studentId, toGroupId);
+    if (!enrollResult.success) {
+      // Rollback: restore original enrollment record instead of creating a new one
+      if (originalEnrollment) {
+        const now = new Date().toISOString();
+        await dbPut('enrollments', { ...originalEnrollment, status: 'active' as const, updatedAt: now });
+      }
+      // Also restore denormalized arrays
+      const [student, group] = await Promise.all([
+        dbGetById<Student>('students', studentId),
+        dbGetById<Group>('groups', fromGroupId),
+      ]);
+      if (student && !student.enrolledGroups.includes(fromGroupId)) {
+        await dbPut('students', { ...student, enrolledGroups: [...student.enrolledGroups, fromGroupId], updatedAt: new Date().toISOString() });
+      }
+      if (group && !group.studentIds.includes(studentId)) {
+        await dbPut('groups', { ...group, studentIds: [...group.studentIds, studentId], updatedAt: new Date().toISOString() });
+        await syncGroupStatus(fromGroupId);
+      }
+      return enrollResult;
+    }
+
+    // Update enrollment type to 'transferred'
+    const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, toGroupId]);
+    const newEnrollment = enrollments.find(e => e.status === 'active');
+    if (newEnrollment) {
+      await dbPut('enrollments', { ...newEnrollment, status: 'transferred' as EnrollmentStatus, updatedAt: new Date().toISOString() });
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('transferStudent error:', error);
+    return { success: false, error: String(error) };
+  }
+}
+
+/**
+ * جلب كل الطلاب المسجلين في مجموعة
+ */
+export async function getGroupStudents(groupId: string): Promise<Student[]> {
+  const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-groupId', groupId);
+  const activeStudentIds = enrollments
+    .filter(e => e.status === 'active' && !e.deleted)
+    .map(e => e.studentId);
+
+  const students: Student[] = [];
+  for (const sid of activeStudentIds) {
+    const student = await dbGetById<Student>('students', sid);
+    if (student && !student.deleted) {
+      students.push(student);
+    }
+  }
+  return students;
+}
+
+/**
+ * جلب كل المجموعات المسجل بها طالب
+ */
+export async function getStudentGroups(studentId: string): Promise<Group[]> {
+  const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentId', studentId);
+  const activeGroupIds = enrollments
+    .filter(e => e.status === 'active' && !e.deleted)
+    .map(e => e.groupId);
+
+  const groups: Group[] = [];
+  for (const gid of activeGroupIds) {
+    const group = await dbGetById<Group>('groups', gid);
+    if (group && !group.deleted) {
+      groups.push(group);
+    }
+  }
+  return groups;
+}
+
+/**
+ * جلب enrollment record لطالب في مجموعة
+ */
+export async function getEnrollment(studentId: string, groupId: string): Promise<Enrollment | undefined> {
+  const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, groupId]);
+  return enrollments.find(e => !e.deleted);
+}
+
+/**
+ * جلب إحصائيات التسجيل لمجموعة
+ */
+export async function getGroupEnrollmentStats(groupId: string): Promise<{
+  total: number;
+  active: number;
+  dropped: number;
+  transferred: number;
+}> {
+  const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-groupId', groupId);
+  return {
+    total: enrollments.length,
+    active: enrollments.filter(e => e.status === 'active').length,
+    dropped: enrollments.filter(e => e.status === 'dropped').length,
+    transferred: enrollments.filter(e => e.status === 'transferred').length,
+  };
+}
+
 // ==================== SPECIALIZED QUERIES ====================
 
 export async function getStudentAttendanceSummary(studentId: string): Promise<{
@@ -538,14 +851,23 @@ export async function recalculateStudentTotalPaid(studentId: string): Promise<vo
     .filter(p => p.status === 'paid' && !p.deleted)
     .reduce((sum, p) => sum + p.amount, 0);
     
+  // Use enrollments table as source of truth, fall back to enrolledGroups
   let totalOwed = 0;
-  if (student.enrolledGroups && student.enrolledGroups.length > 0) {
+  const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentId', studentId);
+  const activeGroupIds = enrollments
+    .filter(e => e.status === 'active' && !e.deleted)
+    .map(e => e.groupId);
+
+  // If no enrollments exist yet (legacy data), use enrolledGroups
+  const groupIds = activeGroupIds.length > 0 ? activeGroupIds : (student.enrolledGroups || []);
+
+  if (groupIds.length > 0) {
     const groups = await dbGetAll<Group>('groups');
     const courses = await dbGetAll<Course>('courses');
     
-    for (const groupId of student.enrolledGroups) {
+    for (const groupId of groupIds) {
       const group = groups.find(g => g.id === groupId);
-      if (group) {
+      if (group && !group.deleted) {
         const course = courses.find(c => c.id === group.courseId);
         if (course) {
           totalOwed += course.price;
@@ -638,7 +960,55 @@ export async function runIntegrityFix(): Promise<IntegrityReport> {
     if (!activeTeacherIds.has(g.teacherId)) report.orphanGroupTeachers.push(g.name);
   }
 
-  // 3) إعادة حساب أرصدة الطلاب المتأثرين
+  // 3) Cross-check enrollments table: remove orphan enrollments referencing deleted students/groups
+  const enrollments = await dbGetAll<Enrollment>('enrollments');
+  for (const enrollment of enrollments) {
+    if (!activeStudentIds.has(enrollment.studentId) || !activeGroupIds.has(enrollment.groupId)) {
+      await dbSoftDelete('enrollments', enrollment.id);
+      report.staleEnrollments++;
+      continue;
+    }
+    // Ensure denormalized arrays are in sync with enrollment records
+    if (enrollment.status === 'active') {
+      const group = groups.find(g => g.id === enrollment.groupId);
+      const student = students.find(s => s.id === enrollment.studentId);
+      if (group && !group.studentIds.includes(enrollment.studentId)) {
+        group.studentIds.push(enrollment.studentId);
+        await dbPut('groups', { ...group, updatedAt: new Date().toISOString() });
+        report.staleGroupMembers++;
+      }
+      if (student && !student.enrolledGroups.includes(enrollment.groupId)) {
+        student.enrolledGroups.push(enrollment.groupId);
+        await dbPut('students', { ...student, updatedAt: new Date().toISOString() });
+      }
+    }
+  }
+
+  // 4) Sync enrollments from denormalized arrays (legacy data without enrollment records)
+  for (const group of groups) {
+    for (const studentId of group.studentIds) {
+      const existingEnrollment = enrollments.find(
+        e => e.studentId === studentId && e.groupId === group.id && !e.deleted && e.status === 'active'
+      );
+      if (!existingEnrollment) {
+        const student = students.find(s => s.id === studentId);
+        if (student && !student.deleted) {
+          await dbAdd('enrollments', {
+            id: generateId(),
+            studentId,
+            groupId: group.id,
+            enrolledAt: group.createdAt || new Date().toISOString(),
+            status: 'active' as const,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+          report.staleEnrollments++;
+        }
+      }
+    }
+  }
+
+  // 5) إعادة حساب أرصدة الطلاب المتأثرين
   for (const sid of affectedStudentIds) {
     await recalculateStudentTotalPaid(sid);
     report.recalculatedStudents++;
@@ -665,7 +1035,7 @@ export async function getGroupAttendanceForDate(
 
 export async function exportAllData(): Promise<object> {
   const db = await getDB();
-  const [students, teachers, courses, groups, payments, attendance, expenses, exams, grades] =
+  const [students, teachers, courses, groups, payments, attendance, expenses, exams, grades, enrollments, inventory, inventoryTransactions] =
     await Promise.all([
       db.getAll('students'),
       db.getAll('teachers'),
@@ -676,11 +1046,14 @@ export async function exportAllData(): Promise<object> {
       db.getAll('expenses'),
       db.getAll('exams'),
       db.getAll('grades'),
+      db.getAll('enrollments'),
+      db.getAll('inventory'),
+      db.getAll('inventory_transactions'),
     ]);
   const settings = await db.get('settings', 'main');
 
   return {
-    version: 3,
+    version: 5,
     exportedAt: new Date().toISOString(),
     students,
     teachers,
@@ -692,18 +1065,24 @@ export async function exportAllData(): Promise<object> {
     expenses,
     exams,
     grades,
+    enrollments,
+    inventory,
+    inventoryTransactions,
   };
 }
 
 export async function importAllData(data: Record<string, unknown>): Promise<void> {
   const stores: StoreName[] = [
     'students', 'teachers', 'courses', 'groups',
-    'payments', 'attendance', 'expenses', 'exams', 'grades'
+    'payments', 'attendance', 'expenses', 'exams', 'grades',
+    'enrollments', 'inventory', 'inventory_transactions'
   ];
 
   for (const store of stores) {
     await dbClearStore(store);
-    const items = data[store];
+    // Handle both 'enrollments' and 'inventoryTransactions' naming
+    const storeKey = store === 'inventory_transactions' ? 'inventoryTransactions' : store;
+    const items = data[storeKey] || data[store];
     if (items && Array.isArray(items) && items.length > 0) {
       await dbBulkAdd(store, items);
     }
