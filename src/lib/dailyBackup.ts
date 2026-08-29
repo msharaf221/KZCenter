@@ -8,6 +8,7 @@ import { exportAllData, importAllData } from './db';
 import { getSupabaseClient, getSupabaseConfigured } from './supabase';
 import { notify } from './notifications';
 import { addAuditEntry } from './security';
+import { markBackupDone } from './autoBackup';
 
 // ==================== TYPES ====================
 
@@ -288,6 +289,11 @@ export async function executeBackup(
       } else {
         notify.error(`فشل النسخ الاحتياطي: ${lastError}`);
       }
+    }
+
+    // Keep the dashboard reminder in sync with successful daily/manual backups.
+    if (allSuccess) {
+      markBackupDone();
     }
 
     return { success: allSuccess, error: allSuccess ? undefined : lastError };
