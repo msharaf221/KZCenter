@@ -7,7 +7,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, generateId, Teacher, TeacherStatus, Group } from '../lib/db';
-import { formatCurrency, validatePhone, validateEmail } from '../lib/utils';
+import { formatCurrency, validatePhone, validateEmail, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
@@ -119,7 +119,7 @@ export default function TeachersPage() {
             </div>
             <button onClick={openAdd}
               className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
               <Plus size={16} /> إضافة مدرس
             </button>
           </div>
@@ -224,7 +224,7 @@ export default function TeachersPage() {
         </div>
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editingTeacher ? 'تحديث' : 'إضافة'}
           </button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>

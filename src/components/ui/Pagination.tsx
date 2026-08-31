@@ -1,5 +1,6 @@
 import { ChevronRight, ChevronLeft } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
+import { getContrastColor } from '../../lib/utils';
 
 interface PaginationProps {
   currentPage: number;
@@ -60,7 +61,7 @@ export default function Pagination({ currentPage, totalPages, onPageChange, tota
                 ? 'text-white'
                 : 'hover:bg-gray-100 text-gray-700'
             }`}
-            style={page === currentPage ? { backgroundColor: primaryColor } : {}}
+            style={page === currentPage ? { backgroundColor: primaryColor, color: getContrastColor(primaryColor) } : {}}
           >
             {page}
           </button>

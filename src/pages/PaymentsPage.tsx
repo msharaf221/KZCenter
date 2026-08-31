@@ -6,7 +6,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, dbGetById, recalculateStudentTotalPaid, generateId, Payment, PaymentStatus, PaymentType, Student, Course, Settings } from '../lib/db';
-import { formatDate, formatCurrency, toCSV, downloadCSV, getWhatsAppLink } from '../lib/utils';
+import { formatDate, formatCurrency, toCSV, downloadCSV, getWhatsAppLink, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyLatePayment, notifyPaymentReceived } from '../lib/notifications';
@@ -271,7 +271,7 @@ export default function PaymentsPage() {
               </button>
               <button onClick={() => setShowModal(true)}
                 className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-                style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+                style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
                 <Plus size={16} /> إضافة دفعة
               </button>
             </div>
@@ -418,7 +418,7 @@ export default function PaymentsPage() {
         </div>
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>إضافة</button>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>إضافة</button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
         </div>
       </Modal>

@@ -4,7 +4,7 @@ import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { dbGetAll, dbAdd, dbPut, dbSoftDelete, generateId, InventoryItem, Course } from '../lib/db';
-import { formatCurrency, formatDate } from '../lib/utils';
+import { formatCurrency, formatDate, getContrastColor } from '../lib/utils';
 import { notify } from '../lib/notifications';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -138,7 +138,7 @@ export default function InventoryPage() {
               className="w-full pl-4 pr-10 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
-          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-semibold hover:bg-opacity-90 w-full sm:w-auto" style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-semibold hover:bg-opacity-90 w-full sm:w-auto" style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             <Plus size={20} /> إضافة للمخزن
           </button>
         </div>
@@ -241,7 +241,7 @@ export default function InventoryPage() {
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl focus:outline-none" />
             </div>
           </div>
-          <button onClick={handleSave} className="w-full py-2.5 text-white rounded-xl font-semibold" style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+          <button onClick={handleSave} className="w-full py-2.5 text-white rounded-xl font-semibold" style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             حفظ
           </button>
         </div>

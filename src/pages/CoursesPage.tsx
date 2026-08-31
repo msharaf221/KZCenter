@@ -4,7 +4,7 @@ import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, recalculateStudentTotalPaid, Course, CourseLevel, Group, Student } from '../lib/db';
-import { formatCurrency, COLORS } from '../lib/utils';
+import { formatCurrency, COLORS, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
@@ -130,7 +130,7 @@ export default function CoursesPage() {
           </div>
           <button onClick={openAdd}
             className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             <Plus size={16} /> إضافة كورس
           </button>
         </div>
@@ -265,7 +265,7 @@ export default function CoursesPage() {
         </div>
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editing ? 'تحديث' : 'إضافة'}
           </button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>

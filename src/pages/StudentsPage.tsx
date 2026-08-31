@@ -7,7 +7,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
-import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone } from '../lib/utils';
+import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyNewStudent } from '../lib/notifications';
@@ -429,7 +429,7 @@ export default function StudentsPage() {
                 <button
                   onClick={openAdd}
                   className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium transition-colors"
-                  style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}
+                  style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}
                 >
                   <Plus size={16} />
                   إضافة طالب
@@ -629,7 +629,7 @@ export default function StudentsPage() {
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave}
             className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm transition-colors"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editingStudent ? 'تحديث' : 'إضافة'}
           </button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm hover:bg-gray-200 transition-colors">

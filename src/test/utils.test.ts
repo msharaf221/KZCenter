@@ -15,6 +15,7 @@ import {
   validatePhone,
   validateEmail,
   getWhatsAppLink,
+  getContrastColor,
 } from '../lib/utils';
 
 describe('cn (className utility)', () => {
@@ -119,6 +120,31 @@ describe('validateEmail', () => {
     expect(validateEmail('')).toBe(false);
     expect(validateEmail('invalid')).toBe(false);
     expect(validateEmail('@domain.com')).toBe(false);
+  });
+});
+
+describe('getContrastColor', () => {
+  it('returns dark text for light backgrounds', () => {
+    expect(getContrastColor('#ffffff')).toBe('#1e293b');
+    expect(getContrastColor('#ffd166')).toBe('#1e293b');
+    expect(getContrastColor('#fef08a')).toBe('#1e293b');
+  });
+
+  it('returns white text for dark backgrounds', () => {
+    expect(getContrastColor('#000000')).toBe('#ffffff');
+    expect(getContrastColor('#6366f1')).toBe('#ffffff');
+    expect(getContrastColor('#1e293b')).toBe('#ffffff');
+  });
+
+  it('handles shorthand hex and missing #', () => {
+    expect(getContrastColor('#fff')).toBe('#1e293b');
+    expect(getContrastColor('#abc')).toBe('#1e293b');
+    expect(getContrastColor('000000')).toBe('#ffffff');
+  });
+
+  it('returns white fallback for invalid input', () => {
+    expect(getContrastColor('')).toBe('#ffffff');
+    expect(getContrastColor('not-a-color')).toBe('#ffffff');
   });
 });
 

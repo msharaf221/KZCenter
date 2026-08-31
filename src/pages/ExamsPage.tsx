@@ -4,7 +4,7 @@ import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, dbGetByIndex, getGroupStudents, generateId, Exam, Grade, Group, Course, Student } from '../lib/db';
-import { formatDate } from '../lib/utils';
+import { formatDate, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
@@ -125,7 +125,7 @@ export default function ExamsPage() {
         <div className="flex justify-end">
           <button onClick={() => { setEditing(null); setForm({ name: '', groupId: groups[0]?.id || '', date: dayjs().format('YYYY-MM-DD'), maxGrade: 100 }); setShowModal(true); }}
             className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             <Plus size={16} /> إضافة اختبار
           </button>
         </div>
@@ -199,7 +199,7 @@ export default function ExamsPage() {
         </div>
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editing ? 'تحديث' : 'إضافة'}
           </button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
@@ -227,7 +227,7 @@ export default function ExamsPage() {
           </div>
           <div className="flex gap-3 mt-5">
             <button onClick={handleSaveGrades} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>حفظ الدرجات</button>
+              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>حفظ الدرجات</button>
             <button onClick={() => setShowGradesModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
           </div>
         </Modal>

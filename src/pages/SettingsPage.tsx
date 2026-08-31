@@ -3,7 +3,7 @@ import { Save, Download, Upload, Bell, Cloud, RefreshCw, Wrench, Eye, EyeOff, Ch
 import Layout from '../components/layout/Layout';
 import BackupManager from '../components/BackupManager';
 import { runIntegrityFix, IntegrityReport } from '../lib/db';
-import { COLORS, validateEmail, validatePhone } from '../lib/utils';
+import { COLORS, validateEmail, validatePhone, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
@@ -233,7 +233,7 @@ export default function SettingsPage() {
           </div>
           <button onClick={handleSaveGeneral}
             className="mt-5 flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-sm font-medium transition-colors"
-            style={{ backgroundColor: primaryColor }}>
+            style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
             <Save size={16} /> حفظ الإعدادات العامة
           </button>
         </div>
@@ -249,7 +249,7 @@ export default function SettingsPage() {
                   <button key={color} onClick={() => setForm({...form, primaryColor: color})}
                     className={`w-9 h-9 rounded-full border-4 transition-transform hover:scale-110
                       ${form.primaryColor === color ? 'border-gray-400 scale-110' : 'border-transparent'}`}
-                    style={{ backgroundColor: color }} />
+                    style={{ backgroundColor: color, color: getContrastColor(color) }} />
                 ))}
                 <div className="flex items-center gap-2">
                   <input type="color" value={form.primaryColor} onChange={e => setForm({...form, primaryColor: e.target.value})}
@@ -269,7 +269,7 @@ export default function SettingsPage() {
                   <button key={opt.value} onClick={() => setForm({...form, fontSize: opt.value as 'sm' | 'md' | 'lg'})}
                     className={`flex-1 py-2.5 rounded-xl text-sm font-medium border-2 transition-colors
                       ${form.fontSize === opt.value ? 'border-current text-white' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-                    style={form.fontSize === opt.value ? { borderColor: primaryColor, backgroundColor: primaryColor } : {}}>
+                    style={form.fontSize === opt.value ? { borderColor: primaryColor, backgroundColor: primaryColor, color: getContrastColor(primaryColor) } : {}}>
                     {opt.label}
                   </button>
                 ))}
@@ -278,7 +278,7 @@ export default function SettingsPage() {
           </div>
           <button onClick={handleSaveGeneral}
             className="mt-5 flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: primaryColor }}>
+            style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
             <Save size={16} /> تطبيق المظهر
           </button>
         </div>
@@ -316,14 +316,17 @@ export default function SettingsPage() {
                   onClick={() => setForm({...form, [item.key]: !form[item.key as keyof typeof form]})}
                   className={`relative w-12 h-6 rounded-full transition-colors ${form[item.key as keyof typeof form] ? 'bg-indigo-600' : 'bg-gray-300'}`}
                   style={form[item.key as keyof typeof form] ? { backgroundColor: primaryColor } : {}}>
-                  <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-transform ${form[item.key as keyof typeof form] ? 'translate-x-1' : 'translate-x-7'}`} />
+                  <span
+                    className={`absolute top-1 w-4 h-4 rounded-full shadow transition-transform ${form[item.key as keyof typeof form] ? 'translate-x-1' : 'translate-x-7'}`}
+                    style={{ backgroundColor: form[item.key as keyof typeof form] ? getContrastColor(primaryColor) : '#ffffff' }}
+                  />
                 </button>
               </div>
             ))}
           </div>
           <button onClick={handleSaveGeneral}
             className="mt-5 flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: primaryColor }}>
+            style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
             <Save size={16} /> حفظ الإشعارات
           </button>
         </div>
@@ -439,7 +442,7 @@ export default function SettingsPage() {
                   onClick={handleSaveSupabaseConfig}
                   disabled={!supabaseUrl || !supabaseKey}
                   className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                  style={{ backgroundColor: primaryColor }}
+                  style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}
                 >
                   <Save size={16} /> حفظ الإعدادات
                 </button>
@@ -511,7 +514,7 @@ export default function SettingsPage() {
           </div>
           <button onClick={handleChangePassword}
             className="mt-5 flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: primaryColor }}>
+            style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
             <Save size={16} /> تغيير كلمة المرور
           </button>
         </div>
@@ -526,7 +529,7 @@ export default function SettingsPage() {
           </p>
           <button onClick={handleIntegrityCheck} disabled={checking}
             className={`flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium ${checking ? 'opacity-60' : ''}`}
-            style={{ backgroundColor: primaryColor }}>
+            style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
             <RefreshCw size={16} className={checking ? 'animate-spin' : ''} />
             {checking ? 'جاري الفحص والإصلاح...' : 'فحص وإصلاح الآن'}
           </button>

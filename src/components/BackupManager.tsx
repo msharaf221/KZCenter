@@ -25,6 +25,7 @@ import {
 } from '../lib/dailyBackup';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
+import { getContrastColor } from '../lib/utils';
 
 export default function BackupManager() {
   const { settings } = useApp();
@@ -352,7 +353,7 @@ export default function BackupManager() {
         <button
           onClick={handleSaveConfig}
           className="flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-sm font-medium transition-colors"
-          style={{ backgroundColor: primaryColor }}
+          style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}
         >
           <SettingsIcon size={16} /> حفظ الإعدادات
         </button>

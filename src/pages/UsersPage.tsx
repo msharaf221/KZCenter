@@ -6,7 +6,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { User, UserRole } from '../lib/db';
-import { formatDate } from '../lib/utils';
+import { formatDate, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
 
@@ -67,7 +67,7 @@ export default function UsersPage() {
         <div className="flex justify-end">
           <button onClick={() => setShowModal(true)}
             className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             <Plus size={16} /> إضافة مستخدم
           </button>
         </div>
@@ -90,7 +90,7 @@ export default function UsersPage() {
                   <td className="p-4">
                     <div className="flex items-center gap-2">
                       <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold"
-                        style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+                        style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
                         {u.username[0].toUpperCase()}
                       </div>
                       <div>
@@ -156,7 +156,7 @@ export default function UsersPage() {
         <div className="flex gap-3 mt-5">
           <button onClick={handleAddUser} disabled={loading}
             className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm disabled:opacity-60"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {loading ? 'جاري الإضافة...' : 'إضافة'}
           </button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
@@ -181,7 +181,7 @@ export default function UsersPage() {
         <div className="flex gap-3 mt-5">
           <button onClick={handleResetPassword} disabled={loading}
             className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm disabled:opacity-60"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {loading ? 'جاري الحفظ...' : 'حفظ'}
           </button>
           <button onClick={() => setShowResetModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>

@@ -4,7 +4,7 @@ import { Bell, Moon, Sun, Search, Menu, Trash2, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useApp } from '../../contexts/AppContext';
 import { getAppNotifications, markAppNotificationsAsRead, clearAppNotifications, AppNotification } from '../../lib/notifications';
-import { formatDateTime } from '../../lib/utils';
+import { formatDateTime, getContrastColor } from '../../lib/utils';
 
 interface HeaderProps {
   title: string;
@@ -107,7 +107,7 @@ export default function Header({ title }: HeaderProps) {
               {unreadCount > 0 && (
                 <span
                   className="absolute top-1 right-1 w-2 h-2 rounded-full"
-                  style={{ backgroundColor: settings?.primaryColor || '#ef4444' }}
+                  style={{ backgroundColor: '#ef4444' }}
                 />
               )}
             </button>
@@ -158,7 +158,7 @@ export default function Header({ title }: HeaderProps) {
           {/* User avatar */}
           <div
             className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-sm cursor-pointer"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}
           >
             {user?.username?.[0]?.toUpperCase() || 'A'}
           </div>
