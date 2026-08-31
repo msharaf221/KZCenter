@@ -2,13 +2,16 @@ import { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Clock, AlertCircle, LogOut, Save, MessageCircle } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import { dbGetAll, dbAdd, dbPut, getGroupAttendanceForDate, getGroupStudents, generateId, Group, Student, Course, Attendance, AttendanceStatus } from '../lib/db';
-import { formatDate, getWhatsAppLink } from '../lib/utils';
+import { formatDate, getWhatsAppLink, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyAttendanceSaved, notifyAbsence } from '../lib/notifications';
+import { addAuditEntry } from '../lib/security';
 import dayjs from 'dayjs';
 
 export default function AttendancePage() {
   const { settings } = useApp();
+  const { user } = useAuth();
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedGroup, setSelectedGroup] = useState('');
@@ -92,6 +95,11 @@ export default function AttendancePage() {
         }
       }
       notifyAttendanceSaved(group?.name || '', groupStudents.length);
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'update', entity: 'attendance', entityId: selectedGroup,
+        details: `تسجيل حضور: ${group?.name || ''} - ${formatDate(selectedDate)} (${groupStudents.length} طالب)`,
+      });
       loadAttendance();
     } catch { notify.error('حدث خطأ أثناء الحفظ'); }
     finally { setSaving(false); }
@@ -230,7 +238,7 @@ export default function AttendancePage() {
             <div className="p-4 border-t border-gray-100">
               <button onClick={handleSave} disabled={saving}
                 className="w-full flex items-center justify-center gap-2 py-3 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-60"
-                style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+                style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
                 <Save size={18} />
                 {saving ? 'جاري الحفظ...' : 'حفظ الحضور'}
               </button>

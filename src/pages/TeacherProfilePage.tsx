@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Users2, ArrowRight, GraduationCap } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import { dbGetById, dbGetAll, getGroupStudents, Teacher, Group, Student, Course } from '../lib/db';
+import { formatCurrency } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 
 export default function TeacherProfilePage() {
@@ -115,7 +116,7 @@ export default function TeacherProfilePage() {
                       <tr key={s.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/students/${s.id}`)}>
                         <td className="py-3 font-medium text-indigo-600 hover:underline">{s.name}</td>
                         <td className="py-3 text-center">
-                          {remaining > 0 ? <span className="text-red-600 font-bold">{remaining} {settings?.currency}</span> : <span className="text-green-600 font-bold">مسدد</span>}
+                          {remaining > 0 ? <span className="text-red-600 font-bold">{formatCurrency(remaining, settings?.currency)}</span> : <span className="text-green-600 font-bold">مسدد</span>}
                         </td>
                       </tr>
                     );

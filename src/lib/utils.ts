@@ -102,8 +102,27 @@ export function formatCurrency(amount: number, currency = 'EGP'): string {
   return `${amount.toLocaleString('ar-EG')} ${currency}`;
 }
 
-export function formatPercent(value: number): string {
-  return `${value}%`;
+/**
+ * إرجاع لون نص قابل للقراءة (أبيض أو غامق) بناءً على سطوع لون الخلفية.
+ * يحل مشكلة اختفاء النص الأبيض عند اختيار لون أساسي فاتح في الإعدادات.
+ */
+export function getContrastColor(hexColor: string): string {
+  let hex = (hexColor || '').replace('#', '').trim();
+  // Normalize shorthand (#rgb) to #rrggbb
+  if (hex.length === 3) {
+    hex = hex.split('').map(c => c + c).join('');
+  }
+  if (hex.length !== 6) return '#ffffff';
+
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+
+  if ([r, g, b].some(v => Number.isNaN(v))) return '#ffffff';
+
+  // Relative luminance (perceived brightness)
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? '#1e293b' : '#ffffff';
 }
 
 // ==================== VALIDATION ====================
@@ -167,8 +186,8 @@ export function getStatusLabel(status: string): string {
     present: 'حاضر',
     absent: 'غائب',
     excused: 'مستأذن',
-    male: 'ذكر',
-    female: 'أنثى',
+    male: 'ولد',
+    female: 'بنت',
     subscription: 'اشتراك',
     books: 'كتب',
     other: 'أخرى',

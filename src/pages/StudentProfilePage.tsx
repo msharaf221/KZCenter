@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall, ClipboardCheck, GraduationCap } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import { dbGetById, dbGetAll, dbGetByIndex, Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher } from '../lib/db';
-import { formatDate, getWhatsAppLink } from '../lib/utils';
+import { formatDate, formatCurrency, getWhatsAppLink } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 
 export default function StudentProfilePage() {
@@ -107,7 +107,7 @@ export default function StudentProfilePage() {
               </a>
               <div className="bg-gray-50 px-4 py-2 rounded-xl border border-gray-100">{groups.length} مجموعة</div>
               <div className={`px-4 py-2 rounded-xl font-bold border ${remaining > 0 ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-600 border-green-100'}`}>
-                {remaining > 0 ? `المتبقي: ${remaining} ${settings?.currency}` : 'خالص الديون'}
+                {remaining > 0 ? `المتبقي: ${formatCurrency(remaining, settings?.currency)}` : 'خالص الديون'}
               </div>
             </div>
           </div>
@@ -142,7 +142,7 @@ export default function StudentProfilePage() {
                   {payments.length === 0 ? <tr><td colSpan={3} className="py-4 text-center text-gray-400">لا يوجد مدفوعات</td></tr> :
                    payments.map(p => (
                     <tr key={p.id} className="hover:bg-gray-50">
-                      <td className="py-3 font-bold text-green-600">{p.amount} {settings?.currency}</td>
+                      <td className="py-3 font-bold text-green-600">{formatCurrency(p.amount, settings?.currency)}</td>
                       <td className="py-3 text-gray-600">{p.type === 'subscription' ? 'اشتراك' : p.type === 'books' ? 'كتب' : 'أخرى'}</td>
                       <td className="py-3 text-center">{formatDate(p.date)}</td>
                     </tr>

@@ -115,6 +115,61 @@ export function recordLoginAttempt(identifier: string, success: boolean): void {
   saveRateLimitMap(map);
 }
 
+// ==================== GLOBAL RATE LIMITING ====================
+// يعمل كطبقة حماية إضافية ضد هجمات "تخمين أسماء المستخدمين" (username spraying)
+// حيث يتتبع إجمالي المحاولات الفاشلة بغض النظر عن اسم المستخدم.
+
+const GLOBAL_FAILED_KEY = 'educenter_global_failed';
+const GLOBAL_MAX_ATTEMPTS = 15;
+const GLOBAL_WINDOW = 10 * 60 * 1000; // 10 minutes
+
+interface GlobalFailedState {
+  count: number;
+  windowStart: number;
+}
+
+function loadGlobalFailed(): GlobalFailedState {
+  try {
+    const raw = localStorage.getItem(GLOBAL_FAILED_KEY);
+    if (!raw) return { count: 0, windowStart: 0 };
+    return JSON.parse(raw) as GlobalFailedState;
+  } catch {
+    return { count: 0, windowStart: 0 };
+  }
+}
+
+function saveGlobalFailed(state: GlobalFailedState): void {
+  try {
+    localStorage.setItem(GLOBAL_FAILED_KEY, JSON.stringify(state));
+  } catch {
+    // ignore
+  }
+}
+
+export function recordGlobalFailedAttempt(): void {
+  const now = Date.now();
+  const state = loadGlobalFailed();
+  if (!state.windowStart || now - state.windowStart > GLOBAL_WINDOW) {
+    state.windowStart = now;
+    state.count = 1;
+  } else {
+    state.count++;
+  }
+  saveGlobalFailed(state);
+}
+
+export function isGloballyBlocked(): boolean {
+  const now = Date.now();
+  const state = loadGlobalFailed();
+  if (!state.windowStart) return false;
+  if (now - state.windowStart > GLOBAL_WINDOW) return false;
+  return state.count >= GLOBAL_MAX_ATTEMPTS;
+}
+
+export function resetGlobalFailedAttempts(): void {
+  localStorage.removeItem(GLOBAL_FAILED_KEY);
+}
+
 // ==================== SESSION MANAGEMENT ====================
 
 const SESSION_KEY = 'educenter_session';

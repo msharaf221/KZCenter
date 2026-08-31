@@ -7,7 +7,7 @@ import {
 import Layout from '../components/layout/Layout';
 import { dbGetAll, dbGetByIndex } from '../lib/db';
 import type { Payment, Expense, Student, Course } from '../lib/db';
-import { formatCurrency, formatDate, toCSV, downloadCSV } from '../lib/utils';
+import { formatCurrency, formatDate, toCSV, downloadCSV, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
 import dayjs from 'dayjs';
@@ -237,7 +237,7 @@ export default function DailyReportsPage() {
               <button
                 onClick={exportDailyReport}
                 className="flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors"
-                style={{ backgroundColor: primaryColor }}
+                style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}
               >
                 <Download size={16} /> تصدير CSV
               </button>

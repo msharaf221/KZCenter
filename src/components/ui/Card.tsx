@@ -1,4 +1,5 @@
 import { ReactNode } from 'react';
+import { getContrastColor } from '../../lib/utils';
 
 interface CardProps {
   children: ReactNode;
@@ -42,7 +43,7 @@ export function StatCard({ title, value, icon, color, subtitle, trend }: StatCar
         </div>
         <div
           className="w-12 h-12 rounded-2xl flex items-center justify-center text-white"
-          style={{ backgroundColor: color }}
+          style={{ backgroundColor: color, color: getContrastColor(color) }}
         >
           {icon}
         </div>

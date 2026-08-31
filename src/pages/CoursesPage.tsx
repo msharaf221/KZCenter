@@ -4,15 +4,18 @@ import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, recalculateStudentTotalPaid, Course, CourseLevel, Group, Student } from '../lib/db';
-import { formatCurrency, COLORS } from '../lib/utils';
+import { formatCurrency, COLORS, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
+import { addAuditEntry } from '../lib/security';
 
 const EMOJIS = ['📚', '🔢', '🔬', '💻', '🎨', '🎵', '🌍', '⚽', '🧪', '📖', '✏️', '🎯'];
 const CATEGORIES = ['علوم', 'رياضيات', 'لغات', 'حاسوب', 'فنون', 'رياضة', 'أخرى'];
 
 export default function CoursesPage() {
   const { settings } = useApp();
+  const { user } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -75,10 +78,16 @@ export default function CoursesPage() {
   async function handleSave() {
     if (!form.name.trim()) { notify.error('اسم الكورس مطلوب'); return; }
     try {
+      const courseId = editing?.id || generateId();
       if (editing) {
         const priceChanged = editing.price !== form.price;
         await dbPut('courses', { ...editing, ...form, updatedAt: new Date().toISOString() });
         notify.success('تم تحديث الكورس');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'update', entity: 'course', entityId: courseId,
+          details: `تعديل الكورس: ${form.name}`,
+        });
 
         // عند تغيير السعر: إعادة حساب مستحقات كل الطلاب المسجلين في مجموعات هذا الكورس
         if (priceChanged) {
@@ -96,8 +105,13 @@ export default function CoursesPage() {
           }
         }
       } else {
-        await dbAdd('courses', { id: generateId(), ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        await dbAdd('courses', { id: courseId, ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         notify.success('تم إضافة الكورس');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'create', entity: 'course', entityId: courseId,
+          details: `إضافة كورس: ${form.name}`,
+        });
       }
       setShowModal(false);
       load();
@@ -116,7 +130,7 @@ export default function CoursesPage() {
           </div>
           <button onClick={openAdd}
             className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             <Plus size={16} /> إضافة كورس
           </button>
         </div>
@@ -251,7 +265,7 @@ export default function CoursesPage() {
         </div>
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editing ? 'تحديث' : 'إضافة'}
           </button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
@@ -268,6 +282,11 @@ export default function CoursesPage() {
               notify.error(`لا يمكن حذف الكورس - مرتبط بـ ${linkedGroups.length} مجموعة. احذف المجموعات أولاً`);
             } else {
               await dbSoftDelete('courses', deleteId);
+              addAuditEntry({
+                userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+                action: 'delete', entity: 'course', entityId: deleteId,
+                details: `حذف كورس: ${courses.find(c => c.id === deleteId)?.name || deleteId}`,
+              });
               notify.success('تم الحذف');
               load();
             }

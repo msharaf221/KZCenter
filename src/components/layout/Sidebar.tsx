@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useApp } from '../../contexts/AppContext';
+import { getContrastColor } from '../../lib/utils';
 
 interface NavItem {
   path: string;
@@ -57,7 +58,7 @@ export default function Sidebar() {
           <div className="flex items-center gap-2">
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}
+              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}
             >
               E
             </div>
@@ -69,7 +70,7 @@ export default function Sidebar() {
         {!sidebarOpen && (
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm mx-auto"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}
           >
             E
           </div>
@@ -100,6 +101,7 @@ export default function Sidebar() {
             `}
             style={({ isActive }) => isActive ? {
               backgroundColor: settings?.primaryColor || '#6366f1',
+              color: getContrastColor(settings?.primaryColor || '#6366f1'),
             } : {}}
           >
             <span className="flex-shrink-0">{item.icon}</span>
@@ -122,7 +124,7 @@ export default function Sidebar() {
           <div className="flex items-center gap-3">
             <div
               className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}
+              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}
             >
               {user?.username?.[0]?.toUpperCase() || 'A'}
             </div>

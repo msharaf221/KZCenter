@@ -6,9 +6,11 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Pagination from '../components/ui/Pagination';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, Expense, ExpenseCategory } from '../lib/db';
-import { formatDate, formatCurrency } from '../lib/utils';
+import { formatDate, formatCurrency, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
+import { addAuditEntry } from '../lib/security';
 import dayjs from 'dayjs';
 
 const PAGE_SIZE = 20;
@@ -20,6 +22,7 @@ const PIE_COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#06b
 
 export default function ExpensesPage() {
   const { settings } = useApp();
+  const { user } = useAuth();
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [allExpenses, setAllExpenses] = useState<Expense[]>([]);
   const [total, setTotal] = useState(0);
@@ -70,12 +73,23 @@ export default function ExpensesPage() {
     if (!form.description.trim()) { notify.error('الوصف مطلوب'); return; }
     if (form.amount <= 0) { notify.error('المبلغ يجب أن يكون أكبر من 0'); return; }
     try {
+      const expenseId = editing?.id || generateId();
       if (editing) {
         await dbPut('expenses', { ...editing, ...form, updatedAt: new Date().toISOString() });
         notify.success('تم تحديث المصروف');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'update', entity: 'expense', entityId: expenseId,
+          details: `تعديل مصروف: ${form.description} (${form.amount})`,
+        });
       } else {
-        await dbAdd('expenses', { id: generateId(), ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        await dbAdd('expenses', { id: expenseId, ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         notify.success('تم إضافة المصروف');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'create', entity: 'expense', entityId: expenseId,
+          details: `إضافة مصروف: ${form.description} (${form.amount})`,
+        });
       }
       setShowModal(false);
       load();
@@ -149,7 +163,7 @@ export default function ExpensesPage() {
                 </select>
                 <button onClick={openAdd}
                   className="flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-medium mr-auto"
-                  style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+                  style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
                   <Plus size={16} /> إضافة
                 </button>
               </div>
@@ -229,7 +243,7 @@ export default function ExpensesPage() {
         </div>
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editing ? 'تحديث' : 'إضافة'}
           </button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
@@ -237,7 +251,20 @@ export default function ExpensesPage() {
       </Modal>
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف المصروف" message="هل أنت متأكد؟"
-        onConfirm={async () => { if (deleteId) { await dbSoftDelete('expenses', deleteId); notify.success('تم الحذف'); load(); } setDeleteId(null); }}
+        onConfirm={async () => {
+          if (deleteId) {
+            const exp = expenses.find(e => e.id === deleteId);
+            await dbSoftDelete('expenses', deleteId);
+            addAuditEntry({
+              userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+              action: 'delete', entity: 'expense', entityId: deleteId,
+              details: `حذف مصروف: ${exp?.description || deleteId}`,
+            });
+            notify.success('تم الحذف');
+            load();
+          }
+          setDeleteId(null);
+        }}
         onCancel={() => setDeleteId(null)} danger />
     </Layout>
   );

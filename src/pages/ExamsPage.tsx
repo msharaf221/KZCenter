@@ -4,13 +4,16 @@ import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, dbGetByIndex, getGroupStudents, generateId, Exam, Grade, Group, Course, Student } from '../lib/db';
-import { formatDate } from '../lib/utils';
+import { formatDate, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
+import { addAuditEntry } from '../lib/security';
 import dayjs from 'dayjs';
 
 export default function ExamsPage() {
   const { settings } = useApp();
+  const { user } = useAuth();
   const [exams, setExams] = useState<Exam[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -58,6 +61,11 @@ export default function ExamsPage() {
       for (const student of groupStudents) {
         const grade = grades[student.id];
         if (grade === undefined || grade === null) continue;
+        // Validate grade range against the exam's max grade
+        if (grade < 0 || grade > selectedExam.maxGrade) {
+          notify.error(`درجة ${student.name} غير صحيحة (0 - ${selectedExam.maxGrade})`);
+          return;
+        }
         const existing = existingGrades.find(g => g.studentId === student.id);
         if (existing) {
           await dbPut('grades', { ...existing, grade, updatedAt: new Date().toISOString() });
@@ -76,13 +84,25 @@ export default function ExamsPage() {
   async function handleSave() {
     if (!form.name.trim()) { notify.error('اسم الاختبار مطلوب'); return; }
     if (!form.groupId) { notify.error('اختر مجموعة'); return; }
+    if (form.maxGrade <= 0) { notify.error('الدرجة العظمى يجب أن تكون أكبر من صفر'); return; }
     try {
+      const examId = editing?.id || generateId();
       if (editing) {
         await dbPut('exams', { ...editing, ...form, updatedAt: new Date().toISOString() });
         notify.success('تم تحديث الاختبار');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'update', entity: 'exam', entityId: examId,
+          details: `تعديل الاختبار: ${form.name}`,
+        });
       } else {
-        await dbAdd('exams', { id: generateId(), ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        await dbAdd('exams', { id: examId, ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         notify.success('تم إضافة الاختبار');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'create', entity: 'exam', entityId: examId,
+          details: `إضافة اختبار: ${form.name}`,
+        });
       }
       setShowModal(false);
       load();
@@ -105,7 +125,7 @@ export default function ExamsPage() {
         <div className="flex justify-end">
           <button onClick={() => { setEditing(null); setForm({ name: '', groupId: groups[0]?.id || '', date: dayjs().format('YYYY-MM-DD'), maxGrade: 100 }); setShowModal(true); }}
             className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             <Plus size={16} /> إضافة اختبار
           </button>
         </div>
@@ -179,7 +199,7 @@ export default function ExamsPage() {
         </div>
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editing ? 'تحديث' : 'إضافة'}
           </button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
@@ -207,14 +227,27 @@ export default function ExamsPage() {
           </div>
           <div className="flex gap-3 mt-5">
             <button onClick={handleSaveGrades} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>حفظ الدرجات</button>
+              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>حفظ الدرجات</button>
             <button onClick={() => setShowGradesModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
           </div>
         </Modal>
       )}
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف الاختبار" message="هل أنت متأكد؟"
-        onConfirm={async () => { if (deleteId) { await dbSoftDelete('exams', deleteId); notify.success('تم الحذف'); load(); } setDeleteId(null); }}
+        onConfirm={async () => {
+          if (deleteId) {
+            const exam = exams.find(x => x.id === deleteId);
+            await dbSoftDelete('exams', deleteId);
+            addAuditEntry({
+              userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+              action: 'delete', entity: 'exam', entityId: deleteId,
+              details: `حذف اختبار: ${exam?.name || deleteId}`,
+            });
+            notify.success('تم الحذف');
+            load();
+          }
+          setDeleteId(null);
+        }}
         onCancel={() => setDeleteId(null)} danger />
     </Layout>
   );

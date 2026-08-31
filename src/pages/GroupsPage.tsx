@@ -6,9 +6,11 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, enrollStudent, unenrollStudent, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
-// Utils imported as needed
+import { getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
+import { addAuditEntry } from '../lib/security';
 
 const DAYS = [
   { key: 'sunday', label: 'الأحد' },
@@ -23,6 +25,7 @@ const DAYS = [
 export default function GroupsPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
+  const { user } = useAuth();
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -102,12 +105,23 @@ export default function GroupsPage() {
     if (!form.courseId) { notify.error('اختر كورساً'); return; }
     if (!form.teacherId) { notify.error('اختر مدرساً'); return; }
     try {
+      const groupId = editing?.id || generateId();
       if (editing) {
         await dbPut('groups', { ...editing, ...form, updatedAt: new Date().toISOString() });
         notify.success('تم تحديث المجموعة');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'update', entity: 'group', entityId: groupId,
+          details: `تعديل المجموعة: ${form.name}`,
+        });
       } else {
-        await dbAdd('groups', { id: generateId(), ...form, studentIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        await dbAdd('groups', { id: groupId, ...form, studentIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         notify.success('تم إضافة المجموعة');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'create', entity: 'group', entityId: groupId,
+          details: `إضافة مجموعة: ${form.name}`,
+        });
       }
       setShowModal(false);
       load();
@@ -168,7 +182,7 @@ export default function GroupsPage() {
           </div>
           <button onClick={openAdd}
             className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             <Plus size={16} /> إضافة مجموعة
           </button>
         </div>
@@ -290,7 +304,7 @@ export default function GroupsPage() {
                       onClick={() => toggleDay(idx, d.key)}
                       className={`px-2 py-1 rounded-lg text-xs font-medium transition-colors
                         ${sched.days.includes(d.key) ? 'text-white' : 'bg-gray-100 text-gray-600'}`}
-                      style={sched.days.includes(d.key) ? { backgroundColor: settings?.primaryColor || '#6366f1' } : {}}>
+                      style={sched.days.includes(d.key) ? { backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') } : {}}>
                       {d.label}
                     </button>
                   ))}
@@ -321,7 +335,7 @@ export default function GroupsPage() {
         </div>
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editing ? 'تحديث' : 'إضافة'}
           </button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
@@ -344,7 +358,7 @@ export default function GroupsPage() {
               className="w-full sm:w-1/3 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
             <button onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
               className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
               إضافة
             </button>
           </div>
@@ -389,6 +403,11 @@ export default function GroupsPage() {
               }
             }
             await dbSoftDelete('groups', deleteId);
+            addAuditEntry({
+              userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+              action: 'delete', entity: 'group', entityId: deleteId,
+              details: `حذف مجموعة: ${group?.name || deleteId}`,
+            });
             notify.success('تم الحذف');
             load();
           }

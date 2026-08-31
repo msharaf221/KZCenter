@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
@@ -7,7 +7,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
-import { toCSV, downloadCSV, parseCSV, formatDate } from '../lib/utils';
+import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyNewStudent } from '../lib/notifications';
@@ -24,12 +24,13 @@ const INITIAL_FORM: Omit<Student, 'id' | 'createdAt' | 'updatedAt'> = {
 export default function StudentsPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const canEdit = isAdmin(); // المدرس: عرض فقط
   const [students, setStudents] = useState<Student[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [searchParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search, 300);
   const [statusFilter, setStatusFilter] = useState('');
@@ -82,6 +83,12 @@ export default function StudentsPage() {
     setPage(1);
   }, [search, statusFilter, groupFilter, courseFilter]);
 
+  // Sync search query from the header's global search box (e.g. /students?q=...)
+  useEffect(() => {
+    const q = searchParams.get('q');
+    if (q !== null) setSearch(q);
+  }, [searchParams]);
+
   function openAdd() {
     setEditingStudent(null);
     setForm(INITIAL_FORM);
@@ -106,6 +113,8 @@ export default function StudentsPage() {
     if (!canEdit) { notify.error('ليس لديك صلاحية التعديل'); return; }
     if (!form.name.trim()) { notify.error('الاسم مطلوب'); return; }
     if (!form.parentPhone.trim()) { notify.error('هاتف ولي الأمر مطلوب'); return; }
+    if (!validatePhone(form.parentPhone)) { notify.error('هاتف ولي الأمر غير صحيح'); return; }
+    if (form.phone && !validatePhone(form.phone)) { notify.error('هاتف الطالب غير صحيح'); return; }
     if (form.age < 3 || form.age > 18) { notify.error('العمر يجب أن يكون بين 3 و 18 سنة'); return; }
 
     // فحص المجموعات الجديدة (السعة والحالة) قبل أي حفظ - نفس منطق صفحة المجموعات
@@ -140,8 +149,8 @@ export default function StudentsPage() {
         await dbPut('students', { ...editingStudent, ...newStudentData });
         notify.success('تم تحديث بيانات الطالب');
         addAuditEntry({
-          userId: 'current',
-          username: 'current',
+          userId: user?.id || 'unknown',
+          username: user?.username || 'غير معروف',
           action: 'update',
           entity: 'student',
           entityId: studentId,
@@ -151,8 +160,8 @@ export default function StudentsPage() {
         await dbAdd('students', { ...newStudentData, createdAt: new Date().toISOString() });
         notifyNewStudent(form.name);
         addAuditEntry({
-          userId: 'current',
-          username: 'current',
+          userId: user?.id || 'unknown',
+          username: user?.username || 'غير معروف',
           action: 'create',
           entity: 'student',
           entityId: studentId,
@@ -252,7 +261,7 @@ export default function StudentsPage() {
     const csv = toCSV(students as unknown as Record<string, unknown>[], [
       { key: 'name', label: 'الاسم' },
       { key: 'age', label: 'العمر' },
-      { key: 'gender', label: 'الجنس' },
+      { key: 'gender', label: 'النوع' },
       { key: 'phone', label: 'هاتف الطالب' },
       { key: 'parentPhone', label: 'هاتف ولي الأمر' },
       { key: 'status', label: 'الحالة' },
@@ -266,7 +275,7 @@ export default function StudentsPage() {
   }
 
   function downloadTemplate() {
-    const csv = '"الاسم","العمر","الجنس (male/female)","هاتف الطالب","هاتف ولي الأمر","الحالة (active/suspended/ended)","ملاحظات"\n"أحمد محمد","12","male","01012345678","01098765432","active",""\n';
+    const csv = '"الاسم","العمر","النوع (male/female)","هاتف الطالب","هاتف ولي الأمر","الحالة (active/suspended/ended)","ملاحظات"\n"أحمد محمد","12","male","01012345678","01098765432","active",""\n';
     downloadCSV(csv, 'students_template.csv');
     notify.success('تم تحميل نموذج الاستيراد');
   }
@@ -420,7 +429,7 @@ export default function StudentsPage() {
                 <button
                   onClick={openAdd}
                   className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium transition-colors"
-                  style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}
+                  style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}
                 >
                   <Plus size={16} />
                   إضافة طالب
@@ -488,13 +497,13 @@ export default function StudentsPage() {
                     <td className="p-4 text-sm text-gray-700">{student.parentPhone}</td>
                     <td className="p-4"><Badge status={student.status} /></td>
                     <td className="p-4 text-sm font-medium text-gray-900">
-                      {student.totalPaid.toLocaleString()} {settings?.currency}
+                      {formatCurrency(student.totalPaid, settings?.currency)}
                     </td>
                     <td className="p-4 text-sm">
                       {(() => {
                         const remaining = (student.totalOwed || 0) - student.totalPaid;
-                        if (remaining > 0) return <span className="font-bold text-red-600">{remaining.toLocaleString()} {settings?.currency}</span>;
-                        if (remaining < 0) return <span className="font-bold text-blue-600">فائض {Math.abs(remaining).toLocaleString()}</span>;
+                        if (remaining > 0) return <span className="font-bold text-red-600">{formatCurrency(remaining, settings?.currency)}</span>;
+                        if (remaining < 0) return <span className="font-bold text-blue-600">فائض {formatCurrency(Math.abs(remaining), settings?.currency)}</span>;
                         return <span className="font-bold text-green-600">مسدد</span>;
                       })()}
                     </td>
@@ -546,11 +555,11 @@ export default function StudentsPage() {
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">الجنس *</label>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">النوع *</label>
             <select value={form.gender} onChange={e => setForm({...form, gender: e.target.value as Gender})}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
-              <option value="male">ذكر</option>
-              <option value="female">أنثى</option>
+              <option value="male">ولد</option>
+              <option value="female">بنت</option>
             </select>
           </div>
           <div>
@@ -620,7 +629,7 @@ export default function StudentsPage() {
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave}
             className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm transition-colors"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editingStudent ? 'تحديث' : 'إضافة'}
           </button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm hover:bg-gray-200 transition-colors">

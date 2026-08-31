@@ -226,23 +226,3 @@ export function notifyPaymentReceived(studentName: string, amount: number) {
 export function notifyAttendanceSaved(groupName: string, count: number) {
   notify.success(`تم حفظ حضور ${count} طالب في ${groupName}`);
 }
-
-export function notifyExportSuccess(type: string) {
-  notify.success(`تم تصدير ${type} بنجاح`);
-}
-
-export function notifyImportSuccess(count: number, type: string) {
-  notify.success(`تم استيراد ${count} ${type} بنجاح`);
-}
-
-export function notifyError(message: string) {
-  notify.error(message);
-}
-
-export function notifyDataSaved() {
-  notify.success('تم حفظ البيانات بنجاح');
-}
-
-export function notifyDataDeleted() {
-  notify.success('تم الحذف بنجاح');
-}

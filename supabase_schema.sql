@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'teacher' CHECK (role IN ('admin', 'teacher')),
   teacher_id UUID REFERENCES teachers(id) ON DELETE SET NULL,
+  must_change_password BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE
@@ -132,7 +133,6 @@ CREATE TABLE IF NOT EXISTS settings (
   currency TEXT DEFAULT 'EGP',
   primary_color TEXT DEFAULT '#6366f1',
   font_size TEXT DEFAULT 'md' CHECK (font_size IN ('sm', 'md', 'lg')),
-  language TEXT DEFAULT 'ar' CHECK (language IN ('ar', 'en')),
   dark_mode BOOLEAN DEFAULT FALSE,
   notify_new_student BOOLEAN DEFAULT TRUE,
   notify_absence BOOLEAN DEFAULT TRUE,
@@ -265,7 +265,7 @@ CREATE INDEX IF NOT EXISTS idx_enrollments_student_group ON enrollments(student_
 
 -- Insert default admin user (password: admin123)
 INSERT INTO users (username, password_hash, role)
-VALUES ('admin', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'admin')
+VALUES ('admin', '$2b$10$sMcbvzFF0tmnv9jvuMamh.3TjvNKC1PuuGRgursHOpbjSf20T5WFC', 'admin')
 ON CONFLICT (username) DO NOTHING;
 
 -- Insert default settings
@@ -274,6 +274,11 @@ INSERT INTO settings (id) VALUES ('main') ON CONFLICT (id) DO NOTHING;
 -- =====================================================
 -- Row Level Security (RLS)
 -- =====================================================
+-- ملاحظة مهمة:
+-- التطبيق يعمل محلياً (IndexedDB) ويستخدم Supabase كطبقة نسخ احتياطي / مزامنة اختيارية
+-- عبر anon key فقط (بدون Supabase Auth). لذلك تسمح السياسات أدناه بالوصول لدوري
+-- `anon` و `authenticated`. إذا كنت ستعرض المشروع علناً على الإنترنت، يجب استبدال
+-- هذه السياسات بنظام مصادقة حقيقي (Supabase Auth + RLS لكل مستخدم على حدة).
 
 ALTER TABLE students ENABLE ROW LEVEL SECURITY;
 ALTER TABLE teachers ENABLE ROW LEVEL SECURITY;
@@ -291,76 +296,66 @@ ALTER TABLE inventory_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE enrollments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE backups ENABLE ROW LEVEL SECURITY;
 
--- Admin full access
-CREATE POLICY "admin_all_students" ON students FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+-- Full access for anon/authenticated roles (local-first backup/sync model)
+CREATE POLICY "app_all_students" ON students FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_teachers" ON teachers FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_teachers" ON teachers FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_courses" ON courses FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_courses" ON courses FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_groups" ON groups FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_groups" ON groups FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_payments" ON payments FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_payments" ON payments FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_expenses" ON expenses FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_attendance" ON attendance FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_users" ON users FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_users" ON users FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_settings" ON settings FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_settings" ON settings FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_exams" ON exams FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_expenses" ON expenses FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_grades" ON grades FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_exams" ON exams FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_inventory" ON inventory FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_grades" ON grades FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_inventory_transactions" ON inventory_transactions FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_inventory" ON inventory FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_backups" ON backups FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_inventory_transactions" ON inventory_transactions FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
-CREATE POLICY "admin_all_enrollments" ON enrollments FOR ALL
-  USING (auth.jwt() ->> 'role' = 'admin') WITH CHECK (auth.jwt() ->> 'role' = 'admin');
+CREATE POLICY "app_all_enrollments" ON enrollments FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
--- Teacher read access
-CREATE POLICY "teacher_read_students" ON students FOR SELECT
-  USING (auth.jwt() ->> 'role' IN ('admin', 'teacher'));
-
-CREATE POLICY "teacher_read_groups" ON groups FOR SELECT
-  USING (auth.jwt() ->> 'role' IN ('admin', 'teacher'));
-
-CREATE POLICY "teacher_read_courses" ON courses FOR SELECT
-  USING (auth.jwt() ->> 'role' IN ('admin', 'teacher'));
-
-CREATE POLICY "teacher_manage_attendance" ON attendance FOR ALL
-  USING (auth.jwt() ->> 'role' IN ('admin', 'teacher'))
-  WITH CHECK (auth.jwt() ->> 'role' IN ('admin', 'teacher'));
-
-CREATE POLICY "teacher_read_exams" ON exams FOR SELECT
-  USING (auth.jwt() ->> 'role' IN ('admin', 'teacher'));
-
-CREATE POLICY "teacher_manage_grades" ON grades FOR ALL
-  USING (auth.jwt() ->> 'role' IN ('admin', 'teacher'))
-  WITH CHECK (auth.jwt() ->> 'role' IN ('admin', 'teacher'));
-
-CREATE POLICY "teacher_read_enrollments" ON enrollments FOR SELECT
-  USING (auth.jwt() ->> 'role' IN ('admin', 'teacher'));
-
--- Settings readable by all
-CREATE POLICY "authenticated_read_settings" ON settings FOR SELECT
-  USING (auth.role() = 'authenticated');
+CREATE POLICY "app_all_backups" ON backups FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
 -- =====================================================
 -- Functions & Triggers

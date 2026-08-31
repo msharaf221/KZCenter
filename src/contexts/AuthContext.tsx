@@ -1,10 +1,13 @@
 import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import bcrypt from 'bcryptjs';
-import { User, UserRole, seedDefaultData, getUserByUsername, dbGetAll, dbPut, dbAdd, dbRemove, generateId } from '../lib/db';
+import { User, UserRole, seedDefaultData, getUserByUsername, dbGetAll, dbPut, dbAdd, dbSoftDelete, generateId } from '../lib/db';
 import { notify } from '../lib/notifications';
 import {
   checkRateLimit,
   recordLoginAttempt,
+  recordGlobalFailedAttempt,
+  isGloballyBlocked,
+  resetGlobalFailedAttempts,
   isSessionExpired,
   refreshSession,
   clearSession,
@@ -19,7 +22,6 @@ interface AuthContextType {
   logout: () => void;
   isAdmin: () => boolean;
   isTeacher: () => boolean;
-  hasPermission: (permission: string) => boolean;
   allUsers: User[];
   addUser: (username: string, password: string, role: UserRole) => Promise<void>;
   deleteUser: (id: string) => Promise<void>;
@@ -35,6 +37,10 @@ const SESSION_KEY = 'educenter_session';
 const SESSION_TIMESTAMP_KEY = 'educenter_session_ts';
 const MUST_CHANGE_PASSWORD_KEY = 'educenter_must_change_pw';
 
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // Safe session shape: never persist the password hash
 type SessionUser = Omit<User, 'passwordHash'>;
 
@@ -42,14 +48,6 @@ function toSessionUser(u: User): SessionUser {
   const { passwordHash: _ph, ...safe } = u;
   return safe;
 }
-
-const ADMIN_PERMISSIONS = [
-  'students', 'teachers', 'courses', 'groups',
-  'payments', 'attendance', 'reports', 'settings',
-  'users', 'expenses', 'exams', 'inventory', 'daily_reports', 'audit',
-];
-
-const TEACHER_PERMISSIONS = ['attendance', 'students_view', 'reports_view', 'exams'];
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
@@ -123,6 +121,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function login(username: string, password: string): Promise<{ success: boolean; mustChangePassword?: boolean }> {
     try {
+      // Global lockout (across all usernames) to deter username-spraying
+      if (isGloballyBlocked()) {
+        notify.error('تم حظر محاولات تسجيل الدخول مؤقتاً. حاول مرة أخرى لاحقاً');
+        return { success: false };
+      }
+
       // Rate limiting
       const rateCheck = checkRateLimit(username);
       setRateLimitInfo(rateCheck);
@@ -139,7 +143,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!foundUser) {
         recordLoginAttempt(username, false);
+        recordGlobalFailedAttempt();
         setRateLimitInfo(checkRateLimit(username));
+        await delay(800); // throttle to slow brute-force attempts
         return { success: false };
       }
 
@@ -147,16 +153,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!match) {
         recordLoginAttempt(username, false);
+        recordGlobalFailedAttempt();
         setRateLimitInfo(checkRateLimit(username));
         const remaining = checkRateLimit(username).remainingAttempts;
         if (remaining > 0 && remaining <= 2) {
           notify.warning(`متبقي ${remaining} محاولات قبل الحظر`);
         }
+        await delay(800); // throttle to slow brute-force attempts
         return { success: false };
       }
 
       // Success
       recordLoginAttempt(username, true);
+      resetGlobalFailedAttempts();
       setRateLimitInfo(null);
 
       const sessionUser = toSessionUser(foundUser);
@@ -164,9 +173,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sessionStorage.setItem(SESSION_KEY, JSON.stringify(sessionUser));
       sessionStorage.setItem(SESSION_TIMESTAMP_KEY, Date.now().toString());
 
-      // Check if must change password (default password)
+      // Check if must change password (forced flag OR still using default password)
       const isDefaultPassword = bcrypt.compareSync('admin123', foundUser.passwordHash);
-      if (isDefaultPassword) {
+      if (foundUser.mustChangePassword || isDefaultPassword) {
         sessionStorage.setItem(MUST_CHANGE_PASSWORD_KEY, 'true');
       }
 
@@ -179,7 +188,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         details: `تسجيل دخول ناجح - الدور: ${foundUser.role}`,
       });
 
-      return { success: true, mustChangePassword: isDefaultPassword };
+      return { success: true, mustChangePassword: foundUser.mustChangePassword || isDefaultPassword };
     } catch (e) {
       console.error('login error:', e);
       return { success: false };
@@ -209,13 +218,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return user?.role === 'teacher';
   }
 
-  function hasPermission(permission: string): boolean {
-    if (!user) return false;
-    if (user.role === 'admin') return ADMIN_PERMISSIONS.includes(permission);
-    if (user.role === 'teacher') return TEACHER_PERMISSIONS.includes(permission);
-    return false;
-  }
-
   async function changePassword(oldPassword: string, newPassword: string): Promise<boolean> {
     if (!user) return false;
 
@@ -235,7 +237,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const passwordHash = bcrypt.hashSync(newPassword, 10);
-    await dbPut('users', { ...foundUser, passwordHash, updatedAt: new Date().toISOString() });
+    await dbPut('users', { ...foundUser, passwordHash, mustChangePassword: false, updatedAt: new Date().toISOString() });
 
     sessionStorage.removeItem(MUST_CHANGE_PASSWORD_KEY);
 
@@ -293,7 +295,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (target?.role === 'admin' && admins.length <= 1) {
       throw new Error('لا يمكن حذف آخر مسؤول في النظام');
     }
-    await dbRemove('users', id);
+    await dbSoftDelete('users', id);
     await refreshUsers();
 
     addAuditEntry({
@@ -318,7 +320,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const passwordHash = bcrypt.hashSync(newPassword, 10);
-    await dbPut('users', { ...userToUpdate, passwordHash, updatedAt: new Date().toISOString() });
+    await dbPut('users', { ...userToUpdate, passwordHash, mustChangePassword: true, updatedAt: new Date().toISOString() });
     await refreshUsers();
 
     addAuditEntry({
@@ -336,7 +338,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, loading, login, logout,
-      isAdmin, isTeacher, hasPermission,
+      isAdmin, isTeacher,
       allUsers, addUser, deleteUser, resetPassword, refreshUsers,
       changePassword, rateLimitInfo,
     }}>

@@ -6,15 +6,18 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, dbGetById, recalculateStudentTotalPaid, generateId, Payment, PaymentStatus, PaymentType, Student, Course, Settings } from '../lib/db';
-import { formatDate, formatCurrency, toCSV, downloadCSV, getWhatsAppLink } from '../lib/utils';
+import { formatDate, formatCurrency, toCSV, downloadCSV, getWhatsAppLink, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyLatePayment, notifyPaymentReceived } from '../lib/notifications';
+import { addAuditEntry } from '../lib/security';
 import dayjs from 'dayjs';
 
 const PAGE_SIZE = 20;
 
 export default function PaymentsPage() {
   const { settings } = useApp();
+  const { user } = useAuth();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -67,6 +70,11 @@ export default function PaymentsPage() {
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       };
       await dbAdd('payments', payment);
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'create', entity: 'payment', entityId: payment.id,
+        details: `تسجيل دفعة بقيمة ${payment.amount} للطالب: ${getStudentName(payment.studentId)}`,
+      });
       if (form.status === 'paid') {
         await recalculateStudentTotalPaid(form.studentId);
         const student = students.find(s => s.id === form.studentId);
@@ -94,6 +102,11 @@ export default function PaymentsPage() {
     const payment = payments.find(p => p.id === id);
     try {
       await dbSoftDelete('payments', id);
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'delete', entity: 'payment', entityId: id,
+        details: `حذف دفعة بقيمة ${payment?.amount ?? 0} للطالب: ${payment ? getStudentName(payment.studentId) : 'غير معروف'}`,
+      });
       if (payment?.status === 'paid') {
         await recalculateStudentTotalPaid(payment.studentId);
       }
@@ -117,6 +130,15 @@ export default function PaymentsPage() {
     } catch { notify.error('حدث خطأ'); }
   }
 
+  function escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   async function printReceipt(payment: Payment) {
     const win = window.open('', '_blank');
     if (!win) return;
@@ -127,7 +149,10 @@ export default function PaymentsPage() {
     const student = students.find(s => s.id === payment.studentId);
     const course = courses.find(c => c.id === payment.courseId);
     const date = formatDate(payment.date);
-    
+    const centerName = escapeHtml(freshSettings?.centerName || settings?.centerName || 'EduCenter Pro');
+    const studentName = escapeHtml(student?.name || '---');
+    const courseName = course ? escapeHtml(course.name) : '';
+
     const receiptHtml = `
       <html dir="rtl">
         <head>
@@ -144,12 +169,12 @@ export default function PaymentsPage() {
           </style>
         </head>
         <body onload="window.print(); window.close();">
-          <h1>${freshSettings?.centerName || settings?.centerName || 'EduCenter Pro'}</h1>
+          <h1>${centerName}</h1>
           <div class="center">إيصال استلام نقدية</div>
           <div class="row"><span>رقم الإيصال:</span> <strong>#${payment.id.substring(0,6).toUpperCase()}</strong></div>
           <div class="row"><span>التاريخ:</span> <strong>${date}</strong></div>
-          <div class="row"><span>اسم الطالب:</span> <strong>${student?.name || '---'}</strong></div>
-          <div class="row"><span>البيان:</span> <strong>${payment.type === 'subscription' ? 'اشتراك' : payment.type === 'books' ? 'كتب' : 'أخرى'} ${course ? '- ' + course.name : ''}</strong></div>
+          <div class="row"><span>اسم الطالب:</span> <strong>${studentName}</strong></div>
+          <div class="row"><span>البيان:</span> <strong>${payment.type === 'subscription' ? 'اشتراك' : payment.type === 'books' ? 'كتب' : 'أخرى'} ${course ? '- ' + courseName : ''}</strong></div>
           <div class="total">المبلغ المدفوع: <br/> ${formatCurrency(payment.amount, freshSettings?.currency || settings?.currency)}</div>
           <div class="footer">شكراً لثقتكم بنا.<br/>مع تمنياتنا بالتوفيق والنجاح.</div>
         </body>
@@ -246,7 +271,7 @@ export default function PaymentsPage() {
               </button>
               <button onClick={() => setShowModal(true)}
                 className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-                style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+                style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
                 <Plus size={16} /> إضافة دفعة
               </button>
             </div>
@@ -393,7 +418,7 @@ export default function PaymentsPage() {
         </div>
         <div className="flex gap-3 mt-5">
           <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>إضافة</button>
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>إضافة</button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
         </div>
       </Modal>

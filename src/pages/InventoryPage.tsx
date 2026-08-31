@@ -4,9 +4,11 @@ import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import { dbGetAll, dbAdd, dbPut, dbSoftDelete, generateId, InventoryItem, Course } from '../lib/db';
-import { formatCurrency, formatDate } from '../lib/utils';
+import { formatCurrency, formatDate, getContrastColor } from '../lib/utils';
 import { notify } from '../lib/notifications';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
+import { addAuditEntry } from '../lib/security';
 
 const INITIAL_FORM = {
   name: '',
@@ -27,6 +29,7 @@ export default function InventoryPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const { settings } = useApp();
+  const { user } = useAuth();
 
   const load = useCallback(async () => {
     try {
@@ -50,21 +53,32 @@ export default function InventoryPage() {
     if (form.costPrice < 0 || form.sellPrice < 0) { notify.error('الأسعار غير صحيحة'); return; }
 
     try {
+      const itemId = editId || generateId();
       if (editId) {
         const existing = items.find(i => i.id === editId);
         if (existing) {
           await dbPut('inventory', { ...existing, ...form, updatedAt: new Date().toISOString() });
           notify.success('تم التعديل بنجاح');
+          addAuditEntry({
+            userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+            action: 'update', entity: 'inventory', entityId: itemId,
+            details: `تعديل عنصر في المخزن: ${form.name}`,
+          });
         }
       } else {
         const item: InventoryItem = {
-          id: generateId(),
+          id: itemId,
           ...form,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
         await dbAdd('inventory', item);
         notify.success('تمت الإضافة بنجاح');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'create', entity: 'inventory', entityId: itemId,
+          details: `إضافة عنصر للمخزن: ${form.name}`,
+        });
       }
       setShowModal(false);
       load();
@@ -75,7 +89,13 @@ export default function InventoryPage() {
 
   async function handleDelete(id: string) {
     try {
+      const item = items.find(i => i.id === id);
       await dbSoftDelete('inventory', id);
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'delete', entity: 'inventory', entityId: id,
+        details: `حذف عنصر من المخزن: ${item?.name || id}`,
+      });
       notify.success('تم الحذف بنجاح');
       load();
     } catch {
@@ -102,7 +122,7 @@ export default function InventoryPage() {
     setShowModal(true);
   }
 
-  const filteredItems = items.filter(i => i.name.includes(search));
+  const filteredItems = items.filter(i => i.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   return (
     <Layout title="الملازم والمخزن">
@@ -118,7 +138,7 @@ export default function InventoryPage() {
               className="w-full pl-4 pr-10 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
-          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-semibold hover:bg-opacity-90 w-full sm:w-auto" style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-semibold hover:bg-opacity-90 w-full sm:w-auto" style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             <Plus size={20} /> إضافة للمخزن
           </button>
         </div>
@@ -221,7 +241,7 @@ export default function InventoryPage() {
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl focus:outline-none" />
             </div>
           </div>
-          <button onClick={handleSave} className="w-full py-2.5 text-white rounded-xl font-semibold" style={{ backgroundColor: settings?.primaryColor || '#6366f1' }}>
+          <button onClick={handleSave} className="w-full py-2.5 text-white rounded-xl font-semibold" style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             حفظ
           </button>
         </div>
