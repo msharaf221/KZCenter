@@ -2,7 +2,6 @@ import { createContext, useContext, useState, useEffect, ReactNode, useCallback 
 import { Settings, dbGetById, dbPut } from '../lib/db';
 import { requestNotificationPermission, updateNotificationSettings } from '../lib/notifications';
 import { getSupabaseConfigured } from '../lib/supabase';
-import { getStorageMode, setStorageMode, StorageMode } from '../lib/storage';
 
 interface AppContextType {
   settings: Settings | null;
@@ -13,8 +12,6 @@ interface AppContextType {
   toggleDarkMode: () => void;
   refreshSettings: () => Promise<void>;
   isCloudEnabled: boolean;
-  storageMode: StorageMode;
-  changeStorageMode: (mode: StorageMode) => void;
   notificationsEnabled: boolean;
   enableNotifications: () => Promise<void>;
 }
@@ -27,7 +24,6 @@ const DEFAULT_SETTINGS: Settings = {
   currency: 'EGP',
   primaryColor: '#6366f1',
   fontSize: 'md',
-  language: 'ar',
   darkMode: false,
   notifyNewStudent: true,
   notifyAbsence: true,
@@ -38,7 +34,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
-  const [storageMode, setStorageModeState] = useState<StorageMode>(getStorageMode());
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
 
   useEffect(() => {
@@ -120,11 +115,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     updateSettings({ darkMode: newMode });
   }
 
-  function changeStorageMode(mode: StorageMode) {
-    setStorageMode(mode);
-    setStorageModeState(mode);
-  }
-
   return (
     <AppContext.Provider value={{
       settings,
@@ -135,8 +125,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toggleDarkMode,
       refreshSettings,
       isCloudEnabled: getSupabaseConfigured(),
-      storageMode,
-      changeStorageMode,
       notificationsEnabled,
       enableNotifications,
     }}>

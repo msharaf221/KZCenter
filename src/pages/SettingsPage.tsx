@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Save, Download, Upload, Bell, Cloud, Database, RefreshCw, Wrench, Eye, EyeOff, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Save, Download, Upload, Bell, Cloud, RefreshCw, Wrench, Eye, EyeOff, CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import BackupManager from '../components/BackupManager';
 import { runIntegrityFix, IntegrityReport } from '../lib/db';
-import { COLORS } from '../lib/utils';
+import { COLORS, validateEmail, validatePhone } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
@@ -21,13 +21,13 @@ export default function SettingsPage() {
   const {
     settings, updateSettings,
     notificationsEnabled, enableNotifications,
-    storageMode, changeStorageMode, isCloudEnabled
+    isCloudEnabled
   } = useApp();
   const { user, resetPassword } = useAuth();
   const [form, setForm] = useState({
     centerName: '', address: '', phone: '', email: '',
     academicYear: '', currency: 'EGP', primaryColor: '#6366f1',
-    fontSize: 'md' as 'sm' | 'md' | 'lg', language: 'ar' as 'ar' | 'en',
+    fontSize: 'md' as 'sm' | 'md' | 'lg',
     notifyNewStudent: true, notifyAbsence: true, notifyLatePayment: true,
   });
   const [passwordForm, setPasswordForm] = useState({ newPass: '', confirm: '' });
@@ -72,7 +72,6 @@ export default function SettingsPage() {
         currency: settings.currency || 'EGP',
         primaryColor: settings.primaryColor || '#6366f1',
         fontSize: settings.fontSize || 'md',
-        language: settings.language || 'ar',
         notifyNewStudent: settings.notifyNewStudent ?? true,
         notifyAbsence: settings.notifyAbsence ?? true,
         notifyLatePayment: settings.notifyLatePayment ?? true,
@@ -88,6 +87,8 @@ export default function SettingsPage() {
   }, []);
 
   async function handleSaveGeneral() {
+    if (form.email && !validateEmail(form.email)) { notify.error('البريد الإلكتروني غير صحيح'); return; }
+    if (form.phone && !validatePhone(form.phone)) { notify.error('رقم الهاتف غير صحيح'); return; }
     try {
       await updateSettings(form);
       notify.success('تم حفظ الإعدادات');
@@ -469,25 +470,12 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {/* Storage Mode */}
-          <div className="mb-4">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">وضع التخزين</label>
-            <div className="flex gap-2">
-              {[
-                { value: 'local', label: 'محلي فقط', icon: <Database size={14} /> },
-                { value: 'cloud', label: 'سحابي فقط', icon: <Cloud size={14} />, disabled: !isCloudEnabled },
-                { value: 'hybrid', label: 'مختلط', icon: <RefreshCw size={14} />, disabled: !isCloudEnabled },
-              ].map(opt => (
-                <button key={opt.value} 
-                  onClick={() => !opt.disabled && changeStorageMode(opt.value as 'local' | 'cloud' | 'hybrid')}
-                  disabled={opt.disabled}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-xs font-medium border-2 transition-colors
-                    ${storageMode === opt.value ? 'border-current text-white' : opt.disabled ? 'border-gray-100 text-gray-300 cursor-not-allowed' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-                  style={storageMode === opt.value ? { borderColor: primaryColor, backgroundColor: primaryColor } : {}}>
-                  {opt.icon} {opt.label}
-                </button>
-              ))}
-            </div>
+          {/* Storage model note */}
+          <div className="mb-4 p-3 bg-gray-50 rounded-xl border border-gray-100 text-sm text-gray-600">
+            <p>
+              <strong className="text-gray-900">النظام يعمل محلياً</strong> — تُحفظ البيانات على هذا الجهاز.
+              عند ربط Supabase يمكنك رفع نسخة احتياطية للسحابة أو تنزيلها يدوياً من الأزرار أدناه.
+            </p>
           </div>
 
           {/* Sync buttons */}

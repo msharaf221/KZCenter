@@ -79,7 +79,7 @@ export default function BackupManager() {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
 
-      if (!confirm('هل أنت م_ENSURE من استعادة هذه النسخة؟ سيتم استبدال جميع البيانات الحالية.')) {
+      if (!confirm('هل أنت متأكد من استعادة هذه النسخة؟ سيتم استبدال جميع البيانات الحالية.')) {
         return;
       }
 

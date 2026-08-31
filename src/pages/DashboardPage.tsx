@@ -10,16 +10,11 @@ import {
 import Layout from '../components/layout/Layout';
 import { StatCard } from '../components/ui/Card';
 import { dbGetAll, recalculateStudentTotalPaid, Student, Teacher, Group, Course, Payment } from '../lib/db';
-import { formatDate, formatCurrency, getStatusLabel } from '../lib/utils';
+import { formatDate, formatCurrency, getStatusLabel, getArabicDay } from '../lib/utils';
 import { requestNotificationPermission } from '../lib/notifications';
 import { useApp } from '../contexts/AppContext';
 import { showBackupReminder } from '../lib/autoBackup';
 import dayjs from 'dayjs';
-
-const DAYS_AR: Record<string, string> = {
-  sunday: 'الأحد', monday: 'الاثنين', tuesday: 'الثلاثاء',
-  wednesday: 'الأربعاء', thursday: 'الخميس', friday: 'الجمعة', saturday: 'السبت',
-};
 
 const TODAY_KEY = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][new Date().getDay()];
 
@@ -116,8 +111,8 @@ export default function DashboardPage() {
       const males = students.filter(s => s.gender === 'male').length;
       const females = students.filter(s => s.gender === 'female').length;
       setGenderData([
-        { name: 'ذكور', value: males },
-        { name: 'إناث', value: females },
+        { name: 'أولاد', value: males },
+        { name: 'بنات', value: females },
       ]);
 
       // Today's groups
@@ -163,7 +158,7 @@ export default function DashboardPage() {
       }
     };
     runMigration();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   if (loading) {
     return (
@@ -227,7 +222,7 @@ export default function DashboardPage() {
             value={todayGroups.length}
             icon={<Clock size={24} />}
             color="#3b82f6"
-            subtitle={DAYS_AR[TODAY_KEY]}
+            subtitle={getArabicDay(TODAY_KEY)}
           />
           <StatCard
             title="معدل النمو (إيرادات)"
@@ -268,7 +263,7 @@ export default function DashboardPage() {
 
           {/* Gender Pie */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-            <h3 className="text-base font-bold text-gray-900 mb-4">توزيع الجنس</h3>
+            <h3 className="text-base font-bold text-gray-900 mb-4">أولاد و بنات</h3>
             <ResponsiveContainer width="100%" height={240}>
               <PieChart>
                 <Pie
@@ -296,7 +291,7 @@ export default function DashboardPage() {
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
             <div className="p-5 border-b border-gray-100">
               <h3 className="text-base font-bold text-gray-900">
-                حصص اليوم - {DAYS_AR[TODAY_KEY]}
+                حصص اليوم - {getArabicDay(TODAY_KEY)}
               </h3>
             </div>
             <div className="p-3">

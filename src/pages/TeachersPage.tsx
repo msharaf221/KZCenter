@@ -7,9 +7,11 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, generateId, Teacher, TeacherStatus, Group } from '../lib/db';
-import { formatCurrency } from '../lib/utils';
+import { formatCurrency, validatePhone, validateEmail } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
+import { addAuditEntry } from '../lib/security';
 
 const PAGE_SIZE = 20;
 
@@ -21,6 +23,7 @@ const INITIAL_FORM: Omit<Teacher, 'id' | 'createdAt' | 'updatedAt'> = {
 export default function TeachersPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
+  const { user } = useAuth();
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -75,13 +78,26 @@ export default function TeachersPage() {
   async function handleSave() {
     if (!form.name.trim()) { notify.error('الاسم مطلوب'); return; }
     if (!form.phone.trim()) { notify.error('الهاتف مطلوب'); return; }
+    if (!validatePhone(form.phone)) { notify.error('رقم الهاتف غير صحيح'); return; }
+    if (form.email && !validateEmail(form.email)) { notify.error('البريد الإلكتروني غير صحيح'); return; }
     try {
+      const teacherId = editingTeacher?.id || generateId();
       if (editingTeacher) {
         await dbPut('teachers', { ...editingTeacher, ...form, updatedAt: new Date().toISOString() });
         notify.success('تم تحديث بيانات المدرس');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'update', entity: 'teacher', entityId: teacherId,
+          details: `تعديل بيانات المدرس: ${form.name}`,
+        });
       } else {
-        await dbAdd('teachers', { id: generateId(), ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        await dbAdd('teachers', { id: teacherId, ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         notify.success('تم إضافة المدرس بنجاح');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'create', entity: 'teacher', entityId: teacherId,
+          details: `إضافة مدرس جديد: ${form.name}`,
+        });
       }
       setShowModal(false);
       loadTeachers();
@@ -225,6 +241,11 @@ export default function TeachersPage() {
               notify.error(`لا يمكن حذف المدرس - مسؤول عن ${linkedGroups.length} مجموعة. انقل المجموعات لمدرس آخر أولاً`);
             } else {
               await dbSoftDelete('teachers', deleteId);
+              addAuditEntry({
+                userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+                action: 'delete', entity: 'teacher', entityId: deleteId,
+                details: `حذف مدرس: ${teachers.find(t => t.id === deleteId)?.name || deleteId}`,
+              });
               notify.success('تم الحذف');
               loadTeachers();
             }

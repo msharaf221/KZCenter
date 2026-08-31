@@ -4,11 +4,14 @@ import Layout from '../components/layout/Layout';
 import { dbGetAll, dbAdd, dbPut, getGroupAttendanceForDate, getGroupStudents, generateId, Group, Student, Course, Attendance, AttendanceStatus } from '../lib/db';
 import { formatDate, getWhatsAppLink } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyAttendanceSaved, notifyAbsence } from '../lib/notifications';
+import { addAuditEntry } from '../lib/security';
 import dayjs from 'dayjs';
 
 export default function AttendancePage() {
   const { settings } = useApp();
+  const { user } = useAuth();
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedGroup, setSelectedGroup] = useState('');
@@ -92,6 +95,11 @@ export default function AttendancePage() {
         }
       }
       notifyAttendanceSaved(group?.name || '', groupStudents.length);
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'update', entity: 'attendance', entityId: selectedGroup,
+        details: `تسجيل حضور: ${group?.name || ''} - ${formatDate(selectedDate)} (${groupStudents.length} طالب)`,
+      });
       loadAttendance();
     } catch { notify.error('حدث خطأ أثناء الحفظ'); }
     finally { setSaving(false); }

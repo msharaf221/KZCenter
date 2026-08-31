@@ -49,8 +49,8 @@ export default function ReportsPage() {
 
   // Gender data
   const genderData = [
-    { name: 'ذكور', value: students.filter(s => s.gender === 'male').length },
-    { name: 'إناث', value: students.filter(s => s.gender === 'female').length },
+    { name: 'أولاد', value: students.filter(s => s.gender === 'male').length },
+    { name: 'بنات', value: students.filter(s => s.gender === 'female').length },
   ];
 
   // Status data
@@ -117,13 +117,13 @@ export default function ReportsPage() {
 
   function exportReport() {
     const data = students.map(s => ({
-      name: s.name, age: s.age, gender: s.gender === 'male' ? 'ذكر' : 'أنثى',
+      name: s.name, age: s.age, gender: s.gender === 'male' ? 'ولد' : 'بنت',
       status: s.status === 'active' ? 'نشط' : s.status === 'suspended' ? 'متوقف' : 'منتهي',
       totalPaid: s.totalPaid, parentPhone: s.parentPhone,
     }));
     const csv = toCSV(data as unknown as Record<string, unknown>[], [
       { key: 'name', label: 'الاسم' }, { key: 'age', label: 'العمر' },
-      { key: 'gender', label: 'الجنس' }, { key: 'status', label: 'الحالة' },
+      { key: 'gender', label: 'النوع' }, { key: 'status', label: 'الحالة' },
       { key: 'totalPaid', label: 'إجمالي المدفوع' }, { key: 'parentPhone', label: 'هاتف ولي الأمر' },
     ]);
     downloadCSV(csv, 'students_report.csv');
@@ -189,7 +189,7 @@ export default function ReportsPage() {
         {/* Row 1: Gender + Status */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-            <h3 className="text-base font-bold text-gray-900 mb-4">توزيع الجنس</h3>
+            <h3 className="text-base font-bold text-gray-900 mb-4">أولاد و بنات</h3>
             <ResponsiveContainer width="100%" height={220}>
               <PieChart>
                 <Pie data={genderData} cx="50%" cy="50%" innerRadius={55} outerRadius={85}

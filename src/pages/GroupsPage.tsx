@@ -8,7 +8,9 @@ import Badge from '../components/ui/Badge';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, enrollStudent, unenrollStudent, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
 // Utils imported as needed
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
+import { addAuditEntry } from '../lib/security';
 
 const DAYS = [
   { key: 'sunday', label: 'الأحد' },
@@ -23,6 +25,7 @@ const DAYS = [
 export default function GroupsPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
+  const { user } = useAuth();
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -102,12 +105,23 @@ export default function GroupsPage() {
     if (!form.courseId) { notify.error('اختر كورساً'); return; }
     if (!form.teacherId) { notify.error('اختر مدرساً'); return; }
     try {
+      const groupId = editing?.id || generateId();
       if (editing) {
         await dbPut('groups', { ...editing, ...form, updatedAt: new Date().toISOString() });
         notify.success('تم تحديث المجموعة');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'update', entity: 'group', entityId: groupId,
+          details: `تعديل المجموعة: ${form.name}`,
+        });
       } else {
-        await dbAdd('groups', { id: generateId(), ...form, studentIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        await dbAdd('groups', { id: groupId, ...form, studentIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         notify.success('تم إضافة المجموعة');
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'create', entity: 'group', entityId: groupId,
+          details: `إضافة مجموعة: ${form.name}`,
+        });
       }
       setShowModal(false);
       load();
@@ -389,6 +403,11 @@ export default function GroupsPage() {
               }
             }
             await dbSoftDelete('groups', deleteId);
+            addAuditEntry({
+              userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+              action: 'delete', entity: 'group', entityId: deleteId,
+              details: `حذف مجموعة: ${group?.name || deleteId}`,
+            });
             notify.success('تم الحذف');
             load();
           }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Bell, Moon, Sun, Search, Menu, Trash2, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useApp } from '../../contexts/AppContext';
@@ -10,10 +11,12 @@ interface HeaderProps {
 }
 
 export default function Header({ title }: HeaderProps) {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { darkMode, toggleDarkMode, setSidebarOpen, sidebarOpen, settings } = useApp();
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [globalSearch, setGlobalSearch] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -62,12 +65,20 @@ export default function Header({ title }: HeaderProps) {
 
         {/* Left side */}
         <div className="flex items-center gap-3">
-          {/* Search - desktop only */}
+          {/* Global search - routes to the students list with the query */}
           <div className="hidden md:flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-2">
             <Search size={16} className="text-gray-400" />
             <input
               type="text"
               placeholder="بحث سريع..."
+              value={globalSearch}
+              onChange={e => setGlobalSearch(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  const q = globalSearch.trim();
+                  navigate(q ? `/students?q=${encodeURIComponent(q)}` : '/students');
+                }
+              }}
               className="bg-transparent text-sm text-gray-700 placeholder-gray-400 outline-none w-48"
             />
           </div>

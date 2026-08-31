@@ -174,10 +174,13 @@ async function backupToCloud(): Promise<{ success: boolean; size: number; error?
 
     // Also sync each table to Supabase
     const tables = ['students', 'teachers', 'courses', 'groups', 'payments', 
-                    'attendance', 'expenses', 'exams', 'grades'];
+                    'attendance', 'expenses', 'exams', 'grades', 'enrollments',
+                    'inventory', 'inventory_transactions', 'users'];
 
     for (const table of tables) {
-      const tableData = (data as Record<string, unknown>)[table];
+      // exportAllData uses camelCase keys (e.g. `inventoryTransactions`)
+      const dataKey = table === 'inventory_transactions' ? 'inventoryTransactions' : table;
+      const tableData = (data as Record<string, unknown>)[dataKey];
       if (Array.isArray(tableData) && tableData.length > 0) {
         // Convert camelCase to snake_case for Supabase
         const transformed = tableData.map(item => {

@@ -102,10 +102,6 @@ export function formatCurrency(amount: number, currency = 'EGP'): string {
   return `${amount.toLocaleString('ar-EG')} ${currency}`;
 }
 
-export function formatPercent(value: number): string {
-  return `${value}%`;
-}
-
 // ==================== VALIDATION ====================
 
 export function validatePhone(phone: string): boolean {
@@ -167,8 +163,8 @@ export function getStatusLabel(status: string): string {
     present: 'حاضر',
     absent: 'غائب',
     excused: 'مستأذن',
-    male: 'ذكر',
-    female: 'أنثى',
+    male: 'ولد',
+    female: 'بنت',
     subscription: 'اشتراك',
     books: 'كتب',
     other: 'أخرى',

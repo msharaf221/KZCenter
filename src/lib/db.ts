@@ -122,6 +122,8 @@ export interface User {
   passwordHash: string;
   role: UserRole;
   teacherId?: string;
+  /** When true, the user must change their password on next login */
+  mustChangePassword?: boolean;
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
@@ -137,7 +139,6 @@ export interface Settings {
   currency: string;
   primaryColor: string;
   fontSize: 'sm' | 'md' | 'lg';
-  language: 'ar' | 'en';
   darkMode: boolean;
   notifyNewStudent: boolean;
   notifyAbsence: boolean;
@@ -371,7 +372,6 @@ export async function seedDefaultData(): Promise<void> {
       currency: 'EGP',
       primaryColor: '#6366f1',
       fontSize: 'md',
-      language: 'ar',
       darkMode: false,
       notifyNewStudent: true,
       notifyAbsence: true,
@@ -417,7 +417,10 @@ export async function dbGetAll<T = any>(storeName: StoreName): Promise<T[]> {
 export async function dbGetById<T = any>(storeName: StoreName, id: string): Promise<T | undefined> {
   try {
     const db = await getDB();
-    return await db.get(storeName, id) as T | undefined;
+    const item = await db.get(storeName, id) as (T & { deleted?: boolean }) | undefined;
+    // Never return soft-deleted records (consistent with dbGetAll / dbGetPaginated)
+    if (item && (item as { deleted?: boolean }).deleted) return undefined;
+    return item as T | undefined;
   } catch (e) {
     console.error(`dbGetById(${storeName}) error:`, e);
     return undefined;
@@ -442,16 +445,6 @@ export async function dbPut<T = any>(storeName: StoreName, item: T): Promise<voi
     await db.put(storeName, item);
   } catch (e) {
     console.error(`dbPut(${storeName}) error:`, e);
-    throw e;
-  }
-}
-
-export async function dbRemove(storeName: StoreName, id: string): Promise<void> {
-  try {
-    const db = await getDB();
-    await db.delete(storeName, id);
-  } catch (e) {
-    console.error(`dbRemove(${storeName}) error:`, e);
     throw e;
   }
 }
@@ -691,74 +684,6 @@ export async function unenrollStudent(
 }
 
 /**
- * نقل طالب من مجموعة لأخرى
- */
-export async function transferStudent(
-  studentId: string,
-  fromGroupId: string,
-  toGroupId: string
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    // Validate target group
-    const toGroup = await dbGetById<Group>('groups', toGroupId);
-    if (!toGroup) return { success: false, error: 'المجموعة الوجهة غير موجودة' };
-    if (toGroup.status === 'ended') return { success: false, error: 'المجموعة الوجهة منتهية' };
-    if (toGroup.studentIds.length >= toGroup.maxStudents) {
-      return { success: false, error: 'المجموعة الوجهة مكتملة' };
-    }
-
-    // Check if already in target group
-    const existingEnrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, toGroupId]);
-    if (existingEnrollments.some(e => e.status === 'active')) {
-      return { success: false, error: 'الطالب مسجل بالفعل في المجموعة الوجهة' };
-    }
-
-    // Save the original enrollment for rollback
-    const sourceEnrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, fromGroupId]);
-    const originalEnrollment = sourceEnrollments.find(e => e.status === 'active' && !e.deleted);
-
-    // Unenroll from source
-    const unenrollResult = await unenrollStudent(studentId, fromGroupId, 'نقل لمجموعة أخرى');
-    if (!unenrollResult.success) return unenrollResult;
-
-    // Enroll in target
-    const enrollResult = await enrollStudent(studentId, toGroupId);
-    if (!enrollResult.success) {
-      // Rollback: restore original enrollment record instead of creating a new one
-      if (originalEnrollment) {
-        const now = new Date().toISOString();
-        await dbPut('enrollments', { ...originalEnrollment, status: 'active' as const, updatedAt: now });
-      }
-      // Also restore denormalized arrays
-      const [student, group] = await Promise.all([
-        dbGetById<Student>('students', studentId),
-        dbGetById<Group>('groups', fromGroupId),
-      ]);
-      if (student && !student.enrolledGroups.includes(fromGroupId)) {
-        await dbPut('students', { ...student, enrolledGroups: [...student.enrolledGroups, fromGroupId], updatedAt: new Date().toISOString() });
-      }
-      if (group && !group.studentIds.includes(studentId)) {
-        await dbPut('groups', { ...group, studentIds: [...group.studentIds, studentId], updatedAt: new Date().toISOString() });
-        await syncGroupStatus(fromGroupId);
-      }
-      return enrollResult;
-    }
-
-    // Update enrollment type to 'transferred'
-    const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, toGroupId]);
-    const newEnrollment = enrollments.find(e => e.status === 'active');
-    if (newEnrollment) {
-      await dbPut('enrollments', { ...newEnrollment, status: 'transferred' as EnrollmentStatus, updatedAt: new Date().toISOString() });
-    }
-
-    return { success: true };
-  } catch (error) {
-    console.error('transferStudent error:', error);
-    return { success: false, error: String(error) };
-  }
-}
-
-/**
  * جلب كل الطلاب المسجلين في مجموعة
  */
 export async function getGroupStudents(groupId: string): Promise<Student[]> {
@@ -777,70 +702,7 @@ export async function getGroupStudents(groupId: string): Promise<Student[]> {
   return students;
 }
 
-/**
- * جلب كل المجموعات المسجل بها طالب
- */
-export async function getStudentGroups(studentId: string): Promise<Group[]> {
-  const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentId', studentId);
-  const activeGroupIds = enrollments
-    .filter(e => e.status === 'active' && !e.deleted)
-    .map(e => e.groupId);
-
-  const groups: Group[] = [];
-  for (const gid of activeGroupIds) {
-    const group = await dbGetById<Group>('groups', gid);
-    if (group && !group.deleted) {
-      groups.push(group);
-    }
-  }
-  return groups;
-}
-
-/**
- * جلب enrollment record لطالب في مجموعة
- */
-export async function getEnrollment(studentId: string, groupId: string): Promise<Enrollment | undefined> {
-  const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, groupId]);
-  return enrollments.find(e => !e.deleted);
-}
-
-/**
- * جلب إحصائيات التسجيل لمجموعة
- */
-export async function getGroupEnrollmentStats(groupId: string): Promise<{
-  total: number;
-  active: number;
-  dropped: number;
-  transferred: number;
-}> {
-  const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-groupId', groupId);
-  return {
-    total: enrollments.length,
-    active: enrollments.filter(e => e.status === 'active').length,
-    dropped: enrollments.filter(e => e.status === 'dropped').length,
-    transferred: enrollments.filter(e => e.status === 'transferred').length,
-  };
-}
-
 // ==================== SPECIALIZED QUERIES ====================
-
-export async function getStudentAttendanceSummary(studentId: string): Promise<{
-  total: number;
-  present: number;
-  absent: number;
-  late: number;
-  excused: number;
-  percentage: number;
-}> {
-  const records = await dbGetByIndex<Attendance>('attendance', 'by-studentId', studentId);
-  const total = records.length;
-  const present = records.filter(r => r.status === 'present').length;
-  const absent = records.filter(r => r.status === 'absent').length;
-  const late = records.filter(r => r.status === 'late').length;
-  const excused = records.filter(r => r.status === 'excused').length;
-  const percentage = total > 0 ? Math.round(((present + late) / total) * 100) : 0;
-  return { total, present, absent, late, excused, percentage };
-}
 
 export async function recalculateStudentTotalPaid(studentId: string): Promise<void> {
   const student = await dbGetById<Student>('students', studentId);
@@ -870,7 +732,8 @@ export async function recalculateStudentTotalPaid(studentId: string): Promise<vo
       if (group && !group.deleted) {
         const course = courses.find(c => c.id === group.courseId);
         if (course) {
-          totalOwed += course.price;
+          // Course price is a monthly rate; total owed covers the full duration
+          totalOwed += course.price * Math.max(1, course.durationMonths);
         }
       }
     }
@@ -1035,7 +898,7 @@ export async function getGroupAttendanceForDate(
 
 export async function exportAllData(): Promise<object> {
   const db = await getDB();
-  const [students, teachers, courses, groups, payments, attendance, expenses, exams, grades, enrollments, inventory, inventoryTransactions] =
+  const [students, teachers, courses, groups, payments, attendance, expenses, exams, grades, enrollments, inventory, inventoryTransactions, users] =
     await Promise.all([
       db.getAll('students'),
       db.getAll('teachers'),
@@ -1049,6 +912,7 @@ export async function exportAllData(): Promise<object> {
       db.getAll('enrollments'),
       db.getAll('inventory'),
       db.getAll('inventory_transactions'),
+      db.getAll('users'),
     ]);
   const settings = await db.get('settings', 'main');
 
@@ -1068,6 +932,7 @@ export async function exportAllData(): Promise<object> {
     enrollments,
     inventory,
     inventoryTransactions,
+    users,
   };
 }
 
@@ -1075,15 +940,18 @@ export async function importAllData(data: Record<string, unknown>): Promise<void
   const stores: StoreName[] = [
     'students', 'teachers', 'courses', 'groups',
     'payments', 'attendance', 'expenses', 'exams', 'grades',
-    'enrollments', 'inventory', 'inventory_transactions'
+    'enrollments', 'inventory', 'inventory_transactions', 'users'
   ];
 
   for (const store of stores) {
-    await dbClearStore(store);
     // Handle both 'enrollments' and 'inventoryTransactions' naming
     const storeKey = store === 'inventory_transactions' ? 'inventoryTransactions' : store;
-    const items = data[storeKey] || data[store];
-    if (items && Array.isArray(items) && items.length > 0) {
+    const items = data[storeKey] ?? data[store];
+    // Only touch a store if the backup actually contains it (older backups
+    // may lack newer stores such as `users` — never wipe those by accident).
+    if (!Array.isArray(items)) continue;
+    await dbClearStore(store);
+    if (items.length > 0) {
       await dbBulkAdd(store, items);
     }
   }
@@ -1105,11 +973,4 @@ export async function getUserByUsername(username: string): Promise<User | undefi
     console.error('getUserByUsername error:', e);
     return undefined;
   }
-}
-
-export async function updateUserPassword(userId: string, newPassword: string): Promise<void> {
-  const user = await dbGetById<User>('users', userId);
-  if (!user) throw new Error('User not found');
-  const passwordHash = bcrypt.hashSync(newPassword, 10);
-  await dbPut('users', { ...user, passwordHash, updatedAt: new Date().toISOString() });
 }
