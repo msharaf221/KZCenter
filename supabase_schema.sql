@@ -84,15 +84,21 @@ CREATE TABLE IF NOT EXISTS payments (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   student_id UUID REFERENCES students(id) ON DELETE CASCADE,
   course_id UUID REFERENCES courses(id) ON DELETE SET NULL,
+  group_id UUID REFERENCES groups(id) ON DELETE SET NULL,
   amount DECIMAL(10,2) NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('subscription', 'books', 'other')),
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('paid', 'pending', 'late')),
   date DATE NOT NULL,
   notes TEXT,
+  installment_ids UUID[] DEFAULT '{}',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE
 );
+
+-- أعمدة مضافة للإصدارات القائمة (CREATE TABLE IF NOT EXISTS مش بيعدّل جدول موجود)
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
+ALTER TABLE payments ADD COLUMN IF NOT EXISTS installment_ids UUID[] DEFAULT '{}';
 
 -- Attendance table
 CREATE TABLE IF NOT EXISTS attendance (
@@ -210,12 +216,42 @@ CREATE TABLE IF NOT EXISTS enrollments (
   enrolled_at TIMESTAMPTZ DEFAULT NOW(),
   dropped_at TIMESTAMPTZ,
   drop_reason TEXT,
+  start_session INTEGER,
+  transferred_to_group_id UUID REFERENCES groups(id) ON DELETE SET NULL,
   initial_payment DECIMAL(10,2) DEFAULT 0,
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  deleted BOOLEAN DEFAULT FALSE,
-  UNIQUE(student_id, group_id)
+  deleted BOOLEAN DEFAULT FALSE
+);
+
+-- ملاحظة: القيد الفريد (student_id, group_id) اتشال لأن التحويل بين المجموعات
+-- بيخلي الطالب ممكن يكون ليه أك من سجل تعليم لنفس المجموعة عبر الوقت
+-- (واحد قديم بحالة transferred/dropped وواحد نشط).
+-- البديل: قيد فريد جزئي على التسجيلات النشطة فقط.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_enrollment
+  ON enrollments(student_id, group_id) WHERE status = 'active' AND deleted = FALSE;
+
+-- أعمدة مضافة للإصدارات القائمة
+ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS start_session INTEGER;
+ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS transferred_to_group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
+
+-- Installments table (الأقساط/المستحقات — وحدة الدين الحقيقية لكل تسجيل)
+CREATE TABLE IF NOT EXISTS installments (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  student_id UUID REFERENCES students(id) ON DELETE CASCADE,
+  group_id UUID REFERENCES groups(id) ON DELETE CASCADE,
+  enrollment_id UUID REFERENCES enrollments(id) ON DELETE SET NULL,
+  period_index INTEGER NOT NULL DEFAULT 1,
+  period_label TEXT,
+  amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+  paid_amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+  due_date DATE NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('paid', 'partial', 'pending', 'late', 'cancelled')),
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE
 );
 
 -- Backups metadata table
@@ -258,6 +294,11 @@ CREATE INDEX IF NOT EXISTS idx_enrollments_student ON enrollments(student_id) WH
 CREATE INDEX IF NOT EXISTS idx_enrollments_group ON enrollments(group_id) WHERE deleted = FALSE;
 CREATE INDEX IF NOT EXISTS idx_enrollments_status ON enrollments(status) WHERE deleted = FALSE;
 CREATE INDEX IF NOT EXISTS idx_enrollments_student_group ON enrollments(student_id, group_id) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_installments_student ON installments(student_id) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_installments_group ON installments(group_id) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_installments_status ON installments(status) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_installments_due_date ON installments(due_date) WHERE deleted = FALSE;
+CREATE INDEX IF NOT EXISTS idx_installments_student_group ON installments(student_id, group_id) WHERE deleted = FALSE;
 
 -- =====================================================
 -- البيانات الافتراضية
@@ -294,6 +335,7 @@ ALTER TABLE grades ENABLE ROW LEVEL SECURITY;
 ALTER TABLE inventory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE inventory_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE enrollments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE installments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE backups ENABLE ROW LEVEL SECURITY;
 
 -- Full access for anon/authenticated roles (local-first backup/sync model)
@@ -353,6 +395,10 @@ CREATE POLICY "app_all_enrollments" ON enrollments FOR ALL
   USING (auth.role() IN ('anon', 'authenticated'))
   WITH CHECK (auth.role() IN ('anon', 'authenticated'));
 
+CREATE POLICY "app_all_installments" ON installments FOR ALL
+  USING (auth.role() IN ('anon', 'authenticated'))
+  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+
 CREATE POLICY "app_all_backups" ON backups FOR ALL
   USING (auth.role() IN ('anon', 'authenticated'))
   WITH CHECK (auth.role() IN ('anon', 'authenticated'));
@@ -398,4 +444,7 @@ CREATE TRIGGER update_inventory_updated_at BEFORE UPDATE ON inventory
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER update_enrollments_updated_at BEFORE UPDATE ON enrollments
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_installments_updated_at BEFORE UPDATE ON installments
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

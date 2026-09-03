@@ -25,11 +25,12 @@ interface StatCardProps {
   color: string;
   subtitle?: string;
   trend?: { value: number; up: boolean };
+  onClick?: () => void;
 }
 
-export function StatCard({ title, value, icon, color, subtitle, trend }: StatCardProps) {
+export function StatCard({ title, value, icon, color, subtitle, trend, onClick }: StatCardProps) {
   return (
-    <Card className="p-5">
+    <Card className="p-5" onClick={onClick}>
       <div className="flex items-start justify-between">
         <div>
           <p className="text-sm font-medium text-gray-500 mb-1">{title}</p>

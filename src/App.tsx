@@ -14,6 +14,7 @@ const TeachersPage = lazy(() => import('./pages/TeachersPage'));
 const CoursesPage = lazy(() => import('./pages/CoursesPage'));
 const GroupsPage = lazy(() => import('./pages/GroupsPage'));
 const PaymentsPage = lazy(() => import('./pages/PaymentsPage'));
+const DebtorsPage = lazy(() => import('./pages/DebtorsPage'));
 const AttendancePage = lazy(() => import('./pages/AttendancePage'));
 const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 const DailyReportsPage = lazy(() => import('./pages/DailyReportsPage'));
@@ -104,6 +105,10 @@ export default function App() {
 
               <Route path="/payments" element={
                 <ProtectedRoute adminOnly><PaymentsPage /></ProtectedRoute>
+              } />
+
+              <Route path="/debtors" element={
+                <ProtectedRoute adminOnly><DebtorsPage /></ProtectedRoute>
               } />
 
               <Route path="/inventory" element={

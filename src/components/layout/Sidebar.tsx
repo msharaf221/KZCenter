@@ -1,19 +1,23 @@
 import { NavLink } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import {
   LayoutDashboard, Users, GraduationCap, BookOpen,
   Users2, CreditCard, ClipboardCheck, BarChart3,
   Settings, LogOut, ChevronRight, ChevronLeft,
-  Wallet, FileText, UserCog, CalendarDays, Archive, Shield
+  Wallet, FileText, UserCog, CalendarDays, Archive, Shield, AlertTriangle
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useApp } from '../../contexts/AppContext';
 import { getContrastColor } from '../../lib/utils';
+import { subscribeDebtAlert, refreshDebtAlert, DebtAlert } from '../../lib/debtAlerts';
 
 interface NavItem {
   path: string;
   label: string;
   icon: React.ReactNode;
   adminOnly?: boolean;
+  /** يعرض عدّاد تنبيه المديونيات جنب العنصر */
+  debtBadge?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -24,6 +28,7 @@ const navItems: NavItem[] = [
   { path: '/inventory', label: 'الملازم والمخزن', icon: <Archive size={20} />, adminOnly: true },
   { path: '/groups', label: 'المجموعات', icon: <Users2 size={20} />, adminOnly: true },
   { path: '/payments', label: 'المدفوعات', icon: <CreditCard size={20} />, adminOnly: true },
+  { path: '/debtors', label: 'المديونيات', icon: <AlertTriangle size={20} />, adminOnly: true, debtBadge: true },
   { path: '/expenses', label: 'المصروفات', icon: <Wallet size={20} />, adminOnly: true },
   { path: '/attendance', label: 'الحضور', icon: <ClipboardCheck size={20} /> },
   { path: '/exams', label: 'الاختبارات', icon: <FileText size={20} /> },
@@ -37,6 +42,15 @@ const navItems: NavItem[] = [
 export default function Sidebar() {
   const { user, logout, isAdmin } = useAuth();
   const { sidebarOpen, setSidebarOpen, settings } = useApp();
+  const [debtAlert, setDebtAlert] = useState<DebtAlert | null>(null);
+
+  // تنبيه المديونيات (للمسؤول فقط) — الحساب بيتعمل مرة كل دقيقة على الأكثر
+  useEffect(() => {
+    if (!isAdmin()) return;
+    const unsubscribe = subscribeDebtAlert(setDebtAlert);
+    void refreshDebtAlert();
+    return unsubscribe;
+  }, [isAdmin]);
 
   const visibleItems = navItems.filter(item => {
     if (item.adminOnly && !isAdmin()) return false;
@@ -107,6 +121,15 @@ export default function Sidebar() {
             <span className="flex-shrink-0">{item.icon}</span>
             {sidebarOpen && (
               <span className="font-medium text-sm truncate">{item.label}</span>
+            )}
+            {item.debtBadge && debtAlert && debtAlert.debtorsCount > 0 && (
+              sidebarOpen ? (
+                <span className="mr-auto bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
+                  {debtAlert.debtorsCount}
+                </span>
+              ) : (
+                <span className="absolute top-1 left-1 w-2 h-2 bg-red-500 rounded-full" />
+              )
             )}
             {!sidebarOpen && (
               <div className="absolute right-full mr-2 bg-gray-900 text-white text-xs px-2 py-1 rounded

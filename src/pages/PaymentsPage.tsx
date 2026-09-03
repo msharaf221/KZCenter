@@ -5,7 +5,7 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
-import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, dbGetById, recalculateStudentTotalPaid, generateId, Payment, PaymentStatus, PaymentType, Student, Course, Settings } from '../lib/db';
+import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, dbGetById, recalculateStudentTotalPaid, rebuildInstallmentsFromPayments, getStudentBalance, recordInstallmentPayment, generateId, Payment, PaymentStatus, PaymentType, Student, Course, Settings, StudentBalance } from '../lib/db';
 import { formatDate, formatCurrency, toCSV, downloadCSV, getWhatsAppLink, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -34,6 +34,17 @@ export default function PaymentsPage() {
     type: 'subscription' as PaymentType, status: 'paid' as PaymentStatus,
     date: dayjs().format('YYYY-MM-DD'), notes: '',
   });
+  const [studentBalance, setStudentBalance] = useState<StudentBalance | null>(null);
+
+  // رصيد الطالب المختار (مستحق/مدفوع/متبقي) لعرضه أثناء تسجيل الدفعة
+  useEffect(() => {
+    if (!form.studentId) return;
+    let cancelled = false;
+    getStudentBalance(form.studentId)
+      .then(b => { if (!cancelled) setStudentBalance(b); })
+      .catch(() => { if (!cancelled) setStudentBalance(null); });
+    return () => { cancelled = true; };
+  }, [form.studentId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,18 +76,36 @@ export default function PaymentsPage() {
     if (!form.studentId) { notify.error('اختر طالباً'); return; }
     if (form.amount <= 0) { notify.error('المبلغ يجب أن يكون أكبر من 0'); return; }
     try {
-      const payment: Payment = {
-        id: generateId(), ...form,
-        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-      };
-      await dbAdd('payments', payment);
+      let payment: Payment;
+
+      if (form.status === 'paid' && form.type === 'subscription') {
+        // أي دفعة اشتراك مسددة لازم تتوزّع على الأقساط،
+        // وإلا المستحقات المخزّنة على الأقساط هتفضل "غير مدفوعة" والأرقام تتلخبط.
+        const result = await recordInstallmentPayment({
+          studentId: form.studentId,
+          amount: form.amount,
+          date: form.date,
+          courseId: form.courseId || undefined,
+          notes: form.notes || undefined,
+        });
+        if (!result.success || !result.payment) { notify.error(result.error || 'حدث خطأ'); return; }
+        payment = result.payment;
+      } else {
+        // معلق/متأخر أو بنود غير الاشتراك (كتب/أخرى): تسجل كدفعة من غير توزيع على أقساط
+        payment = {
+          id: generateId(), ...form,
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        };
+        await dbAdd('payments', payment);
+        await recalculateStudentTotalPaid(form.studentId);
+      }
+
       addAuditEntry({
         userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
         action: 'create', entity: 'payment', entityId: payment.id,
         details: `تسجيل دفعة بقيمة ${payment.amount} للطالب: ${getStudentName(payment.studentId)}`,
       });
       if (form.status === 'paid') {
-        await recalculateStudentTotalPaid(form.studentId);
         const student = students.find(s => s.id === form.studentId);
         if (student) notifyPaymentReceived(student.name, form.amount);
       } else if (form.status === 'late') {
@@ -92,7 +121,8 @@ export default function PaymentsPage() {
   async function handleMarkPaid(payment: Payment) {
     try {
       await dbPut('payments', { ...payment, status: 'paid', updatedAt: new Date().toISOString() });
-      await recalculateStudentTotalPaid(payment.studentId);
+      // الدفعة بقت مسددة → لازم تتوزّع على الأقساط
+      await rebuildInstallmentsFromPayments(payment.studentId);
       notify.success('تم تغيير الحالة إلى مدفوع');
       load();
     } catch { notify.error('حدث خطأ'); }
@@ -108,7 +138,8 @@ export default function PaymentsPage() {
         details: `حذف دفعة بقيمة ${payment?.amount ?? 0} للطالب: ${payment ? getStudentName(payment.studentId) : 'غير معروف'}`,
       });
       if (payment?.status === 'paid') {
-        await recalculateStudentTotalPaid(payment.studentId);
+        // إعادة بناء الأقساط من الدفعات المتبقية بعد الحذف
+        await rebuildInstallmentsFromPayments(payment.studentId);
       }
       notify.success('تم حذف الدفعة');
       load();
@@ -118,11 +149,15 @@ export default function PaymentsPage() {
   async function handleBulkMarkPaid() {
     try {
       const selected = payments.filter(p => selectedIds.includes(p.id));
+      const affectedStudents = new Set<string>();
       for (const p of selected) {
         if (p.status !== 'paid') {
           await dbPut('payments', { ...p, status: 'paid', updatedAt: new Date().toISOString() });
-          await recalculateStudentTotalPaid(p.studentId);
+          affectedStudents.add(p.studentId);
         }
+      }
+      for (const sid of affectedStudents) {
+        await rebuildInstallmentsFromPayments(sid);
       }
       notify.success(`تم تحديث ${selectedIds.length} دفعة إلى مدفوع`);
       setSelectedIds([]);
@@ -220,12 +255,15 @@ export default function PaymentsPage() {
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const totalPaid = payments.filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
   const totalPending = payments.filter(p => p.status !== 'paid').reduce((s, p) => s + p.amount, 0);
+  // المتبقي الحقيقي على كل الطلاب (مبني على المستحقات/الأقساط المخزّنة على الطالب)
+  const remainingOnStudents = students.reduce((s, st) => s + Math.max(0, (st.totalOwed || 0) - st.totalPaid), 0);
+  const debtorsCount = students.filter(st => (st.totalOwed || 0) - st.totalPaid > 0).length;
 
   return (
     <Layout title="إدارة المدفوعات">
       <div className="space-y-5">
         {/* Summary */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <p className="text-sm text-gray-500">إجمالي الصفحة المدفوع</p>
             <p className="text-2xl font-bold text-green-600">{formatCurrency(totalPaid, settings?.currency)}</p>
@@ -233,6 +271,11 @@ export default function PaymentsPage() {
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <p className="text-sm text-gray-500">إجمالي المعلق</p>
             <p className="text-2xl font-bold text-orange-500">{formatCurrency(totalPending, settings?.currency)}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <p className="text-sm text-gray-500">المتبقي على الطلاب</p>
+            <p className="text-2xl font-bold text-red-600">{formatCurrency(remainingOnStudents, settings?.currency)}</p>
+            <p className="text-xs text-gray-400 mt-1">{debtorsCount} طالب عليهم مبالغ</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <p className="text-sm text-gray-500">عدد السجلات</p>
@@ -366,12 +409,73 @@ export default function PaymentsPage() {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">الطالب *</label>
-            <select value={form.studentId} onChange={e => setForm({...form, studentId: e.target.value})}
+            <select value={form.studentId}
+              onChange={e => {
+                const studentId = e.target.value;
+                setForm({ ...form, studentId });
+                if (!studentId) setStudentBalance(null);
+              }}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
               <option value="">اختر طالباً</option>
-              {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {students.map(s => {
+                const debt = (s.totalOwed || 0) - s.totalPaid;
+                return (
+                  <option key={s.id} value={s.id}>
+                    {s.name}{debt > 0 ? ` — عليه ${debt.toLocaleString('ar-EG')}` : ''}
+                  </option>
+                );
+              })}
             </select>
           </div>
+
+          {/* رصيد الطالب المختار */}
+          {form.studentId && studentBalance && (
+            <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+              <div className="grid grid-cols-3 gap-2 text-center text-xs mb-2">
+                <div>
+                  <p className="text-gray-400">المستحق</p>
+                  <p className="font-bold text-gray-800">{formatCurrency(studentBalance.owed, settings?.currency)}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400">المدفوع</p>
+                  <p className="font-bold text-green-600">{formatCurrency(studentBalance.paid, settings?.currency)}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400">المتبقي</p>
+                  <p className={`font-bold ${studentBalance.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                    {formatCurrency(Math.max(0, studentBalance.remaining), settings?.currency)}
+                  </p>
+                </div>
+              </div>
+              {studentBalance.groups.filter(g => g.remaining > 0).length > 0 && (
+                <div className="space-y-1 border-t border-gray-200 pt-2">
+                  {studentBalance.groups.filter(g => g.remaining > 0).map(g => (
+                    <div key={g.groupId} className="flex items-center justify-between text-xs">
+                      <span className="text-gray-600">{g.groupName} <span className="text-gray-400">({g.courseName})</span></span>
+                      <span className="font-bold text-red-600">{formatCurrency(g.remaining, settings?.currency)}</span>
+                    </div>
+                  ))}
+                  <button type="button"
+                    onClick={() => {
+                      const groupRemaining = studentBalance.groups.reduce((s, g) => s + g.remaining, 0);
+                      setForm(f => ({
+                        ...f,
+                        amount: groupRemaining,
+                        type: 'subscription',
+                        status: 'paid',
+                        courseId: studentBalance.groups[0]
+                          ? (courses.find(c => c.name === studentBalance.groups[0].courseName)?.id || f.courseId)
+                          : f.courseId,
+                        notes: f.notes || 'سداد المتبقي',
+                      }));
+                    }}
+                    className="w-full mt-1 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
+                    تعبئة المبلغ بالمتبقي كله ({formatCurrency(studentBalance.groups.reduce((s, g) => s + g.remaining, 0), settings?.currency)})
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">الكورس</label>
             <select value={form.courseId} onChange={e => setForm({...form, courseId: e.target.value})}
