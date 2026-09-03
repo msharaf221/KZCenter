@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import Layout from '../components/layout/Layout';
 import { StatCard } from '../components/ui/Card';
-import { dbGetAll, recalculateStudentTotalPaid, Student, Teacher, Group, Course, Payment } from '../lib/db';
+import { dbGetAll, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, Student, Teacher, Group, Course, Payment } from '../lib/db';
 import { formatDate, formatCurrency, getStatusLabel, getArabicDay } from '../lib/utils';
 import { requestNotificationPermission } from '../lib/notifications';
 import { useApp } from '../contexts/AppContext';
@@ -138,20 +138,31 @@ export default function DashboardPage() {
   }
 
   useEffect(() => {
-    // Migration: Recalculate balances for all students (runs once, non-blocking)
     const runMigration = async () => {
-      if (localStorage.getItem('migration_balances_v1')) return;
       try {
-        const students = await dbGetAll<Student>('students');
-        // Run sequentially in batches to avoid freezing the UI
-        for (const s of students) {
-          await recalculateStudentTotalPaid(s.id);
-          // Yield to the event loop every 10 records
-          if (students.indexOf(s) % 10 === 9) {
-            await new Promise(resolve => setTimeout(resolve, 0));
-          }
+        // 1) توليد الأقساط للتسجيلات القديمة (مرة واحدة فقط)
+        if (!localStorage.getItem('migration_installments_v1')) {
+          await migrateInstallments();
+          localStorage.setItem('migration_installments_v1', 'true');
         }
-        localStorage.setItem('migration_balances_v1', 'true');
+
+        // 2) تحديث حالة الأقساط المتأخرة (مع كل فتح للتطبيق)
+        await markOverdueInstallments();
+
+        // 3) Migration: Recalculate balances for all students (runs once, non-blocking)
+        if (!localStorage.getItem('migration_balances_v1')) {
+          const students = await dbGetAll<Student>('students');
+          // Run sequentially in batches to avoid freezing the UI
+          for (let i = 0; i < students.length; i++) {
+            await recalculateStudentTotalPaid(students[i].id);
+            // Yield to the event loop every 10 records
+            if (i % 10 === 9) {
+              await new Promise(resolve => setTimeout(resolve, 0));
+            }
+          }
+          localStorage.setItem('migration_balances_v1', 'true');
+        }
+
         loadDashboard();
       } catch (e) {
         console.error('Migration failed', e);

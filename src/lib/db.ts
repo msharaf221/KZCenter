@@ -1,5 +1,17 @@
 import { openDB, IDBPDatabase } from 'idb';
 import bcrypt from 'bcryptjs';
+import dayjs from 'dayjs';
+import {
+  Installment,
+  InstallmentStatus,
+  BalanceSummary,
+  buildMonthlyPlan,
+  applyPayment,
+  computeBalance,
+  installmentRemaining,
+  installmentState,
+  summarize,
+} from './billing';
 
 // ==================== INTERFACES ====================
 
@@ -93,15 +105,23 @@ export interface Payment {
   id: string;
   studentId: string;
   courseId?: string;
+  /** المجموعة المرتبطة بالدفعة (اختياري — يُملأ عند الدفع على أقساط مجموعة محددة) */
+  groupId?: string;
   amount: number;
   type: PaymentType;
   status: PaymentStatus;
   date: string;
   notes?: string;
+  /** الأقساط التي غطّتها هذه الدفعة */
+  installmentIds?: string[];
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
 }
+
+// الأقساط/المستحقات — التعريف في src/lib/billing.ts (منطق نقي قابل للاختبار)
+export type { Installment, InstallmentStatus, BalanceSummary };
+export { installmentRemaining, installmentState, summarize, SESSIONS_PER_MONTH } from './billing';
 
 export interface Attendance {
   id: string;
@@ -223,7 +243,7 @@ export interface Enrollment {
 // ==================== DB INIT ====================
 
 const DB_NAME = 'EduCenterProDB';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let dbInstance: IDBPDatabase<any> | null = null;
@@ -334,6 +354,16 @@ export async function getDB(): Promise<IDBPDatabase<any>> {
         s.createIndex('by-status', 'status');
         s.createIndex('by-studentGroup', ['studentId', 'groupId']);
       }
+
+      // Installments (الأقساط/المستحقات — وحدة الدين الحقيقية)
+      if (!db.objectStoreNames.contains('installments')) {
+        const s = db.createObjectStore('installments', { keyPath: 'id' });
+        s.createIndex('by-studentId', 'studentId');
+        s.createIndex('by-groupId', 'groupId');
+        s.createIndex('by-status', 'status');
+        s.createIndex('by-dueDate', 'dueDate');
+        s.createIndex('by-studentGroup', ['studentId', 'groupId']);
+      }
     },
   });
 
@@ -398,7 +428,7 @@ type StoreName =
   | 'payments' | 'attendance' | 'users' | 'settings'
   | 'expenses' | 'exams' | 'grades'
   | 'inventory' | 'inventory_transactions'
-  | 'enrollments';
+  | 'enrollments' | 'installments';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function dbGetAll<T = any>(storeName: StoreName): Promise<T[]> {
@@ -581,6 +611,28 @@ export async function enrollStudent(
     };
     await dbAdd('enrollments', enrollment);
 
+    // 4b. توليد خطة الأقساط الشهرية لهذا التسجيل (المستحقات الحقيقية على الطالب)
+    const course = await dbGetById<Course>('courses', group.courseId);
+    const plan = buildMonthlyPlan({
+      coursePrice: course?.price || 0,
+      durationMonths: course?.durationMonths || 1,
+      startDate: now,
+    });
+    const createdInstallments: Installment[] = plan.map(p => ({
+      id: generateId(),
+      studentId,
+      groupId,
+      enrollmentId,
+      periodIndex: p.periodIndex,
+      periodLabel: p.periodLabel,
+      amount: p.amount,
+      paidAmount: 0,
+      dueDate: p.dueDate,
+      status: 'pending' as InstallmentStatus,
+      createdAt: now,
+      updatedAt: now,
+    }));
+
     // 5. Update denormalized arrays (for performance)
     await dbPut('groups', {
       ...group,
@@ -594,16 +646,20 @@ export async function enrollStudent(
       updatedAt: now,
     });
 
-    // 6. Create payment if provided
+    // 6. حفظ خطة الأقساط، ثم تسجيل الدفعة الأولى (لو فيه)
+    await dbBulkAdd('installments', createdInstallments);
+
     if (initialPayment && initialPayment > 0) {
       await dbAdd('payments', {
         id: generateId(),
         studentId,
         courseId: group.courseId,
+        groupId,
         amount: initialPayment,
         date: now.split('T')[0],
         type: 'subscription',
         status: 'paid',
+        installmentIds: [],
         notes: `تسجيل في ${group.name}`,
         createdAt: now,
         updatedAt: now,
@@ -613,8 +669,8 @@ export async function enrollStudent(
     // 7. Sync group status
     await syncGroupStatus(groupId);
 
-    // 8. Recalculate student totals
-    await recalculateStudentTotalPaid(studentId);
+    // 8. توزيع الدفعات على الأقساط + إعادة حساب أرصدة الطالب
+    await rebuildInstallmentsFromPayments(studentId);
 
     return { success: true };
   } catch (error) {
@@ -655,6 +711,21 @@ export async function unenrollStudent(
       dbGetById<Student>('students', studentId),
       dbGetById<Group>('groups', groupId),
     ]);
+
+    // 3b. إلغاء الأقساط غير المسددة لهذا التسجيل (الدين بيروح مع الخروج من المجموعة،
+    //     لكن اللي اتدفع فعلاً يفضل مسجّل كمدفوع)
+    const groupInstallments = await dbGetByIndex<Installment>('installments', 'by-studentGroup', [studentId, groupId]);
+    for (const inst of groupInstallments) {
+      if (inst.status === 'cancelled') continue;
+      if (installmentRemaining(inst) > 0) {
+        await dbPut('installments', {
+          ...inst,
+          status: 'cancelled' as InstallmentStatus,
+          notes: inst.notes ? `${inst.notes} — ${reason || 'إزالة'}` : `ملغي: ${reason || 'إزالة من المجموعة'}`,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    }
 
     if (student) {
       await dbPut('students', {
@@ -702,20 +773,421 @@ export async function getGroupStudents(groupId: string): Promise<Student[]> {
   return students;
 }
 
+// ==================== BILLING / INSTALLMENTS ====================
+
+export interface GroupBalance {
+  groupId: string;
+  groupName: string;
+  courseName: string;
+  owed: number;
+  paid: number;
+  remaining: number;
+  unpaidCount: number;
+  overdueCount: number;
+  overdueAmount: number;
+  installments: Installment[];
+}
+
+export interface StudentBalance extends BalanceSummary {
+  studentId: string;
+  studentName: string;
+  unpaidCount: number;
+  overdueCount: number;
+  overdueAmount: number;
+  groups: GroupBalance[];
+}
+
+export interface PaymentResult {
+  success: boolean;
+  error?: string;
+  payment?: Payment;
+  /** المبلغ اللي اتوزّع فعلاً على الأقساط */
+  applied?: number;
+  remainingAfter?: number;
+}
+
+/**
+ * كل أقساط طالب مرتبة بتاريخ الاستحقاق،
+ * مع الحالة المحسوبة (متأخر/مسدد/جزئي) بدل الحالة المخزّنة.
+ */
+export async function getStudentInstallments(studentId: string): Promise<Installment[]> {
+  const items = await dbGetByIndex<Installment>('installments', 'by-studentId', studentId);
+  const today = dayjs().format('YYYY-MM-DD');
+  return items
+    .slice()
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.periodIndex - b.periodIndex)
+    .map(i => ({ ...i, status: installmentState(i, today) }));
+}
+
+/**
+ * رصيد الطالب بالتفصيل: إجمالي + تفصيل لكل مجموعة مع أقساطها.
+ */
+export async function getStudentBalance(studentId: string): Promise<StudentBalance | null> {
+  const student = await dbGetById<Student>('students', studentId);
+  if (!student) return null;
+
+  const [installments, payments, groups, courses] = await Promise.all([
+    getStudentInstallments(studentId),
+    dbGetByIndex<Payment>('payments', 'by-studentId', studentId),
+    dbGetAll<Group>('groups'),
+    dbGetAll<Course>('courses'),
+  ]);
+
+  const overall = computeBalance({ installments, payments });
+  const overallSummary = summarize(installments);
+
+  const byGroup = new Map<string, Installment[]>();
+  for (const inst of installments) {
+    const list = byGroup.get(inst.groupId);
+    if (list) list.push(inst);
+    else byGroup.set(inst.groupId, [inst]);
+  }
+
+  const groupBalances: GroupBalance[] = Array.from(byGroup.entries())
+    .map(([groupId, list]) => {
+      const s = summarize(list);
+      const group = groups.find(g => g.id === groupId);
+      const course = group ? courses.find(c => c.id === group.courseId) : undefined;
+      return {
+        groupId,
+        groupName: group?.name || 'مجموعة محذوفة',
+        courseName: course?.name || '—',
+        owed: s.total,
+        paid: s.paid,
+        remaining: s.remaining,
+        unpaidCount: s.unpaidCount,
+        overdueCount: s.overdueCount,
+        overdueAmount: s.overdueAmount,
+        installments: list,
+      };
+    })
+    .sort((a, b) => b.remaining - a.remaining);
+
+  return {
+    studentId,
+    studentName: student.name,
+    owed: overall.owed,
+    paid: overall.paid,
+    remaining: overall.remaining,
+    unpaidCount: overallSummary.unpaidCount,
+    overdueCount: overallSummary.overdueCount,
+    overdueAmount: overallSummary.overdueAmount,
+    groups: groupBalances,
+  };
+}
+
+/**
+ * تسجيل دفعة (كاملة أو جزئية) على أقساط طالب.
+ * - groupId اختياري: لو اتحدد، الدفعة تتوزع على أقساط هذه المجموعة فقط.
+ * - التوزيع: الأقدم استحقاقاً الأول.
+ * - أي مبلغ زيادة عن المستحق يُسجَّل كدفعة (فائض) بدون أقساط مرتبطة.
+ */
+export async function recordInstallmentPayment(opts: {
+  studentId: string;
+  amount: number;
+  groupId?: string;
+  date?: string;
+  notes?: string;
+  courseId?: string;
+  type?: PaymentType;
+}): Promise<PaymentResult> {
+  const { studentId, amount } = opts;
+  if (!studentId) return { success: false, error: 'اختر طالباً' };
+  if (!(amount > 0)) return { success: false, error: 'المبلغ يجب أن يكون أكبر من صفر' };
+
+  const student = await dbGetById<Student>('students', studentId);
+  if (!student) return { success: false, error: 'الطالب غير موجود' };
+
+  const date = opts.date || dayjs().format('YYYY-MM-DD');
+  const now = new Date().toISOString();
+  const group = opts.groupId ? await dbGetById<Group>('groups', opts.groupId) : undefined;
+
+  const payment: Payment = {
+    id: generateId(),
+    studentId,
+    courseId: opts.courseId || group?.courseId,
+    groupId: opts.groupId,
+    amount,
+    type: opts.type || 'subscription',
+    status: 'paid',
+    date,
+    installmentIds: [],
+    notes: opts.notes || (group ? `سداد — ${group.name}` : 'سداد أقساط'),
+    createdAt: now,
+    updatedAt: now,
+  };
+  await dbAdd('payments', payment);
+
+  // إعادة بناء المدفوع على الأقساط من كل الدفعات المسددة (طريق واحد صحيح)
+  await rebuildInstallmentsFromPayments(studentId);
+  const after = await getStudentBalance(studentId);
+
+  return { success: true, payment, applied: amount, remainingAfter: after?.remaining ?? 0 };
+}
+
+/**
+ * إعادة بناء "المدفوع" على أقساط طالب من الصفر، بناءً على كل الدفعات المسددة
+ * غير المحذوفة (الأقدم تاريخاً الأول).
+ *
+ * دي الطريقة الآمنة الوحيدة للتحديث: أي إضافة/حذف/تغيير حالة دفعة بتستدعيها،
+ * فالأقساط تفضل مطابقة للدفعات الفعلية من غير تراكم أخطاء.
+ */
+export async function rebuildInstallmentsFromPayments(studentId: string): Promise<void> {
+  const [installments, payments] = await Promise.all([
+    dbGetByIndex<Installment>('installments', 'by-studentId', studentId),
+    dbGetByIndex<Payment>('payments', 'by-studentId', studentId),
+  ]);
+  if (installments.length === 0) {
+    await recalculateStudentTotalPaid(studentId);
+    return;
+  }
+
+  const originalById = new Map(installments.map(i => [i.id, i]));
+  const today = dayjs().format('YYYY-MM-DD');
+
+  // تصفير المدفوع (الملغي يفضل ملغي — applyPayment بيتخطاه)
+  let current: Installment[] = installments.map(i => ({ ...i, paidAmount: 0 }));
+
+  const paidSubscription = payments
+    .filter(p => !p.deleted && p.status === 'paid' && p.type === 'subscription')
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+
+  const idsByPayment = new Map<string, string[]>();
+
+  for (const p of paidSubscription) {
+    const scope = p.groupId ? current.filter(i => i.groupId === p.groupId) : current;
+    const applied = applyPayment(scope, p.amount, today);
+    const updated = new Map(applied.installments.map(i => [i.id, i]));
+    current = current.map(i => updated.get(i.id) || i);
+    idsByPayment.set(p.id, applied.touchedIds);
+  }
+
+  // حفظ الأقساط اللي اتغيرت
+  for (const inst of current) {
+    const before = originalById.get(inst.id);
+    const next = { ...inst, status: installmentState(inst, today) };
+    const changed = !before
+      || before.paidAmount !== next.paidAmount
+      || before.status !== next.status;
+    if (changed) {
+      await dbPut('installments', { ...next, updatedAt: new Date().toISOString() });
+    }
+  }
+
+  // ربط كل دفعة بالأقساط اللي غطّتها (للتتبع والإيصال)
+  for (const p of paidSubscription) {
+    const ids = idsByPayment.get(p.id) || [];
+    if ((p.installmentIds || []).join(',') !== ids.join(',')) {
+      await dbPut('payments', { ...p, installmentIds: ids, updatedAt: new Date().toISOString() });
+    }
+  }
+
+  await recalculateStudentTotalPaid(studentId);
+}
+
+/**
+ * دفع المتبقي: يحسب المتبقي على الطالب (أو على مجموعة محددة) ويسدده دفعة واحدة.
+ */
+export async function payStudentRemaining(
+  studentId: string,
+  groupId?: string,
+  date?: string
+): Promise<PaymentResult> {
+  const balance = await getStudentBalance(studentId);
+  if (!balance) return { success: false, error: 'الطالب غير موجود' };
+
+  const target = groupId ? balance.groups.find(g => g.groupId === groupId) : undefined;
+  if (groupId && !target) return { success: false, error: 'لا توجد مستحقات على هذه المجموعة' };
+
+  const remaining = target
+    ? target.remaining
+    : balance.groups.reduce((sum, g) => sum + g.remaining, 0);
+
+  if (remaining <= 0) return { success: false, error: 'لا يوجد مبلغ متبقٍ على الطالب' };
+
+  return recordInstallmentPayment({
+    studentId,
+    groupId,
+    amount: remaining,
+    date,
+    notes: target ? `سداد المتبقي — ${target.groupName}` : 'سداد كامل المتبقي',
+  });
+}
+
+/**
+ * تحديث حالات الأقساط المخزّنة: أي قسط فات تاريخ استحقاقه وفيه باقي → "متأخر".
+ * تُستدعى مرة عند فتح التطبيق (وممكن دورياً).
+ */
+export async function markOverdueInstallments(): Promise<number> {
+  const all = await dbGetAll<Installment>('installments');
+  const today = dayjs().format('YYYY-MM-DD');
+  let updated = 0;
+  for (const inst of all) {
+    const derived = installmentState(inst, today);
+    if (derived !== inst.status) {
+      await dbPut('installments', { ...inst, status: derived, updatedAt: new Date().toISOString() });
+      updated++;
+    }
+  }
+  return updated;
+}
+
+export interface InstallmentMigrationReport {
+  enrollmentsProcessed: number;
+  installmentsCreated: number;
+  studentsRecalculated: number;
+}
+
+/**
+ * ترحيل البيانات القديمة: توليد أقساط للتسجيلات الموجودة قبل نظام الأقساط،
+ * ثم توزيع المدفوع القديم (دفعات الاشتراك) عليها — الأقدم استحقاقاً الأول.
+ *
+ * ملاحظة: الدفعات القديمة مش مرتبطة بمجموعة، فالتوزيع بيتم على مستوى الطالب كله.
+ * التشغيل آمن ومتكرر: التسجيلات اللي ليها أقساط بالفعل بيتخطاها.
+ */
+export async function migrateInstallments(): Promise<InstallmentMigrationReport> {
+  const report: InstallmentMigrationReport = {
+    enrollmentsProcessed: 0,
+    installmentsCreated: 0,
+    studentsRecalculated: 0,
+  };
+
+  const [enrollments, students, groups, courses, existing] = await Promise.all([
+    dbGetAll<Enrollment>('enrollments'),
+    dbGetAll<Student>('students'),
+    dbGetAll<Group>('groups'),
+    dbGetAll<Course>('courses'),
+    dbGetAll<Installment>('installments'),
+  ]);
+
+  const covered = new Set(
+    existing.filter(i => !i.deleted && i.enrollmentId).map(i => i.enrollmentId as string)
+  );
+  const coveredPairs = new Set(
+    existing.filter(i => !i.deleted).map(i => `${i.studentId}:${i.groupId}`)
+  );
+
+  // أزواج (طالب، مجموعة) المحتاجة أقساط: من التسجيلات النشطة + من enrolledGroups القديمة
+  type Pair = { studentId: string; groupId: string; startDate: string; enrollmentId?: string };
+  const pairs: Pair[] = [];
+  const seen = new Set<string>();
+
+  const pushPair = (p: Pair) => {
+    const key = `${p.studentId}:${p.groupId}`;
+    if (seen.has(key) || coveredPairs.has(key)) return;
+    seen.add(key);
+    pairs.push(p);
+  };
+
+  for (const e of enrollments) {
+    if (e.deleted || e.status !== 'active') continue;
+    if (covered.has(e.id)) continue;
+    pushPair({
+      studentId: e.studentId,
+      groupId: e.groupId,
+      startDate: e.enrolledAt || e.createdAt,
+      enrollmentId: e.id,
+    });
+  }
+
+  for (const s of students) {
+    for (const gid of s.enrolledGroups || []) {
+      pushPair({ studentId: s.id, groupId: gid, startDate: s.createdAt });
+    }
+  }
+
+  const byStudent = new Map<string, Pair[]>();
+  for (const p of pairs) {
+    const list = byStudent.get(p.studentId);
+    if (list) list.push(p);
+    else byStudent.set(p.studentId, [p]);
+  }
+
+  const now = new Date().toISOString();
+
+  for (const [studentId, list] of byStudent) {
+    const created: Installment[] = [];
+
+    for (const pair of list) {
+      const group = groups.find(g => g.id === pair.groupId);
+      if (!group) continue;
+      const course = courses.find(c => c.id === group.courseId);
+      if (!course) continue;
+
+      const plan = buildMonthlyPlan({
+        coursePrice: course.price,
+        durationMonths: course.durationMonths,
+        startDate: pair.startDate,
+      });
+
+      for (const p of plan) {
+        created.push({
+          id: generateId(),
+          studentId,
+          groupId: pair.groupId,
+          enrollmentId: pair.enrollmentId,
+          periodIndex: p.periodIndex,
+          periodLabel: p.periodLabel,
+          amount: p.amount,
+          paidAmount: 0,
+          dueDate: p.dueDate,
+          status: 'pending' as InstallmentStatus,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      report.enrollmentsProcessed++;
+    }
+
+    if (created.length === 0) continue;
+
+    await dbBulkAdd('installments', created);
+    report.installmentsCreated += created.length;
+
+    // توزيع المدفوع القديم (دفعات الاشتراك المسددة) على الأقساط — الأقدم استحقاقاً الأول
+    await rebuildInstallmentsFromPayments(studentId);
+    report.studentsRecalculated++;
+  }
+
+  return report;
+}
+
 // ==================== SPECIALIZED QUERIES ====================
 
 export async function recalculateStudentTotalPaid(studentId: string): Promise<void> {
   const student = await dbGetById<Student>('students', studentId);
   if (!student) return;
-  
-  const payments = await dbGetByIndex<Payment>('payments', 'by-studentId', studentId);
-  const totalPaid = payments
-    .filter(p => p.status === 'paid' && !p.deleted)
-    .reduce((sum, p) => sum + p.amount, 0);
-    
-  // Use enrollments table as source of truth, fall back to enrolledGroups
+
+  const [payments, installments] = await Promise.all([
+    dbGetByIndex<Payment>('payments', 'by-studentId', studentId),
+    dbGetByIndex<Installment>('installments', 'by-studentId', studentId),
+  ]);
+
+  // الأقساط هي مصدر الحقيقة للمستحقات. لو مفيش أقساط (بيانات قديمة قبل الترحيل)
+  // نرجع للحساب التقريبي القديم عشان الأرقام ما تتغيرش فجأة على المستخدم.
+  const balance = installments.length > 0
+    ? computeBalance({ installments, payments })
+    : await computeLegacyBalance(student, payments);
+
+  await dbPut('students', {
+    ...student,
+    totalPaid: balance.paid,
+    totalOwed: balance.owed,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * حساب المستحقات بالطريقة القديمة (سعر الكورس × مدة الكورس لكل المجموعات النشطة)
+ * تُستخدم فقط للطلاب اللي لسه ما اتولّدتلهمش أقساط.
+ */
+async function computeLegacyBalance(
+  student: Student,
+  payments: Payment[]
+): Promise<BalanceSummary> {
   let totalOwed = 0;
-  const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentId', studentId);
+  const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentId', student.id);
   const activeGroupIds = enrollments
     .filter(e => e.status === 'active' && !e.deleted)
     .map(e => e.groupId);
@@ -726,7 +1198,7 @@ export async function recalculateStudentTotalPaid(studentId: string): Promise<vo
   if (groupIds.length > 0) {
     const groups = await dbGetAll<Group>('groups');
     const courses = await dbGetAll<Course>('courses');
-    
+
     for (const groupId of groupIds) {
       const group = groups.find(g => g.id === groupId);
       if (group && !group.deleted) {
@@ -738,13 +1210,21 @@ export async function recalculateStudentTotalPaid(studentId: string): Promise<vo
       }
     }
   }
-  
-  const nonSubscriptionPayments = payments.filter(p => p.type !== 'subscription' && !p.deleted);
-  const extraOwed = nonSubscriptionPayments.reduce((sum, p) => sum + p.amount, 0);
-  
+
+  const extraOwed = payments
+    .filter(p => p.type !== 'subscription' && !p.deleted)
+    .reduce((sum, p) => sum + p.amount, 0);
   totalOwed += extraOwed;
 
-  await dbPut('students', { ...student, totalPaid, totalOwed, updatedAt: new Date().toISOString() });
+  const totalPaid = payments
+    .filter(p => p.status === 'paid' && !p.deleted)
+    .reduce((sum, p) => sum + p.amount, 0);
+
+  return {
+    owed: Math.round(totalOwed * 100) / 100,
+    paid: Math.round(totalPaid * 100) / 100,
+    remaining: Math.round((totalOwed - totalPaid) * 100) / 100,
+  };
 }
 
 /**
@@ -898,7 +1378,7 @@ export async function getGroupAttendanceForDate(
 
 export async function exportAllData(): Promise<object> {
   const db = await getDB();
-  const [students, teachers, courses, groups, payments, attendance, expenses, exams, grades, enrollments, inventory, inventoryTransactions, users] =
+  const [students, teachers, courses, groups, payments, attendance, expenses, exams, grades, enrollments, installments, inventory, inventoryTransactions, users] =
     await Promise.all([
       db.getAll('students'),
       db.getAll('teachers'),
@@ -910,6 +1390,7 @@ export async function exportAllData(): Promise<object> {
       db.getAll('exams'),
       db.getAll('grades'),
       db.getAll('enrollments'),
+      db.getAll('installments'),
       db.getAll('inventory'),
       db.getAll('inventory_transactions'),
       db.getAll('users'),
@@ -917,7 +1398,7 @@ export async function exportAllData(): Promise<object> {
   const settings = await db.get('settings', 'main');
 
   return {
-    version: 5,
+    version: 6,
     exportedAt: new Date().toISOString(),
     students,
     teachers,
@@ -930,6 +1411,7 @@ export async function exportAllData(): Promise<object> {
     exams,
     grades,
     enrollments,
+    installments,
     inventory,
     inventoryTransactions,
     users,
@@ -940,7 +1422,7 @@ export async function importAllData(data: Record<string, unknown>): Promise<void
   const stores: StoreName[] = [
     'students', 'teachers', 'courses', 'groups',
     'payments', 'attendance', 'expenses', 'exams', 'grades',
-    'enrollments', 'inventory', 'inventory_transactions', 'users'
+    'enrollments', 'installments', 'inventory', 'inventory_transactions', 'users'
   ];
 
   for (const store of stores) {
