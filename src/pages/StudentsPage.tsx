@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users, DollarSign } from 'lucide-react';
+import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users, DollarSign, FileSpreadsheet } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
+import SheetImportDialog from '../components/SheetImportDialog';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
 import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone, getContrastColor } from '../lib/utils';
 import { SESSIONS_PER_MONTH, sessionPrice, proratedFirstPeriod } from '../lib/billing';
@@ -45,6 +46,7 @@ export default function StudentsPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [showSheetImport, setShowSheetImport] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [initialPayments, setInitialPayments] = useState<Record<string, number>>({});
   const [startSessions, setStartSessions] = useState<Record<string, number>>({});
@@ -448,6 +450,15 @@ export default function StudentsPage() {
                     <span className="hidden sm:inline">استيراد CSV</span>
                     <input type="file" accept=".csv" onChange={handleImportCSV} className="hidden" />
                   </label>
+
+                  <button
+                    onClick={() => setShowSheetImport(true)}
+                    className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    title="استيراد شيت المركز: مدرسين + مجموعات + طلاب"
+                  >
+                    <FileSpreadsheet size={16} />
+                    <span className="hidden sm:inline">استيراد شيت إكسيل</span>
+                  </button>
                 </>
               )}
 
@@ -711,6 +722,13 @@ export default function StudentsPage() {
         onConfirm={() => { if (deleteId) handleDelete(deleteId); setDeleteId(null); }}
         onCancel={() => setDeleteId(null)}
         danger
+      />
+
+      {/* Sheet Import */}
+      <SheetImportDialog
+        open={showSheetImport}
+        onClose={() => setShowSheetImport(false)}
+        onDone={() => { loadStudents(); }}
       />
 
       {/* Bulk Delete Confirm */}
