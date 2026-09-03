@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   GraduationCap, Users, BookOpen, Users2,
-  DollarSign, Clock, TrendingUp, AlertCircle,
+  DollarSign, Clock, TrendingUp, AlertCircle, AlertTriangle,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -9,10 +9,13 @@ import {
 } from 'recharts';
 import Layout from '../components/layout/Layout';
 import { StatCard } from '../components/ui/Card';
-import { dbGetAll, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, Student, Teacher, Group, Course, Payment } from '../lib/db';
+import { dbGetAll, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, getDebtors, Student, Teacher, Group, Course, Payment, DebtorRow } from '../lib/db';
 import { formatDate, formatCurrency, getStatusLabel, getArabicDay } from '../lib/utils';
-import { requestNotificationPermission } from '../lib/notifications';
+import { requestNotificationPermission, showBrowserNotification } from '../lib/notifications';
+import { subscribeDebtAlert, refreshDebtAlert, DebtAlert } from '../lib/debtAlerts';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import { showBackupReminder } from '../lib/autoBackup';
 import dayjs from 'dayjs';
 
@@ -20,6 +23,8 @@ const TODAY_KEY = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frid
 
 export default function DashboardPage() {
   const { settings } = useApp();
+  const { isAdmin } = useAuth();
+  const navigate = useNavigate();
   const primaryColor = settings?.primaryColor || '#6366f1';
 
   const [stats, setStats] = useState({
@@ -36,7 +41,37 @@ export default function DashboardPage() {
   const [genderData, setGenderData] = useState<{ name: string; value: number }[]>([]);
   const [todayGroups, setTodayGroups] = useState<(Group & { courseName: string; teacherName: string })[]>([]);
   const [recentStudents, setRecentStudents] = useState<Student[]>([]);
+  const [debtAlert, setDebtAlert] = useState<DebtAlert | null>(null);
+  const [topDebtors, setTopDebtors] = useState<DebtorRow[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // تنبيهات المديونيات + إشعار المتأخرات (مرة واحدة في اليوم)
+  useEffect(() => {
+    if (!isAdmin()) return;
+    const unsubscribe = subscribeDebtAlert(setDebtAlert);
+    void (async () => {
+      const alert = await refreshDebtAlert();
+      if (alert.debtorsCount > 0) {
+        try {
+          setTopDebtors((await getDebtors()).slice(0, 5));
+        } catch (e) {
+          console.error('top debtors error:', e);
+        }
+      } else {
+        setTopDebtors([]);
+      }
+
+      const key = `debt_alert_notified_${dayjs().format('YYYY-MM-DD')}`;
+      if (alert.overdueCount > 0 && settings?.notifyLatePayment !== false && !localStorage.getItem(key)) {
+        localStorage.setItem(key, 'true');
+        showBrowserNotification(
+          'أقساط متأخرة 💰',
+          `${alert.overdueCount} قسط متأخر على ${alert.debtorsCount} طالب بقيمة ${alert.overdueAmount}`
+        );
+      }
+    })();
+    return unsubscribe;
+  }, [isAdmin, settings?.notifyLatePayment]);
 
   useEffect(() => {
     requestNotificationPermission();
@@ -228,6 +263,20 @@ export default function DashboardPage() {
             color="#f97316"
             subtitle={formatCurrency(stats.pendingAmount, settings?.currency)}
           />
+          {isAdmin() && (
+            <StatCard
+              title="طلاب عليهم مبالغ"
+              value={debtAlert?.debtorsCount ?? 0}
+              icon={<AlertTriangle size={24} />}
+              color="#ef4444"
+              subtitle={
+                debtAlert && debtAlert.debtorsCount > 0
+                  ? `${formatCurrency(debtAlert.totalRemaining, settings?.currency)}${debtAlert.overdueCount > 0 ? ` • ${debtAlert.overdueCount} قسط متأخر` : ''}`
+                  : 'كل الطلاب مسددين'
+              }
+              onClick={() => navigate('/debtors')}
+            />
+          )}
           <StatCard
             title="حصص اليوم"
             value={todayGroups.length}
@@ -295,6 +344,44 @@ export default function DashboardPage() {
             </ResponsiveContainer>
           </div>
         </div>
+
+        {/* تنبيهات المديونيات */}
+        {isAdmin() && topDebtors.length > 0 && (
+          <div className="bg-white rounded-2xl border border-red-100 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-gray-100 flex items-center gap-2">
+              <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                <AlertTriangle size={18} className="text-red-500" /> أعلى المديونيات
+              </h3>
+              <span className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded-full font-medium">
+                {debtAlert?.debtorsCount} طالب • {formatCurrency(debtAlert?.totalRemaining || 0, settings?.currency)}
+              </span>
+              <button onClick={() => navigate('/debtors')}
+                className="mr-auto text-xs font-semibold text-indigo-600 hover:text-indigo-800">
+                عرض كل المديونيات ←
+              </button>
+            </div>
+            <div className="p-3 space-y-2">
+              {topDebtors.map(d => (
+                <button key={d.studentId} onClick={() => navigate(`/students/${d.studentId}`)}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-red-50/60 transition-colors text-right">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 truncate">{d.name}</p>
+                    <p className="text-xs text-gray-500 truncate">
+                      {d.groups.map(g => g.groupName).join('، ') || '—'}
+                      {d.overdueCount > 0 && <span className="text-red-500"> • {d.overdueCount} قسط متأخر</span>}
+                    </p>
+                  </div>
+                  <div className="text-left flex-shrink-0">
+                    <p className="text-sm font-bold text-red-600">{formatCurrency(d.remaining, settings?.currency)}</p>
+                    <p className="text-xs text-gray-400">
+                      {d.lastPaymentDate ? `آخر دفعة من ${d.daysSinceLastPayment} يوم` : 'لم يدفع بعد'}
+                    </p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Today's Schedule & Recent Students */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

@@ -13,6 +13,7 @@ import {
   recordInstallmentPayment,
   transferStudent,
   getTransferHistory,
+  getDebtors,
   rebuildInstallmentsFromPayments,
   markOverdueInstallments,
   migrateInstallments,
@@ -393,5 +394,34 @@ describe('التحويل بين المجموعات/المدرسين', () => {
     expect((await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId2 })).success).toBe(true);
     // دلوقتي هو في مجموعة ب، فالتحويل "من مجموعة أ" تاني لازم يفشل
     expect((await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId2 })).success).toBe(false);
+  });
+});
+
+describe('قائمة المديونيات (getDebtors)', () => {
+  it('بيرجّع الطلاب اللي عليهم متبقي بس، مرتبين من الأكبر', async () => {
+    const a = await seed(800, 1);
+    const b = await seed(1200, 1);
+    const c = await seed(500, 1);
+    await enrollStudent(a.studentId, a.groupId, 300);   // عليه 500
+    await enrollStudent(b.studentId, b.groupId, 0);     // عليه 1200
+    await enrollStudent(c.studentId, c.groupId, 500);   // مسدد
+
+    const debtors = await getDebtors();
+    expect(debtors.map(d => d.studentId)).toEqual([b.studentId, a.studentId]);
+    expect(debtors[0].remaining).toBe(1200);
+    expect(debtors[0].daysSinceLastPayment).toBeNull();     // ما دفعش خالص
+    expect(debtors[1].remaining).toBe(500);
+    expect(debtors[1].lastPaymentDate).toBeTruthy();
+    expect(debtors[1].daysSinceLastPayment).toBe(0);        // دفع النهاردة
+  });
+
+  it('بيستثني الطلاب المنتهيين', async () => {
+    const s = await seed(800, 1);
+    await enrollStudent(s.studentId, s.groupId);
+    expect(await getDebtors()).toHaveLength(1);
+
+    const student = await dbGetById<Student>('students', s.studentId);
+    await dbPut('students', { ...student!, status: 'ended' });
+    expect(await getDebtors()).toHaveLength(0);
   });
 });

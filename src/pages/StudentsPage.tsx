@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users } from 'lucide-react';
+import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users, DollarSign } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -37,6 +37,7 @@ export default function StudentsPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [groupFilter, setGroupFilter] = useState('');
   const [courseFilter, setCourseFilter] = useState('');
+  const [balanceFilter, setBalanceFilter] = useState('');
   const [courses, setCourses] = useState<Course[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
@@ -68,14 +69,20 @@ export default function StudentsPage() {
           matchCourse = studentGroups.some(g => g.courseId === courseFilter);
         }
 
-        return matchSearch && matchStatus && matchGroup && matchCourse;
+        // فلتر المتبقي (مبني على المستحقات المحسوبة على الطالب)
+        const remaining = (s.totalOwed || 0) - s.totalPaid;
+        const matchBalance = !balanceFilter
+          || (balanceFilter === 'debt' && remaining > 0)
+          || (balanceFilter === 'settled' && remaining <= 0);
+
+        return matchSearch && matchStatus && matchGroup && matchCourse && matchBalance;
       });
       setStudents(result.items);
       setTotal(result.total);
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch, statusFilter, groupFilter, courseFilter]);
+  }, [page, debouncedSearch, statusFilter, groupFilter, courseFilter, balanceFilter]);
 
   useEffect(() => {
     loadStudents();
@@ -83,7 +90,7 @@ export default function StudentsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, groupFilter, courseFilter]);
+  }, [search, statusFilter, groupFilter, courseFilter, balanceFilter]);
 
   // Sync search query from the header's global search box (e.g. /students?q=...)
   useEffect(() => {
@@ -400,6 +407,20 @@ export default function StudentsPage() {
                 {groups.filter(g => !courseFilter || g.courseId === courseFilter).map(g => (
                   <option key={g.id} value={g.id}>{g.name}</option>
                 ))}
+              </select>
+            </div>
+
+            {/* Balance Filter */}
+            <div className="relative">
+              <DollarSign size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <select
+                value={balanceFilter}
+                onChange={e => setBalanceFilter(e.target.value)}
+                className="pr-9 pl-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+              >
+                <option value="">كل الأرصدة</option>
+                <option value="debt">عليهم مبالغ</option>
+                <option value="settled">مسددين</option>
               </select>
             </div>
 
