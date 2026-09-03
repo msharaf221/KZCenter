@@ -8,6 +8,7 @@ import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
 import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone, getContrastColor } from '../lib/utils';
+import { SESSIONS_PER_MONTH, sessionPrice, proratedFirstPeriod } from '../lib/billing';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyNewStudent } from '../lib/notifications';
@@ -45,6 +46,7 @@ export default function StudentsPage() {
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [initialPayments, setInitialPayments] = useState<Record<string, number>>({});
+  const [startSessions, setStartSessions] = useState<Record<string, number>>({});
 
   const loadStudents = useCallback(async () => {
     setLoading(true);
@@ -93,12 +95,14 @@ export default function StudentsPage() {
     setEditingStudent(null);
     setForm(INITIAL_FORM);
     setInitialPayments({});
+    setStartSessions({});
     setShowModal(true);
   }
 
   function openEdit(student: Student) {
     setEditingStudent(student);
     setInitialPayments({});
+    setStartSessions({});
     setForm({
       name: student.name, age: student.age, gender: student.gender,
       phone: student.phone || '', parentPhone: student.parentPhone,
@@ -178,10 +182,16 @@ export default function StudentsPage() {
       }
       for (const groupId of addedGroups) {
         const paidAmount = initialPayments[groupId] || 0;
+        const fromSession = startSessions[groupId] || 1;
         try {
-          const result = await enrollStudent(studentId, groupId, paidAmount > 0 ? paidAmount : undefined);
+          const result = await enrollStudent(
+            studentId,
+            groupId,
+            paidAmount > 0 ? paidAmount : undefined,
+            { startSession: fromSession }
+          );
           if (!result.success) {
-            console.error(`Failed to enroll ${studentId} in ${groupId}:`, result.error);
+            notify.error(`تعذّر التسجيل في "${groups.find(g => g.id === groupId)?.name}": ${result.error}`);
           }
         } catch (e) {
           console.error(`Failed to enroll ${studentId} in ${groupId}:`, e);
@@ -600,20 +610,52 @@ export default function StudentsPage() {
                           const newPayments = { ...initialPayments };
                           delete newPayments[g.id];
                           setInitialPayments(newPayments);
+                          const newSessions = { ...startSessions };
+                          delete newSessions[g.id];
+                          setStartSessions(newSessions);
                         }
                       }}
                       className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500" />
                     <span className="text-sm font-medium">{g.name}</span>
                     <span className="text-xs text-gray-400">({g.studentIds.length}/{g.maxStudents})</span>
                   </label>
-                  {form.enrolledGroups.includes(g.id) && (!editingStudent || !editingStudent.enrolledGroups?.includes(g.id)) && (
-                    <div className="pl-6">
-                      <input type="number" placeholder="المبلغ المدفوع (اختياري)" min="0"
-                        value={initialPayments[g.id] || ''}
-                        onChange={e => setInitialPayments({...initialPayments, [g.id]: +e.target.value})}
-                        className="w-full sm:w-1/2 px-3 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500" />
-                    </div>
-                  )}
+                  {form.enrolledGroups.includes(g.id) && (!editingStudent || !editingStudent.enrolledGroups?.includes(g.id)) && (() => {
+                    const course = courses.find(c => c.id === g.courseId);
+                    const sess = startSessions[g.id] || 1;
+                    const remainingSessions = SESSIONS_PER_MONTH - sess + 1;
+                    const firstPeriod = sess > 1 && course ? proratedFirstPeriod(course.price, sess) : (course?.price || 0);
+                    return (
+                      <div className="pl-6 space-y-1">
+                        <div className="flex flex-wrap gap-2">
+                          <input type="number" placeholder="المبلغ المدفوع (اختياري)" min="0"
+                            value={initialPayments[g.id] || ''}
+                            onChange={e => setInitialPayments({...initialPayments, [g.id]: +e.target.value})}
+                            className="flex-1 min-w-[140px] px-3 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500" />
+                          <select value={sess}
+                            onChange={e => setStartSessions({...startSessions, [g.id]: +e.target.value})}
+                            title="من الحصة رقم كام؟ (للالتحاق في نص الكورس)"
+                            className="px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none bg-white">
+                            {Array.from({ length: SESSIONS_PER_MONTH }, (_, i) => i + 1).map(n => (
+                              <option key={n} value={n}>{n === 1 ? 'من أول حصة' : `من الحصة ${n}`}</option>
+                            ))}
+                          </select>
+                        </div>
+                        {course && (
+                          <p className="text-xs text-gray-400">
+                            {sess > 1 ? (
+                              <>
+                                الشهر الأول: <strong className="text-indigo-600">{formatCurrency(firstPeriod, settings?.currency)}</strong>
+                                {' '}({remainingSessions} حصة × {formatCurrency(sessionPrice(course.price), settings?.currency)})
+                              </>
+                            ) : (
+                              <>الشهر الأول كامل: <strong>{formatCurrency(course.price, settings?.currency)}</strong></>
+                            )}
+                            {course.durationMonths > 1 && ` • بعده ${course.durationMonths - 1} شهر × ${formatCurrency(course.price, settings?.currency)}`}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               ))}
               {groups.length === 0 && <p className="text-sm text-gray-500 text-center py-2">لا توجد مجموعات متاحة</p>}

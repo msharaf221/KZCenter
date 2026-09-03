@@ -5,6 +5,8 @@ import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
+import TransferDialog from '../components/TransferDialog';
+import { SESSIONS_PER_MONTH } from '../lib/billing';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, enrollStudent, unenrollStudent, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
 import { getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
@@ -38,6 +40,8 @@ export default function GroupsPage() {
   const [viewGroup, setViewGroup] = useState<Group | null>(null);
   const [selectedStudentToAdd, setSelectedStudentToAdd] = useState('');
   const [paymentAmountToAdd, setPaymentAmountToAdd] = useState<number | ''>('');
+  const [startSessionToAdd, setStartSessionToAdd] = useState(1);
+  const [transferTarget, setTransferTarget] = useState<{ studentId: string; studentName: string; fromGroupId: string } | null>(null);
   const [form, setForm] = useState({
     name: '', courseId: '', levelId: '', teacherId: '',
     maxStudents: 20, status: 'open' as GroupStatus,
@@ -150,17 +154,32 @@ export default function GroupsPage() {
     if (!studentId) return;
     
     try {
-      const result = await enrollStudent(studentId, groupId, paymentAmountToAdd ? Number(paymentAmountToAdd) : undefined);
+      const result = await enrollStudent(
+        studentId,
+        groupId,
+        paymentAmountToAdd ? Number(paymentAmountToAdd) : undefined,
+        { startSession: startSessionToAdd }
+      );
       if (!result.success) {
         notify.error(result.error || 'حدث خطأ');
         return;
       }
-      notify.success('تم إضافة الطالب إلى المجموعة');
+      notify.success(
+        startSessionToAdd > 1
+          ? `تم إضافة الطالب إلى المجموعة (من الحصة ${startSessionToAdd})`
+          : 'تم إضافة الطالب إلى المجموعة'
+      );
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'update', entity: 'group', entityId: groupId,
+        details: `إضافة طالب إلى المجموعة${startSessionToAdd > 1 ? ` من الحصة ${startSessionToAdd}` : ''}${paymentAmountToAdd ? ` — دفعة ${paymentAmountToAdd}` : ''}`,
+      });
       load();
       const updatedGroup = await dbGetAll<Group>('groups').then(gs => gs.find(g => g.id === groupId));
       if (viewGroup && updatedGroup) setViewGroup(updatedGroup);
       setSelectedStudentToAdd('');
       setPaymentAmountToAdd('');
+      setStartSessionToAdd(1);
     } catch (e) {
       console.error('addStudentToGroup error:', e);
       notify.error('حدث خطأ');
@@ -356,12 +375,22 @@ export default function GroupsPage() {
             <input type="number" placeholder="المبلغ المدفوع (اختياري)" min="0"
               value={paymentAmountToAdd} onChange={e => setPaymentAmountToAdd(e.target.value === '' ? '' : +e.target.value)}
               className="w-full sm:w-1/3 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+            <select value={startSessionToAdd} onChange={e => setStartSessionToAdd(+e.target.value)}
+              title="من الحصة رقم كام؟ (للالتحاق في نص الكورس)"
+              className="w-full sm:w-32 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
+              {Array.from({ length: SESSIONS_PER_MONTH }, (_, i) => i + 1).map(n => (
+                <option key={n} value={n}>{n === 1 ? 'من أول حصة' : `من الحصة ${n}`}</option>
+              ))}
+            </select>
             <button onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
               className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors"
               style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
               إضافة
             </button>
           </div>
+          <p className="text-xs text-gray-400 -mt-2 mb-3">
+            الالتحاق في نص الكورس: الشهر الأول بيتحسب على الحصص الباقية بس ({SESSIONS_PER_MONTH} حصص/شهر)
+          </p>
           <div className="space-y-2">
             {viewGroup.studentIds.length === 0 ? (
               <p className="text-center text-gray-400 py-6">لا يوجد طلاب في هذه المجموعة</p>
@@ -377,15 +406,39 @@ export default function GroupsPage() {
                       <p className="text-xs text-gray-500">{student.parentPhone}</p>
                     </div>
                   </div>
-                  <button onClick={() => removeStudentFromGroup(viewGroup.id, sid)}
-                    className="text-xs text-red-600 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors">
-                    إزالة
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setTransferTarget({ studentId: sid, studentName: student.name, fromGroupId: viewGroup.id })}
+                      className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
+                      تحويل
+                    </button>
+                    <button onClick={() => removeStudentFromGroup(viewGroup.id, sid)}
+                      className="text-xs text-red-600 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors">
+                      إزالة
+                    </button>
+                  </div>
                 </div>
               );
             })}
           </div>
         </Modal>
+      )}
+
+      {/* تحويل طالب لمجموعة/مدرس آخر */}
+      {transferTarget && (
+        <TransferDialog
+          open={!!transferTarget}
+          studentId={transferTarget.studentId}
+          studentName={transferTarget.studentName}
+          fromGroupId={transferTarget.fromGroupId}
+          groups={groups}
+          courses={courses}
+          teachers={teachers}
+          onClose={() => setTransferTarget(null)}
+          onDone={() => {
+            load();
+            setViewGroup(null);
+          }}
+        />
       )}
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف المجموعة" message="هل أنت متأكد؟ سيتم إلغاء تسجيل جميع الطلاب من هذه المجموعة وإعادة حساب مستحقاتهم."

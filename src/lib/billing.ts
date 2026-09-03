@@ -147,7 +147,7 @@ export interface ApplyPaymentResult {
 }
 
 /**
- * توزيع دفعة على الأقساط: الأقدم استحقاقاً الأول، ثم بالأقل دفْعاً.
+ * توزيع دفعة على الأقساط: الأقدم استحقاقاً الأول، وبعدها الأقدم تسجيلاً، ثم رقم القسط.
  * لا تعدّل المصفوفة الأصلية (ترجع نسخة جديدة).
  */
 export function applyPayment(
@@ -162,8 +162,11 @@ export function applyPayment(
   const order = updated
     .filter(i => i.status !== 'cancelled' && installmentRemaining(i) > 0)
     .sort((a, b) => {
+      // 1) الأقدم استحقاقاً  2) الأقدم تسجيلاً  3) رقم القسط
       const byDate = dayjs(a.dueDate).valueOf() - dayjs(b.dueDate).valueOf();
       if (byDate !== 0) return byDate;
+      const byCreated = (a.createdAt || '').localeCompare(b.createdAt || '');
+      if (byCreated !== 0) return byCreated;
       return a.periodIndex - b.periodIndex;
     });
 

@@ -1,13 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall, ClipboardCheck, GraduationCap, Receipt, AlertTriangle } from 'lucide-react';
+import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall, ClipboardCheck, GraduationCap, Receipt, AlertTriangle, ArrowLeftRight } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import {
-  dbGetById, dbGetAll, dbGetByIndex, getStudentBalance, recordInstallmentPayment,
-  Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher, StudentBalance, Installment,
+  dbGetById, dbGetAll, dbGetByIndex, getStudentBalance, recordInstallmentPayment, getTransferHistory,
+  Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher, StudentBalance, Installment, TransferRecord,
 } from '../lib/db';
 import { INSTALLMENT_STATUS_LABEL } from '../lib/billing';
+import TransferDialog from '../components/TransferDialog';
 import { formatDate, formatCurrency, getWhatsAppLink, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -36,6 +37,11 @@ export default function StudentProfilePage() {
   const [attendance, setAttendance] = useState<Attendance[]>([]);
   const [examResults, setExamResults] = useState<(Grade & { examName: string; maxGrade: number; examDate: string })[]>([]);
   const [balance, setBalance] = useState<StudentBalance | null>(null);
+  const [transfers, setTransfers] = useState<TransferRecord[]>([]);
+  const [allGroups, setAllGroups] = useState<Group[]>([]);
+  const [allCourses, setAllCourses] = useState<Course[]>([]);
+  const [allTeachers, setAllTeachers] = useState<Teacher[]>([]);
+  const [transferFrom, setTransferFrom] = useState<{ groupId: string; groupName: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
   // نافذة تحصيل دفعة (كاملة أو جزئية)
@@ -55,6 +61,9 @@ export default function StudentProfilePage() {
       const allGroups = await dbGetAll<Group>('groups');
       const allCourses = await dbGetAll<Course>('courses');
       const allTeachers = await dbGetAll<Teacher>('teachers');
+      setAllGroups(allGroups);
+      setAllCourses(allCourses);
+      setAllTeachers(allTeachers);
       
       const studentGroups = allGroups.filter(g => s.enrolledGroups?.includes(g.id));
       const enrichedGroups = studentGroups.map(g => ({
@@ -69,6 +78,9 @@ export default function StudentProfilePage() {
 
       // المستحقات والأقساط
       setBalance(await getStudentBalance(id));
+
+      // سجل التحويلات
+      setTransfers(await getTransferHistory(id));
 
       // سجل الحضور (using index for efficiency)
       const studentAttendance = await dbGetByIndex<Attendance>('attendance', 'by-studentId', id);
@@ -187,14 +199,22 @@ export default function StudentProfilePage() {
             <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><BookOpen className="text-indigo-500" /> المجموعات والمدرسين</h2>
             <div className="overflow-auto flex-1 max-h-[300px]">
               <table className="w-full text-right">
-                <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المجموعة</th><th className="pb-3 font-semibold">الكورس</th><th className="pb-3 font-semibold text-center">المدرس</th></tr></thead>
+                <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المجموعة</th><th className="pb-3 font-semibold">الكورس</th><th className="pb-3 font-semibold text-center">المدرس</th>{canCollect && <th className="pb-3 font-semibold text-center">إجراءات</th>}</tr></thead>
                 <tbody className="divide-y divide-gray-50 text-sm">
-                  {groups.length === 0 ? <tr><td colSpan={3} className="py-4 text-center text-gray-400">لا توجد مجموعات</td></tr> :
+                  {groups.length === 0 ? <tr><td colSpan={canCollect ? 4 : 3} className="py-4 text-center text-gray-400">لا توجد مجموعات</td></tr> :
                    groups.map(g => (
                     <tr key={g.id} className="hover:bg-gray-50">
                       <td className="py-3 font-medium">{g.name}</td>
                       <td className="py-3 text-gray-600">{g.courseName}</td>
                       <td className="py-3 text-center text-indigo-600 font-medium hover:underline cursor-pointer" onClick={() => navigate(`/teachers/${g.teacherId}`)}>{g.teacherName}</td>
+                      {canCollect && (
+                        <td className="py-3 text-center">
+                          <button onClick={() => setTransferFrom({ groupId: g.id, groupName: g.name })}
+                            className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
+                            تحويل
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -323,6 +343,38 @@ export default function StudentProfilePage() {
           )}
         </div>
 
+        {/* سجل التحويلات */}
+        {transfers.length > 0 && (
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <ArrowLeftRight className="text-indigo-500" /> سجل التحويلات
+              <span className="text-xs font-normal text-gray-400">({transfers.length})</span>
+            </h2>
+            <div className="overflow-auto max-h-[220px]">
+              <table className="w-full text-right text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 text-xs text-gray-500">
+                    <th className="pb-3 font-semibold">التاريخ</th>
+                    <th className="pb-3 font-semibold">من</th>
+                    <th className="pb-3 font-semibold">إلى</th>
+                    <th className="pb-3 font-semibold">السبب</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {transfers.map(t => (
+                    <tr key={t.id} className="hover:bg-gray-50">
+                      <td className="py-2.5 text-gray-500 text-xs">{formatDate(t.date)}</td>
+                      <td className="py-2.5 text-gray-700">{t.fromGroupName}</td>
+                      <td className="py-2.5 font-medium text-indigo-600">{t.toGroupName}</td>
+                      <td className="py-2.5 text-gray-500 text-xs">{t.reason || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* ملخص الحضور */}
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden flex flex-col">
@@ -396,6 +448,21 @@ export default function StudentProfilePage() {
           </div>
         </div>
       </div>
+
+      {/* تحويل لمجموعة/مدرس آخر */}
+      {transferFrom && (
+        <TransferDialog
+          open={!!transferFrom}
+          studentId={student.id}
+          studentName={student.name}
+          fromGroupId={transferFrom.groupId}
+          groups={allGroups}
+          courses={allCourses}
+          teachers={allTeachers}
+          onClose={() => setTransferFrom(null)}
+          onDone={() => loadData()}
+        />
+      )}
 
       {/* نافذة تحصيل دفعة (كاملة أو جزئية) */}
       {payTarget && (

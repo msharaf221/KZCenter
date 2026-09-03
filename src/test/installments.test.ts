@@ -11,10 +11,13 @@ import {
   getStudentInstallments,
   payStudentRemaining,
   recordInstallmentPayment,
+  transferStudent,
+  getTransferHistory,
   rebuildInstallmentsFromPayments,
   markOverdueInstallments,
   migrateInstallments,
   dbAdd,
+  dbPut,
   dbSoftDelete,
   dbGetById,
   dbGetByIndex,
@@ -261,5 +264,134 @@ describe('ترحيل البيانات القديمة', () => {
     const second = await migrateInstallments();
     expect(second.installmentsCreated).toBe(0);
     expect((await getStudentInstallments(studentId))).toHaveLength(2);
+  });
+});
+
+describe('الالتحاق في نص الكورس (التسعير بالحصص)', () => {
+  it('الالتحاق من الحصة التالتة بيحاسب على 6 حصص في الشهر الأول', async () => {
+    const { groupId, studentId } = await seed(800, 3);
+    await enrollStudent(studentId, groupId, 0, { startSession: 3 });
+
+    const installments = await getStudentInstallments(studentId);
+    expect(installments.map(i => i.amount)).toEqual([600, 800, 800]);
+    expect((await getStudentBalance(studentId))?.owed).toBe(2200);
+  });
+
+  it('الالتحاق من آخر حصة بيحاسب على حصة واحدة', async () => {
+    const { groupId, studentId } = await seed(800, 1);
+    await enrollStudent(studentId, groupId, 0, { startSession: 8 });
+    expect((await getStudentBalance(studentId))?.owed).toBe(100);
+  });
+
+  it('startSession = 1 ما يغيّرش السعر (الشهر كامل)', async () => {
+    const { groupId, studentId } = await seed(800, 1);
+    await enrollStudent(studentId, groupId, 0, { startSession: 1 });
+    expect((await getStudentBalance(studentId))?.owed).toBe(800);
+  });
+});
+
+describe('التحويل بين المجموعات/المدرسين', () => {
+  async function seedSecondGroup(price = 800, durationMonths = 3) {
+    const base = await seed(price, durationMonths);
+    const firstGroup = await dbGetById<Group>('groups', base.groupId);
+    const groupId2 = generateId();
+    await dbAdd<Group>('groups', {
+      id: groupId2, name: 'مجموعة ب', courseId: firstGroup!.courseId, teacherId: 't2', schedule: [],
+      maxStudents: 20, status: 'open', studentIds: [], createdAt: NOW, updatedAt: NOW,
+    });
+    return { ...base, groupId2 };
+  }
+
+  it('بيحوّل التعليم ويلغي أقساط المجموعة القديمة ويرحّل المدفوع', async () => {
+    const { groupId, groupId2, studentId } = await seedSecondGroup(800, 3);
+    await enrollStudent(studentId, groupId, 1000);
+    expect((await getStudentBalance(studentId))?.remaining).toBe(1400);
+
+    const result = await transferStudent({
+      studentId, fromGroupId: groupId, toGroupId: groupId2, reason: 'تغيير المدرس',
+    });
+    expect(result.success).toBe(true);
+    expect(result.credit).toBe(1000);
+    expect(result.remainingBefore).toBe(1400);
+    expect(result.remainingAfter).toBe(1400);   // نفس السعر → نفس المتبقي
+
+    const balance = await getStudentBalance(studentId);
+    expect(balance?.groups).toHaveLength(1);
+    expect(balance?.groups[0].groupId).toBe(groupId2);
+    expect(balance?.owed).toBe(2400);
+    expect(balance?.paid).toBe(1000);
+
+    // القوائم المتطبيعة اتحدثت في الاتجاهين
+    const student = await dbGetById<Student>('students', studentId);
+    expect(student?.enrolledGroups).toEqual([groupId2]);
+    expect((await dbGetById<Group>('groups', groupId))?.studentIds).not.toContain(studentId);
+    expect((await dbGetById<Group>('groups', groupId2))?.studentIds).toContain(studentId);
+  });
+
+  it('لو المجموعة الجديدة أغلى، الفرق يظهر كمتبقي', async () => {
+    const { groupId, studentId } = await seed(800, 1);
+    const course2 = generateId();
+    const groupId2 = generateId();
+    await dbAdd<Course>('courses', {
+      id: course2, name: 'فيزياء', category: 'علوم', price: 1200, durationMonths: 1,
+      icon: '⚛️', color: '#3b82f6', levels: [], createdAt: NOW, updatedAt: NOW,
+    });
+    await dbAdd<Group>('groups', {
+      id: groupId2, name: 'فيزياء أ', courseId: course2, teacherId: 't2', schedule: [],
+      maxStudents: 20, status: 'open', studentIds: [], createdAt: NOW, updatedAt: NOW,
+    });
+
+    await enrollStudent(studentId, groupId, 800);
+    expect((await getStudentBalance(studentId))?.remaining).toBe(0);
+
+    const result = await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId2 });
+    expect(result.credit).toBe(800);
+    expect(result.remainingAfter).toBe(400);    // 1200 - 800
+  });
+
+  it('بيسجل التحويل في سجل التحويلات', async () => {
+    const { groupId, groupId2, studentId } = await seedSecondGroup(800, 1);
+    await enrollStudent(studentId, groupId);
+    await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId2, reason: 'تغيير المدرس' });
+
+    const history = await getTransferHistory(studentId);
+    expect(history).toHaveLength(1);
+    expect(history[0].fromGroupName).toBe('مجموعة أ');
+    expect(history[0].toGroupName).toBe('مجموعة ب');
+    expect(history[0].toGroupId).toBe(groupId2);
+    expect(history[0].reason).toBe('تغيير المدرس');
+  });
+
+  it('التحويل بيدعم الالتحاق من حصة معينة في المجموعة الجديدة', async () => {
+    const { groupId, groupId2, studentId } = await seedSecondGroup(800, 1);
+    await enrollStudent(studentId, groupId, 800);
+
+    await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId2, startSession: 3 });
+
+    const balance = await getStudentBalance(studentId);
+    expect(balance?.owed).toBe(600);        // 6 حصص × 100
+    expect(balance?.remaining).toBe(-200);  // الرصيد المرحّل (800) أكبر من المستحق → فائض 200
+  });
+
+  it('بيرفض: نفس المجموعة / مش مسجل / مجموعة مكتملة', async () => {
+    const { groupId, groupId2, studentId } = await seedSecondGroup(800, 1);
+    await enrollStudent(studentId, groupId);
+
+    expect((await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId })).success).toBe(false);
+    expect((await transferStudent({ studentId, fromGroupId: groupId2, toGroupId: groupId })).error)
+      .toContain('غير مسجل');
+
+    const target = await dbGetById<Group>('groups', groupId2);
+    await dbPut('groups', { ...target!, maxStudents: 0 });
+    expect((await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId2 })).error)
+      .toContain('مكتملة');
+  });
+
+  it('بيرفض التحويل مرتين لنفس المجموعة', async () => {
+    const { groupId, groupId2, studentId } = await seedSecondGroup(800, 1);
+    await enrollStudent(studentId, groupId);
+    expect((await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId2 })).success).toBe(true);
+    // دلوقتي هو في مجموعة ب، فالتحويل "من مجموعة أ" تاني لازم يفشل
+    expect((await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId2 })).success).toBe(false);
   });
 });

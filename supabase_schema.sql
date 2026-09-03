@@ -216,13 +216,25 @@ CREATE TABLE IF NOT EXISTS enrollments (
   enrolled_at TIMESTAMPTZ DEFAULT NOW(),
   dropped_at TIMESTAMPTZ,
   drop_reason TEXT,
+  start_session INTEGER,
+  transferred_to_group_id UUID REFERENCES groups(id) ON DELETE SET NULL,
   initial_payment DECIMAL(10,2) DEFAULT 0,
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  deleted BOOLEAN DEFAULT FALSE,
-  UNIQUE(student_id, group_id)
+  deleted BOOLEAN DEFAULT FALSE
 );
+
+-- ملاحظة: القيد الفريد (student_id, group_id) اتشال لأن التحويل بين المجموعات
+-- بيخلي الطالب ممكن يكون ليه أك من سجل تعليم لنفس المجموعة عبر الوقت
+-- (واحد قديم بحالة transferred/dropped وواحد نشط).
+-- البديل: قيد فريد جزئي على التسجيلات النشطة فقط.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_enrollment
+  ON enrollments(student_id, group_id) WHERE status = 'active' AND deleted = FALSE;
+
+-- أعمدة مضافة للإصدارات القائمة
+ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS start_session INTEGER;
+ALTER TABLE enrollments ADD COLUMN IF NOT EXISTS transferred_to_group_id UUID REFERENCES groups(id) ON DELETE SET NULL;
 
 -- Installments table (الأقساط/المستحقات — وحدة الدين الحقيقية لكل تسجيل)
 CREATE TABLE IF NOT EXISTS installments (
