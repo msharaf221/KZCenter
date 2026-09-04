@@ -201,47 +201,15 @@ export function clearSession(): void {
 }
 
 // ==================== AUDIT LOG ====================
-
-export interface AuditEntry {
-  id: string;
-  userId: string;
-  username: string;
-  action: 'create' | 'update' | 'delete' | 'login' | 'logout' | 'export' | 'import' | 'backup';
-  entity: string;
-  entityId?: string;
-  details?: string;
-  timestamp: string;
-  ip?: string;
-}
-
-const AUDIT_STORAGE_KEY = 'educenter_audit_log';
-const MAX_AUDIT_ENTRIES = 500;
-
-export function getAuditLog(): AuditEntry[] {
-  try {
-    return JSON.parse(localStorage.getItem(AUDIT_STORAGE_KEY) || '[]');
-  } catch {
-    return [];
-  }
-}
-
-export function addAuditEntry(entry: Omit<AuditEntry, 'id' | 'timestamp'>): void {
-  const log = getAuditLog();
-  const newEntry: AuditEntry = {
-    ...entry,
-    id: crypto.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).substring(2),
-    timestamp: new Date().toISOString(),
-  };
-  log.unshift(newEntry);
-  if (log.length > MAX_AUDIT_ENTRIES) log.pop();
-  localStorage.setItem(AUDIT_STORAGE_KEY, JSON.stringify(log));
-  window.dispatchEvent(new Event('audit_log_updated'));
-}
-
-export function clearAuditLog(): void {
-  localStorage.setItem(AUDIT_STORAGE_KEY, '[]');
-  window.dispatchEvent(new Event('audit_log_updated'));
-}
+/**
+ * سجل المراجعة اتنقل لـ IndexedDB (شوف src/lib/audit.ts) عشان:
+ *  - يكون مركزي بين الأجهزة مش per-device في localStorage
+ *  - يدخل في النسخ الاحتياطي والمزامنة
+ *  - ما يتمسحش بمسح بيانات المتصفح
+ * الدوال هنا re-export عشان كل الاستيرادات القديمة تفضل شغالة.
+ */
+export { addAuditEntry, clearAuditLog, getAuditEntries, auditStats, migrateAuditFromLocalStorage } from './audit';
+export type { AuditEntry, AuditAction } from './audit';
 
 // ==================== PASSWORD VALIDATION ====================
 

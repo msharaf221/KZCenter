@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { Trash2, Download, Search, Filter, Shield } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import { getAuditLog, clearAuditLog, AuditEntry } from '../lib/security';
+import { getAuditEntries, clearAuditLog, AuditEntry } from '../lib/security';
+import { useAuth } from '../contexts/AuthContext';
 import { formatDate, formatDateTime, toCSV, downloadCSV } from '../lib/utils';
 import { notify } from '../lib/notifications';
 
@@ -29,6 +30,7 @@ const ACTION_COLORS: Record<string, string> = {
 };
 
 export default function AuditLogPage() {
+  const { user } = useAuth();
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [filteredEntries, setFilteredEntries] = useState<AuditEntry[]>([]);
   const [search, setSearch] = useState('');
@@ -36,8 +38,8 @@ export default function AuditLogPage() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   useEffect(() => {
-    loadLog();
-    const handler = () => loadLog();
+    void loadLog();
+    const handler = () => { void loadLog(); };
     window.addEventListener('audit_log_updated', handler);
     return () => window.removeEventListener('audit_log_updated', handler);
   }, []);
@@ -58,13 +60,16 @@ export default function AuditLogPage() {
     setFilteredEntries(filtered);
   }, [entries, search, actionFilter]);
 
-  function loadLog() {
-    setEntries(getAuditLog());
+  async function loadLog() {
+    // السجل دلوقتي في IndexedDB (مركزي + بيتنسخ + بيتزامن) مش في localStorage
+    const rows = await getAuditEntries();
+    setEntries(rows);
   }
 
-  function handleClear() {
-    clearAuditLog();
+  async function handleClear() {
+    await clearAuditLog({ userId: user?.id || 'unknown', username: user?.username || 'غير معروف' });
     setShowClearConfirm(false);
+    await loadLog();
     notify.success('تم مسح سجل المراجعة');
   }
 

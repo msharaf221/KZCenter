@@ -124,9 +124,22 @@ export default function InventoryPage() {
 
   const filteredItems = items.filter(i => i.name.toLowerCase().includes(search.trim().toLowerCase()));
 
+  // حد تنبيه نقص المخزون من الإعدادات (افتراضي 5)
+  const lowThreshold = settings?.lowStockThreshold ?? 5;
+  const lowStockItems = items.filter(i => !i.deleted && i.stock <= lowThreshold);
+
   return (
     <Layout title="الملازم والمخزن">
       <div className="space-y-6">
+        {lowStockItems.length > 0 && (
+          <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-sm text-red-700">
+            <p className="font-bold mb-1">⚠️ تنبيه نقص مخزون ({lowStockItems.length})</p>
+            <p className="text-red-600">
+              {lowStockItems.slice(0, 6).map(i => `${i.name} (${i.stock})`).join(' · ')}
+              {lowStockItems.length > 6 ? ' …' : ''}
+            </p>
+          </div>
+        )}
         <div className="flex flex-col sm:flex-row gap-4 justify-between items-start sm:items-center">
           <div className="relative w-full sm:w-96">
             <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
@@ -177,7 +190,7 @@ export default function InventoryPage() {
                     <td className="p-4 text-center text-sm font-medium text-gray-900">{formatCurrency(item.costPrice, settings?.currency)}</td>
                     <td className="p-4 text-center text-sm font-bold text-green-600">{formatCurrency(item.sellPrice, settings?.currency)}</td>
                     <td className="p-4 text-center">
-                      <span className={`font-bold ${item.stock <= 5 ? 'text-red-600' : 'text-gray-900'}`}>
+                      <span className={`font-bold ${item.stock <= lowThreshold ? 'text-red-600' : 'text-gray-900'}`}>
                         {item.stock}
                       </span>
                     </td>

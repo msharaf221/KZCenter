@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, Clock, AlertCircle, LogOut, Save, MessageCircle } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, AlertCircle, LogOut, Save, MessageCircle, Printer } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import { dbGetAll, dbAdd, dbPut, getGroupAttendanceForDate, getGroupStudents, generateId, Group, Student, Course, Attendance, AttendanceStatus } from '../lib/db';
 import { formatDate, getWhatsAppLink, getContrastColor } from '../lib/utils';
@@ -7,6 +7,7 @@ import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyAttendanceSaved, notifyAbsence } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
+import { printTable } from '../lib/printing';
 import dayjs from 'dayjs';
 
 export default function AttendancePage() {
@@ -29,6 +30,7 @@ export default function AttendancePage() {
     if (selectedGroup && selectedDate) {
       loadAttendance();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- مقصود: إعادة التحميل مربوطة بالـ deps المكتوبة بس
   }, [selectedGroup, selectedDate]);
 
   async function loadData() {
@@ -117,6 +119,42 @@ export default function AttendancePage() {
     } catch { notify.error('حدث خطأ'); }
   }
 
+  /** ورقة حضور قابلة للطباعة (RTL) للقائمة والحالة الحالية */
+  function handlePrintSheet() {
+    if (!selectedGroup) { notify.error('اختر مجموعة الأول'); return; }
+    const group = groups.find(g => g.id === selectedGroup);
+    const course = courses.find(c => c.id === group?.courseId);
+    const statusLabel: Record<AttendanceStatus, string> = {
+      present: 'حاضر', absent: 'غائب', late: 'متأخر', excused: 'مستأذن',
+    };
+    const rows = groupStudents.map((s, i) => ({
+      no: i + 1,
+      name: s.name,
+      status: attendanceMap[s.id] ? statusLabel[attendanceMap[s.id]] : '—',
+    }));
+    printTable({
+      title: `ورقة حضور — ${group?.name ?? ''}`,
+      subtitle: course ? `كورس: ${course.name}` : undefined,
+      settings,
+      meta: [
+        { label: 'التاريخ', value: formatDate(selectedDate, 'YYYY/MM/DD') },
+        { label: 'المجموعة', value: group?.name ?? '' },
+      ],
+      totals: [
+        { label: 'حاضر', value: String(counts.present) },
+        { label: 'غائب', value: String(counts.absent) },
+        { label: 'متأخر', value: String(counts.late) },
+        { label: 'مستأذن', value: String(counts.excused) },
+      ],
+      rows,
+      columns: [
+        { key: 'no', label: '#', align: 'center', width: '40px' },
+        { key: 'name', label: 'اسم الطالب' },
+        { key: 'status', label: 'الحالة', align: 'center' },
+      ],
+    });
+  }
+
   const statusButtons = [
     { status: 'present' as AttendanceStatus, label: 'حاضر', icon: <CheckCircle size={14} />, color: 'bg-green-100 text-green-700 border-green-200' },
     { status: 'absent' as AttendanceStatus, label: 'غائب', icon: <XCircle size={14} />, color: 'bg-red-100 text-red-700 border-red-200' },
@@ -153,6 +191,10 @@ export default function AttendancePage() {
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
             </div>
             <div className="flex items-end gap-2">
+              <button onClick={handlePrintSheet} title="طباعة ورقة الحضور"
+                className="py-2.5 px-3 bg-gray-50 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-100 transition-colors no-print">
+                <Printer size={16} />
+              </button>
               <button onClick={() => setAll('present')}
                 className="flex-1 py-2.5 bg-green-50 text-green-700 rounded-xl text-sm font-medium hover:bg-green-100 transition-colors">
                 ✓ الكل حاضر

@@ -4,11 +4,13 @@ import {
   PieChart, Pie, Cell, Legend,
 } from 'recharts';
 import Layout from '../components/layout/Layout';
-import { dbGetAll } from '../lib/db';
-import type { Student, Teacher, Course, Group, Payment, Expense } from '../lib/db';
-import { formatCurrency, toCSV, downloadCSV } from '../lib/utils';
+import { dbGetAll, getRefunds, installmentRemaining } from '../lib/db';
+import type { Student, Teacher, Course, Group, Payment, Expense, Refund, Installment } from '../lib/db';
+import { formatCurrency, formatDate, toCSV, downloadCSV } from '../lib/utils';
+import { calcGroupProfitability, type GroupProfit } from '../lib/payroll';
+import { debtAging, upcomingDues, AGING_RANGES } from '../lib/billing';
 import { useApp } from '../contexts/AppContext';
-import { Download, Printer } from 'lucide-react';
+import { Download, Printer, Calendar, TrendingUp, Clock, AlertTriangle } from 'lucide-react';
 import { notify } from '../lib/notifications';
 import dayjs from 'dayjs';
 
@@ -28,24 +30,48 @@ export default function ReportsPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [refunds, setRefunds] = useState<Refund[]>([]);
+  const [installments, setInstallments] = useState<Installment[]>([]);
 
-  useEffect(() => { load(); }, []);
+  // فترة التقرير — كان ثابت على «آخر 6 أشهر» من غير اختيار
+  const [from, setFrom] = useState(dayjs().subtract(6, 'month').startOf('month').format('YYYY-MM-DD'));
+  const [to, setTo] = useState(dayjs().format('YYYY-MM-DD'));
+  const [profitability, setProfitability] = useState<GroupProfit[]>([]);
+  const [profitLoading, setProfitLoading] = useState(false);
+
+  // ربحية المجموعات بتتحسب في lib/payroll (بتقرا الأقساط والحضور والسلف من القاعدة)
+  useEffect(() => {
+    let cancelled = false;
+    setProfitLoading(true);
+    calcGroupProfitability({ from, to })
+      .then(rows => { if (!cancelled) setProfitability(rows); })
+      .catch(() => { if (!cancelled) setProfitability([]); })
+      .finally(() => { if (!cancelled) setProfitLoading(false); });
+    return () => { cancelled = true; };
+  }, [from, to]);
 
   async function load() {
     setLoading(true);
     try {
-      const [s, t, c, g, p, e] = await Promise.all([
+      const [s, t, c, g, p, e, r, ins] = await Promise.all([
         dbGetAll<Student>('students'),
         dbGetAll<Teacher>('teachers'),
         dbGetAll<Course>('courses'),
         dbGetAll<Group>('groups'),
         dbGetAll<Payment>('payments'),
         dbGetAll<Expense>('expenses'),
+        getRefunds(),
+        dbGetAll<Installment>('installments'),
       ]);
       setStudents(s); setTeachers(t); setCourses(c);
       setGroups(g); setPayments(p); setExpenses(e);
+      setRefunds(r); setInstallments(ins);
     } finally { setLoading(false); }
   }
+
+  useEffect(() => {
+    load();
+  }, []);
 
   // Gender data
   const genderData = [
@@ -111,9 +137,31 @@ export default function ReportsPage() {
   }));
   const PIE_COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#06b6d4'];
 
-  const totalRevenue = payments.filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
-  const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0);
-  const netProfit = totalRevenue - totalExpenses;
+  // ===== أرقام الفترة المختارة =====
+  const inRange = (date: string) => date >= from && date <= to;
+  /** الإيراد المحسوب = المدفوع غير الملغي − الاستردادات (مش مجرد sum للدفعات) */
+  const rangePayments = payments.filter(p => p.status === 'paid' && !p.voided && inRange(p.date));
+  const rangeRefunds = refunds.filter(r => inRange(r.date));
+  const rangeExpenses = expenses.filter(e => inRange(e.date));
+
+  const totalRevenue = rangePayments.reduce((s, p) => s + p.amount, 0);
+  const totalRefunds = rangeRefunds.reduce((s, r) => s + r.amount, 0);
+  const netRevenue = totalRevenue - totalRefunds;
+  const totalExpenses = rangeExpenses.reduce((s, e) => s + e.amount, 0);
+  const netProfit = netRevenue - totalExpenses;
+  const byMethod = rangePayments.reduce<Record<string, number>>((acc, p) => {
+    const m = p.method || 'cash';
+    acc[m] = (acc[m] || 0) + p.amount;
+    return acc;
+  }, {});
+
+  // ===== أعمار الديون =====
+  const debtBuckets = debtAging(installments);
+
+  // ===== استحقاقات قريبة =====
+  const upcoming = upcomingDues(installments, settings?.upcomingDueDays ?? 3);
+
+  // ===== ربحية المجموعات (بتتحمل من القاعدة على الفترة المختارة) =====
 
   function exportReport() {
     const data = students.map(s => ({
@@ -141,32 +189,213 @@ export default function ReportsPage() {
   return (
     <Layout title="التقارير والإحصائيات">
       <div className="space-y-6">
-        {/* Top actions */}
-        <div className="flex gap-3 justify-end">
-          <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 no-print">
-            <Printer size={16} /> طباعة
-          </button>
-          <button onClick={exportReport} className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 no-print">
-            <Download size={16} /> تصدير CSV
-          </button>
+        {/* Top actions + period picker */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 no-print">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 text-sm font-bold text-gray-800">
+              <Calendar size={16} className="text-gray-400" /> فترة التقرير
+            </div>
+            <input type="date" value={from} max={to} onChange={e => setFrom(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <span className="text-gray-400 text-sm">→</span>
+            <input type="date" value={to} min={from} onChange={e => setTo(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            <div className="flex gap-1.5">
+              {[
+                { label: 'هذا الشهر', f: dayjs().startOf('month').format('YYYY-MM-DD'), t: dayjs().format('YYYY-MM-DD') },
+                { label: 'آخر 3 أشهر', f: dayjs().subtract(3, 'month').startOf('month').format('YYYY-MM-DD'), t: dayjs().format('YYYY-MM-DD') },
+                { label: 'آخر 6 أشهر', f: dayjs().subtract(6, 'month').startOf('month').format('YYYY-MM-DD'), t: dayjs().format('YYYY-MM-DD') },
+                { label: 'السنة دي', f: dayjs().startOf('year').format('YYYY-MM-DD'), t: dayjs().format('YYYY-MM-DD') },
+              ].map(q => (
+                <button key={q.label} onClick={() => { setFrom(q.f); setTo(q.t); }}
+                  className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50">
+                  {q.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2 mr-auto">
+              <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50">
+                <Printer size={16} /> طباعة
+              </button>
+              <button onClick={exportReport} className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50">
+                <Download size={16} /> تصدير CSV
+              </button>
+            </div>
+          </div>
+          <p className="text-[11px] text-gray-400 mt-2">
+            من {formatDate(from)} إلى {formatDate(to)} — كل الأرقام المالية تحت محسوبة على الفترة دي
+          </p>
         </div>
 
         {/* Financial Summary */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-            <p className="text-sm text-gray-500">إجمالي الإيرادات</p>
+            <p className="text-sm text-gray-500">إجمالي المحصل</p>
             <p className="text-2xl font-bold text-green-600">{formatCurrency(totalRevenue, settings?.currency)}</p>
+            <p className="text-[11px] text-gray-400 mt-1">{rangePayments.length} دفعة</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+            <p className="text-sm text-gray-500">المسترد</p>
+            <p className="text-2xl font-bold text-orange-500">{formatCurrency(totalRefunds, settings?.currency)}</p>
+            <p className="text-[11px] text-gray-400 mt-1">{rangeRefunds.length} عملية</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <p className="text-sm text-gray-500">إجمالي المصروفات</p>
             <p className="text-2xl font-bold text-red-500">{formatCurrency(totalExpenses, settings?.currency)}</p>
+            <p className="text-[11px] text-gray-400 mt-1">{rangeExpenses.length} بند</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <p className="text-sm text-gray-500">صافي الربح</p>
             <p className={`text-2xl font-bold ${netProfit >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
               {formatCurrency(netProfit, settings?.currency)}
             </p>
+            <p className="text-[11px] text-gray-400 mt-1">بعد خصم المسترد والمصروفات</p>
           </div>
+        </div>
+
+        {/* التحصيل حسب طريقة الدفع */}
+        {Object.keys(byMethod).length > 0 && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+            <h3 className="text-base font-bold text-gray-900 mb-3">التحصيل حسب طريقة الدفع</h3>
+            <div className="flex flex-wrap gap-2">
+              {(Object.entries(byMethod) as [string, number][])
+                .sort((a, b) => b[1] - a[1])
+                .map(([m, v]) => (
+                  <div key={m} className="px-3 py-2 bg-gray-50 rounded-xl text-xs">
+                    <span className="text-gray-500">{({ cash: 'نقدي', wallet: 'محفظة', instapay: 'انستاباي', card: 'بطاقة', bank: 'تحويل بنكي', other: 'أخرى' } as Record<string, string>)[m] || m}: </span>
+                    <span className="font-bold text-gray-900">{formatCurrency(v, settings?.currency)}</span>
+                    <span className="text-gray-400"> ({totalRevenue > 0 ? Math.round((v / totalRevenue) * 100) : 0}%)</span>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
+
+        {/* أعمار الديون */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <h3 className="text-base font-bold text-gray-900 mb-1 flex items-center gap-2">
+            <AlertTriangle size={17} className="text-amber-500" /> أعمار الديون (Aging)
+          </h3>
+          <p className="text-xs text-gray-400 mb-4">توزيع المتأخرات على الطلاب حسب مدة التأخير — بيقول لك فين الفلوس الضايعة</p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {AGING_RANGES.map((range, idx) => {
+              const b = debtBuckets.find(x => x.key === range.key);
+              const styles = [
+                { bg: '#f0fdf4', color: '#15803d' },
+                { bg: '#fefce8', color: '#a16207' },
+                { bg: '#fff7ed', color: '#c2410c' },
+                { bg: '#fef2f2', color: '#b91c1c' },
+                { bg: '#fdf2f8', color: '#9d174d' },
+              ][idx] || { bg: '#f8fafc', color: '#475569' };
+              return (
+                <div key={range.key} className="p-3 rounded-xl border border-gray-100" style={{ backgroundColor: styles.bg }}>
+                  <p className="text-[11px] font-bold mb-1" style={{ color: styles.color }}>{range.label}</p>
+                  <p className="text-lg font-bold text-gray-900">{formatCurrency(b?.amount || 0, settings?.currency)}</p>
+                  <p className="text-[11px] text-gray-500">{b?.count || 0} قسط</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* استحقاقات قريبة */}
+        {upcoming.count > 0 && (
+          <div className="bg-white rounded-2xl border border-indigo-100 shadow-sm p-5">
+            <h3 className="text-base font-bold text-gray-900 mb-1 flex items-center gap-2">
+              <Clock size={17} className="text-indigo-500" /> استحقاقات قريبة
+            </h3>
+            <p className="text-xs text-gray-400 mb-4">
+              {upcoming.count} قسط بإجمالي {formatCurrency(upcoming.amount, settings?.currency)} مستحقين خلال {settings?.upcomingDueDays ?? 3} يوم — التنبيه قبل التأخر بيرفع التحصيل
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr className="text-right text-xs text-gray-500">
+                    <th className="px-4 py-2.5 font-medium">الطالب</th>
+                    <th className="px-4 py-2.5 font-medium">الاستحقاق</th>
+                    <th className="px-4 py-2.5 font-medium">المتبقي</th>
+                    <th className="px-4 py-2.5 font-medium">فاضل</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {upcoming.items.slice(0, 12).map(i => (
+                    <tr key={i.id} className="border-t border-gray-50">
+                      <td className="px-4 py-2.5 font-medium text-gray-900">
+                        {students.find(st => st.id === i.studentId)?.name || '—'}
+                      </td>
+                      <td className="px-4 py-2.5 text-gray-600">{formatDate(i.dueDate)}</td>
+                      <td className="px-4 py-2.5 font-bold text-gray-900">{formatCurrency(installmentRemaining(i), settings?.currency)}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${i.daysUntilDue <= 1 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
+                          {i.daysUntilDue === 0 ? 'النهاردة' : `${i.daysUntilDue} يوم`}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ربحية المجموعات */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <h3 className="text-base font-bold text-gray-900 mb-1 flex items-center gap-2">
+            <TrendingUp size={17} className="text-emerald-600" /> ربحية المجموعات
+          </h3>
+          <p className="text-xs text-gray-400 mb-4">
+            إيراد المجموعة = عدد الطلاب × سعرها الشهري (بالخصومات الفعلية) · التكلفة = حصة المدرس من مرتبه
+          </p>
+          {profitLoading ? (
+            <p className="text-sm text-gray-400 py-6 text-center">جاري حساب الربحية...</p>
+          ) : profitability.length === 0 ? (
+            <p className="text-sm text-gray-400 py-6 text-center">مفيش مجموعات محسوب لها ربحية لسه</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr className="text-right text-xs text-gray-500">
+                    <th className="px-4 py-2.5 font-medium">المجموعة</th>
+                    <th className="px-4 py-2.5 font-medium">المدرس</th>
+                    <th className="px-4 py-2.5 font-medium">الطلاب</th>
+                    <th className="px-4 py-2.5 font-medium">المحصّل</th>
+                    <th className="px-4 py-2.5 font-medium">المستحق</th>
+                    <th className="px-4 py-2.5 font-medium">تكلفة المدرس</th>
+                    <th className="px-4 py-2.5 font-medium">الملازم</th>
+                    <th className="px-4 py-2.5 font-medium">صافي الربح</th>
+                    <th className="px-4 py-2.5 font-medium">الهامش</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...profitability].sort((a, b) => b.profit - a.profit).map(r => (
+                    <tr key={r.groupId} className="border-t border-gray-50 hover:bg-gray-50/50">
+                      <td className="px-4 py-2.5 font-medium text-gray-900">
+                        {r.groupName}
+                        <span className="block text-[10px] text-gray-400 font-normal">{r.courseName}</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-gray-600 text-xs">{r.teacherName || '—'}</td>
+                      <td className="px-4 py-2.5 text-gray-600">{r.students}</td>
+                      <td className="px-4 py-2.5 text-green-700 font-medium">{formatCurrency(r.collected, settings?.currency)}</td>
+                      <td className="px-4 py-2.5 text-gray-600">{formatCurrency(r.owed, settings?.currency)}</td>
+                      <td className="px-4 py-2.5 text-red-600">{formatCurrency(r.teacherCost, settings?.currency)}</td>
+                      <td className="px-4 py-2.5 text-red-500 text-xs">{formatCurrency(r.materialCost, settings?.currency)}</td>
+                      <td className={`px-4 py-2.5 font-bold ${r.profit >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
+                        {formatCurrency(r.profit, settings?.currency)}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${
+                          r.marginPct >= 50 ? 'bg-green-100 text-green-700'
+                          : r.marginPct >= 25 ? 'bg-amber-100 text-amber-700'
+                          : 'bg-red-100 text-red-700'}`}>
+                          {Math.round(r.marginPct)}%
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Revenue vs Expenses */}

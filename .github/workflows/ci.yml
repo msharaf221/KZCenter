@@ -6,8 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+# شغل واحد بس لكل فرع/PR عشان ما نهدرش دقائق بناء متراكمة
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  verify:
+    name: Typecheck · Lint · Test · Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +30,13 @@ jobs:
         run: npm run typecheck
 
       - name: Lint
-        run: npx eslint src --max-warnings=100
+        run: npm run lint -- --max-warnings=100
+
+      - name: Test
+        run: npm run test
+
+      - name: PII guard (ممنوع بيانات حقيقية في الريبو)
+        run: node scripts/check-no-pii.mjs
 
       - name: Build
         run: npm run build

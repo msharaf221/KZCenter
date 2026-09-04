@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Search, Filter, CheckCircle, Trash2, Download, MessageCircle, Printer } from 'lucide-react';
+import { Plus, Search, Filter, CheckCircle, Trash2, Download, MessageCircle, Printer, Ban, RotateCcw } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
-import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, dbGetById, recalculateStudentTotalPaid, rebuildInstallmentsFromPayments, getStudentBalance, recordInstallmentPayment, generateId, Payment, PaymentStatus, PaymentType, Student, Course, Settings, StudentBalance } from '../lib/db';
+import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, dbGetById, recalculateStudentTotalPaid, rebuildInstallmentsFromPayments, getStudentBalance, recordInstallmentPayment, voidPayment, recordRefund, getRefunds, generateId, Payment, PaymentStatus, PaymentType, PaymentMethod, Refund, Student, Course, Settings, StudentBalance } from '../lib/db';
+import { printReceipt, amountToArabicWords } from '../lib/printing';
+import { nextReceiptNo, peekReceiptNo } from '../lib/receipts';
+import { METHOD_LABEL } from '../lib/cashbox';
 import { formatDate, formatCurrency, toCSV, downloadCSV, getWhatsAppLink, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -32,9 +35,18 @@ export default function PaymentsPage() {
   const [form, setForm] = useState({
     studentId: '', courseId: '', amount: 0,
     type: 'subscription' as PaymentType, status: 'paid' as PaymentStatus,
+    method: 'cash' as PaymentMethod, collectedBy: '',
     date: dayjs().format('YYYY-MM-DD'), notes: '',
   });
   const [studentBalance, setStudentBalance] = useState<StudentBalance | null>(null);
+  const [refunds, setRefunds] = useState<Refund[]>([]);
+  const [receiptPreview, setReceiptPreview] = useState('');
+  // إلغاء / استرداد
+  const [voidTarget, setVoidTarget] = useState<Payment | null>(null);
+  const [voidReason, setVoidReason] = useState('');
+  const [refundTarget, setRefundTarget] = useState<Payment | null>(null);
+  const [refundForm, setRefundForm] = useState({ amount: 0, reason: '', method: 'cash' as PaymentMethod });
+  const [busy, setBusy] = useState(false);
 
   // رصيد الطالب المختار (مستحق/مدفوع/متبقي) لعرضه أثناء تسجيل الدفعة
   useEffect(() => {
@@ -59,15 +71,29 @@ export default function PaymentsPage() {
 
       const result = await dbGetPaginated<Payment>('payments', page, PAGE_SIZE, (p: Payment) => {
         const student = studentMap.get(p.studentId);
-        const q = search.toLowerCase();
-        const matchSearch = !q || (student?.name || '').toLowerCase().includes(q);
+        const q = search.trim().toLowerCase();
+        const matchSearch = !q
+          || (student?.name || '').toLowerCase().includes(q)
+          || (p.receiptNo || '').toLowerCase().includes(q)
+          || (p.collectedBy || '').toLowerCase().includes(q)
+          || String(p.amount).includes(q);
         const matchStatus = !statusFilter || p.status === statusFilter;
         return matchSearch && matchStatus;
       });
       setPayments(result.items);
       setTotal(result.total);
+      setRefunds(await getRefunds());
     } finally { setLoading(false); }
   }, [page, search, statusFilter]);
+
+  // رقم الإيصال التسلسلي المتوقع (بيتعرض في الفورم وبيتأكد وقت الحفظ)
+  useEffect(() => {
+    let cancelled = false;
+    peekReceiptNo(form.date, settings?.receiptPrefix)
+      .then(n => { if (!cancelled) setReceiptPreview(n); })
+      .catch(() => { if (!cancelled) setReceiptPreview(''); });
+    return () => { cancelled = true; };
+  }, [form.date, showModal, settings?.receiptPrefix]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setPage(1); }, [search, statusFilter]);
@@ -87,6 +113,8 @@ export default function PaymentsPage() {
           date: form.date,
           courseId: form.courseId || undefined,
           notes: form.notes || undefined,
+          method: form.method,
+          collectedBy: form.collectedBy || user?.username || undefined,
         });
         if (!result.success || !result.payment) { notify.error(result.error || 'حدث خطأ'); return; }
         payment = result.payment;
@@ -94,6 +122,11 @@ export default function PaymentsPage() {
         // معلق/متأخر أو بنود غير الاشتراك (كتب/أخرى): تسجل كدفعة من غير توزيع على أقساط
         payment = {
           id: generateId(), ...form,
+          collectedBy: form.collectedBy || user?.username || undefined,
+          // الإيصال المسلسل بيتسجل للدفعات المسددة فقط — المعلق ما لوش إيصال
+          receiptNo: form.status === 'paid'
+            ? await nextReceiptNo(form.date, settings?.receiptPrefix)
+            : undefined,
           createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
         };
         await dbAdd('payments', payment);
@@ -112,10 +145,72 @@ export default function PaymentsPage() {
         const student = students.find(s => s.id === form.studentId);
         if (student) notifyLatePayment(student.name, form.amount);
       }
-      notify.success('تم تسجيل الدفعة بنجاح');
+      notify.success(payment.receiptNo ? `تم تسجيل الدفعة — إيصال رقم ${payment.receiptNo}` : 'تم تسجيل الدفعة بنجاح');
       setShowModal(false);
+      setForm(f => ({ ...f, studentId: '', courseId: '', amount: 0, notes: '', collectedBy: '' }));
       load();
     } catch { notify.error('حدث خطأ'); }
+  }
+
+  // ---------- إلغاء دفعة (void) ----------
+  async function handleVoid() {
+    if (!voidTarget) return;
+    if (!voidReason.trim()) { notify.error('سبب الإلغاء مطلوب للمراجعة'); return; }
+    setBusy(true);
+    try {
+      const r = await voidPayment({
+        paymentId: voidTarget.id,
+        reason: voidReason.trim(),
+        userId: user?.id,
+        username: user?.username,
+      });
+      if (!r.success) { notify.error(r.error || 'تعذّر الإلغاء'); return; }
+
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'update', entity: 'payment', entityId: voidTarget.id,
+        details: `إلغاء دفعة (${voidTarget.amount}) للطالب ${getStudentName(voidTarget.studentId)} — السبب: ${voidReason.trim()}`,
+      });
+      await recalculateStudentTotalPaid(voidTarget.studentId);
+      notify.success('تم إلغاء الدفعة (لسه موجودة في السجل للمراجعة)');
+      setVoidTarget(null);
+      setVoidReason('');
+      await load();
+    } finally { setBusy(false); }
+  }
+
+  // ---------- استرداد مبلغ (refund) ----------
+  function openRefund(payment: Payment) {
+    setRefundTarget(payment);
+    setRefundForm({ amount: payment.amount, reason: '', method: payment.method || 'cash' });
+  }
+
+  async function handleRefund() {
+    if (!refundTarget) return;
+    if (!(refundForm.amount > 0)) { notify.error('المبلغ يجب أن يكون أكبر من صفر'); return; }
+    if (!refundForm.reason.trim()) { notify.error('سبب الاسترداد مطلوب'); return; }
+    setBusy(true);
+    try {
+      const r = await recordRefund({
+        studentId: refundTarget.studentId,
+        amount: refundForm.amount,
+        reason: refundForm.reason.trim(),
+        paymentId: refundTarget.id,
+        method: refundForm.method,
+        userId: user?.id,
+        username: user?.username,
+      });
+      if (!r.success) { notify.error(r.error || 'تعذّر الاسترداد'); return; }
+
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'create', entity: 'refund', entityId: r.refund?.id,
+        details: `استرداد ${refundForm.amount} من دفعة ${refundTarget.receiptNo || refundTarget.id} — ${refundForm.reason.trim()}`,
+      });
+      notify.success('تم تسجيل الاسترداد وخصمه من مدفوعات الطالب');
+      setRefundTarget(null);
+      await load();
+    } finally { setBusy(false); }
   }
 
   async function handleMarkPaid(payment: Payment) {
@@ -165,59 +260,37 @@ export default function PaymentsPage() {
     } catch { notify.error('حدث خطأ'); }
   }
 
-  function escapeHtml(value: string): string {
-    return value
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
-
-  async function printReceipt(payment: Payment) {
-    const win = window.open('', '_blank');
-    if (!win) return;
-    
-    win.document.write('<html dir="rtl"><head><title>جاري التحميل...</title></head><body style="font-family:sans-serif; text-align:center; padding: 20px;">جاري تجهيز الإيصال...</body></html>');
-
+  /** إيصال رسمي عن طريق printing.ts (رقم مسلسل + طريقة الدفع + اسم الموظف + المبلغ بالحروف) */
+  async function handlePrintReceipt(payment: Payment) {
     const freshSettings = await dbGetById<Settings>('settings', 'main');
-    const student = students.find(s => s.id === payment.studentId);
+    const st = freshSettings || settings;
+    const student = students.find(x => x.id === payment.studentId);
     const course = courses.find(c => c.id === payment.courseId);
-    const date = formatDate(payment.date);
-    const centerName = escapeHtml(freshSettings?.centerName || settings?.centerName || 'EduCenter Pro');
-    const studentName = escapeHtml(student?.name || '---');
-    const courseName = course ? escapeHtml(course.name) : '';
+    const group = (payment.installmentIds || []).length
+      ? undefined
+      : undefined;
 
-    const receiptHtml = `
-      <html dir="rtl">
-        <head>
-          <title>إيصال استلام</title>
-          <style>
-            @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap');
-            body { font-family: 'Tajawal', sans-serif; padding: 20px; color: #333; max-width: 300px; margin: 0 auto; border: 1px dashed #ccc; }
-            h1 { text-align: center; color: ${freshSettings?.primaryColor || settings?.primaryColor || '#6366f1'}; margin-bottom: 5px; font-size: 20px; }
-            .center { text-align: center; margin-bottom: 20px; font-size: 12px; color: #666; }
-            .row { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 13px; border-bottom: 1px dotted #eee; padding-bottom: 5px; }
-            .total { font-size: 16px; font-weight: bold; margin-top: 20px; text-align: center; padding: 10px; background: #f8f9fa; border-radius: 8px; border: 1px solid #eee; }
-            .footer { margin-top: 30px; text-align: center; font-size: 11px; color: #888; }
-            @media print { body { border: none; padding: 0; } }
-          </style>
-        </head>
-        <body onload="window.print(); window.close();">
-          <h1>${centerName}</h1>
-          <div class="center">إيصال استلام نقدية</div>
-          <div class="row"><span>رقم الإيصال:</span> <strong>#${payment.id.substring(0,6).toUpperCase()}</strong></div>
-          <div class="row"><span>التاريخ:</span> <strong>${date}</strong></div>
-          <div class="row"><span>اسم الطالب:</span> <strong>${studentName}</strong></div>
-          <div class="row"><span>البيان:</span> <strong>${payment.type === 'subscription' ? 'اشتراك' : payment.type === 'books' ? 'كتب' : 'أخرى'} ${course ? '- ' + courseName : ''}</strong></div>
-          <div class="total">المبلغ المدفوع: <br/> ${formatCurrency(payment.amount, freshSettings?.currency || settings?.currency)}</div>
-          <div class="footer">شكراً لثقتكم بنا.<br/>مع تمنياتنا بالتوفيق والنجاح.</div>
-        </body>
-      </html>
-    `;
-    
+    const before = await getStudentBalance(payment.studentId);
+    const html = printReceipt({
+      receiptNo: payment.receiptNo || payment.id.substring(0, 6).toUpperCase(),
+      centerName: st?.centerName || 'EduCenter Pro',
+      studentName: student?.name || '—',
+      courseName: course?.name,
+      groupName: group,
+      amount: payment.amount,
+      amountInWords: amountToArabicWords(payment.amount, st?.currency),
+      method: METHOD_LABEL[payment.method || 'cash'],
+      type: payment.type === 'subscription' ? 'اشتراك' : payment.type === 'books' ? 'كتب' : 'أخرى',
+      date: payment.date,
+      collectorName: payment.collectedBy,
+      remainingAfter: before ? Math.max(0, before.remaining) : undefined,
+      notes: payment.notes,
+      settings: st,
+    });
+    const win = window.open('', '_blank');
+    if (!win) { notify.error('المتصفح منع فتح نافذة الطباعة'); return; }
     win.document.open();
-    win.document.write(receiptHtml);
+    win.document.write(html);
     win.document.close();
   }
 
@@ -332,8 +405,10 @@ export default function PaymentsPage() {
                       checked={selectedIds.length === payments.length && payments.length > 0}
                       className="rounded" />
                   </th>
+                  <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الإيصال</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الطالب</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الكورس</th>
+                  <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الطريقة</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المبلغ</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">النوع</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الحالة</th>
@@ -343,21 +418,46 @@ export default function PaymentsPage() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {loading ? (
-                  <tr><td colSpan={8} className="p-8 text-center">
+                  <tr><td colSpan={10} className="p-8 text-center">
                     <div className="animate-spin w-6 h-6 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto" />
                   </td></tr>
                 ) : payments.length === 0 ? (
-                  <tr><td colSpan={8} className="p-8 text-center text-gray-400">لا توجد مدفوعات</td></tr>
-                ) : payments.map(payment => (
-                  <tr key={payment.id} className="hover:bg-gray-50 transition-colors">
+                  <tr><td colSpan={10} className="p-8 text-center text-gray-400">لا توجد مدفوعات</td></tr>
+                ) : payments.map(payment => {
+                  const refunded = refunds.filter(r => r.paymentId === payment.id).reduce((t, r) => t + r.amount, 0);
+                  return (
+                  <tr key={payment.id} className={`hover:bg-gray-50 transition-colors ${payment.voided ? 'bg-red-50/40' : ''}`}>
                     <td className="p-4">
-                      <input type="checkbox" checked={selectedIds.includes(payment.id)}
+                      <input type="checkbox" checked={selectedIds.includes(payment.id)} disabled={!!payment.voided}
                         onChange={e => setSelectedIds(e.target.checked ? [...selectedIds, payment.id] : selectedIds.filter(i => i !== payment.id))}
                         className="rounded" />
                     </td>
-                    <td className="p-4 text-sm font-semibold text-gray-900">{getStudentName(payment.studentId)}</td>
+                    <td className="p-4 text-sm">
+                      {payment.receiptNo ? (
+                        <span className="font-mono text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded" dir="ltr">{payment.receiptNo}</span>
+                      ) : <span className="text-gray-300 text-xs">—</span>}
+                      {payment.voided && (
+                        <span className="block mt-1 text-[10px] font-bold text-red-600">ملغاة — {payment.voidReason}</span>
+                      )}
+                    </td>
+                    <td className="p-4 text-sm font-semibold text-gray-900">
+                      <span className={payment.voided ? 'line-through text-gray-400' : ''}>{getStudentName(payment.studentId)}</span>
+                      {payment.collectedBy && <span className="block text-[10px] text-gray-400 font-normal">قبض: {payment.collectedBy}</span>}
+                    </td>
                     <td className="p-4 text-sm text-gray-600">{getCourseName(payment.courseId)}</td>
-                    <td className="p-4 text-sm font-bold text-gray-900">{formatCurrency(payment.amount, settings?.currency)}</td>
+                    <td className="p-4 text-sm">
+                      <span className="text-[11px] bg-gray-100 text-gray-700 px-2 py-1 rounded-full whitespace-nowrap">
+                        {METHOD_LABEL[payment.method || 'cash']}
+                      </span>
+                    </td>
+                    <td className={`p-4 text-sm font-bold ${payment.voided ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                      {formatCurrency(payment.amount, settings?.currency)}
+                      {refunded > 0 && !payment.voided && (
+                        <span className="block text-[10px] text-orange-600 font-normal no-underline">
+                          مسترد: {formatCurrency(refunded, settings?.currency)}
+                        </span>
+                      )}
+                    </td>
                     <td className="p-4">
                       <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">
                         {payment.type === 'subscription' ? 'اشتراك' : payment.type === 'books' ? 'كتب' : 'أخرى'}
@@ -381,7 +481,7 @@ export default function PaymentsPage() {
                           return null;
                         })()}
                         {payment.status === 'paid' && (
-                          <button onClick={() => printReceipt(payment)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors" title="طباعة إيصال">
+                          <button onClick={() => handlePrintReceipt(payment)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600 transition-colors" title="طباعة إيصال">
                             <Printer size={15} />
                           </button>
                         )}
@@ -390,13 +490,26 @@ export default function PaymentsPage() {
                             <CheckCircle size={15} />
                           </button>
                         )}
-                        <button onClick={() => setDeleteId(payment.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="حذف">
-                          <Trash2 size={15} />
-                        </button>
+                        {!payment.voided && payment.status === 'paid' && (
+                          <>
+                            <button onClick={() => openRefund(payment)} className="p-1.5 rounded-lg hover:bg-orange-50 text-orange-600 transition-colors" title="استرداد مبلغ">
+                              <RotateCcw size={15} />
+                            </button>
+                            <button onClick={() => { setVoidTarget(payment); setVoidReason(''); }} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="إلغاء الدفعة">
+                              <Ban size={15} />
+                            </button>
+                          </>
+                        )}
+                        {!payment.voided && payment.status !== 'paid' && (
+                          <button onClick={() => setDeleteId(payment.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="حذف">
+                            <Trash2 size={15} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -407,6 +520,12 @@ export default function PaymentsPage() {
       {/* Add Modal */}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة دفعة جديدة">
         <div className="space-y-4">
+          {form.status === 'paid' && receiptPreview && (
+            <div className="flex items-center justify-between p-3 rounded-xl bg-indigo-50 border border-indigo-100">
+              <span className="text-xs text-indigo-700">رقم الإيصال التسلسلي</span>
+              <span className="font-mono text-sm font-bold text-indigo-900" dir="ltr">{receiptPreview}</span>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">الطالب *</label>
             <select value={form.studentId}
@@ -496,6 +615,21 @@ export default function PaymentsPage() {
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
             </div>
             <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">طريقة الدفع</label>
+              <select value={form.method} onChange={e => setForm({...form, method: e.target.value as PaymentMethod})}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
+                {(Object.keys(METHOD_LABEL) as PaymentMethod[]).map(m => (
+                  <option key={m} value={m}>{METHOD_LABEL[m]}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">موظف التحصيل</label>
+              <input type="text" value={form.collectedBy} onChange={e => setForm({...form, collectedBy: e.target.value})}
+                placeholder={user?.username || 'الاسم'}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+            </div>
+            <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">النوع</label>
               <select value={form.type} onChange={e => setForm({...form, type: e.target.value as PaymentType})}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
@@ -527,9 +661,90 @@ export default function PaymentsPage() {
         </div>
       </Modal>
 
-      <ConfirmDialog isOpen={!!deleteId} title="حذف الدفعة" message="هل أنت متأكد من حذف هذه الدفعة؟"
+      <ConfirmDialog isOpen={!!deleteId} title="حذف الدفعة"
+        message="الدفعة هتتحول لسلة المحذوفات ويمكن استرجاعها. لو الدفعة مسددة يفضل تستخدم «إلغاء» عشان السجل يفضل سليم."
         onConfirm={() => { if (deleteId) handleDelete(deleteId); setDeleteId(null); }}
         onCancel={() => setDeleteId(null)} danger />
+
+      {/* إلغاء دفعة */}
+      <Modal isOpen={!!voidTarget} onClose={() => setVoidTarget(null)} title="إلغاء الدفعة">
+        <div className="space-y-4">
+          <div className="p-3 bg-gray-50 rounded-xl text-xs space-y-1">
+            <div className="flex justify-between"><span className="text-gray-500">الإيصال</span>
+              <span className="font-mono font-bold" dir="ltr">{voidTarget?.receiptNo || '—'}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">الطالب</span>
+              <span className="font-bold">{voidTarget ? getStudentName(voidTarget.studentId) : ''}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">المبلغ</span>
+              <span className="font-bold">{formatCurrency(voidTarget?.amount || 0, settings?.currency)}</span></div>
+          </div>
+          <p className="text-xs text-gray-500 leading-relaxed">
+            الإلغاء مش حذف: الدفعة بتفضل في السجل برقمها وسبب الإلغاء، لكنها ما بتتحسبش في أي مجموع
+            والأقساط اللي غطتها هترجع مستحقة تاني.
+          </p>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">سبب الإلغاء *</label>
+            <textarea value={voidReason} onChange={e => setVoidReason(e.target.value)} rows={2}
+              placeholder="مثال: تسجيل بالخطأ / إلغاء اشتراك / تعديل مبلغ"
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none resize-none" />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleVoid} disabled={busy || !voidReason.trim()}
+              className="flex-1 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 disabled:opacity-50">
+              {busy ? 'جاري التنفيذ...' : 'إلغاء الدفعة'}
+            </button>
+            <button onClick={() => setVoidTarget(null)}
+              className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50">تراجع</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* استرداد مبلغ */}
+      <Modal isOpen={!!refundTarget} onClose={() => setRefundTarget(null)} title="استرداد مبلغ">
+        <div className="space-y-4">
+          <div className="p-3 bg-gray-50 rounded-xl text-xs space-y-1">
+            <div className="flex justify-between"><span className="text-gray-500">الطالب</span>
+              <span className="font-bold">{refundTarget ? getStudentName(refundTarget.studentId) : ''}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">الدفعة الأصلية</span>
+              <span className="font-mono font-bold" dir="ltr">{refundTarget?.receiptNo || '—'}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">قيمتها</span>
+              <span className="font-bold">{formatCurrency(refundTarget?.amount || 0, settings?.currency)}</span></div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">المبلغ المسترد *</label>
+              <input type="number" min={0} max={refundTarget?.amount || 0} step="0.01"
+                value={refundForm.amount} onChange={e => setRefundForm({...refundForm, amount: +e.target.value})}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">طريقة الصرف</label>
+              <select value={refundForm.method} onChange={e => setRefundForm({...refundForm, method: e.target.value as PaymentMethod})}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none">
+                {(Object.keys(METHOD_LABEL) as PaymentMethod[]).map(m => (
+                  <option key={m} value={m}>{METHOD_LABEL[m]}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">سبب الاسترداد *</label>
+            <textarea value={refundForm.reason} onChange={e => setRefundForm({...refundForm, reason: e.target.value})} rows={2}
+              placeholder="مثال: انسحاب الطالب / زيادة في الدفع"
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none resize-none" />
+          </div>
+          <p className="text-[11px] text-gray-500 leading-relaxed">
+            الاسترداد بيقلل «المدفوع» على الطالب وبيظهر في الخزينة كخروج نقدي في يومه.
+          </p>
+          <div className="flex gap-2">
+            <button onClick={handleRefund} disabled={busy || !(refundForm.amount > 0) || !refundForm.reason.trim()}
+              className="flex-1 py-2.5 bg-orange-600 text-white rounded-xl text-sm font-medium hover:bg-orange-700 disabled:opacity-50">
+              {busy ? 'جاري التنفيذ...' : 'تأكيد الاسترداد'}
+            </button>
+            <button onClick={() => setRefundTarget(null)}
+              className="px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50">تراجع</button>
+          </div>
+        </div>
+      </Modal>
     </Layout>
   );
 }

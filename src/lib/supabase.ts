@@ -313,14 +313,98 @@ export interface Database {
 // عشان نضمن إن زر "نسخ الـ Schema" في الإعدادات بيطابق الملف الفعلي.
 export const SQL_SCHEMA: string = schemaSql;
 
-// Helper to check connection
-export async function testSupabaseConnection(): Promise<boolean> {
+// ==================== CLOUD SESSION ====================
+/**
+ * سياسات RLS في supabase_schema.sql بترفض دور `anon` تماماً (وده مقصود:
+ * الـ anon key مبني في كود العميل فأي حد يقدر يستخدمه). عشان كده التطبيق لازم
+ * يعمل Supabase session قبل أي مزامنة — بنستخدم **Anonymous Sign-In**.
+ *
+ * المطلوب تفعيله في Supabase Dashboard:
+ *   Authentication → Sign In / Up → Anonymous Sign-Ins → ON
+ */
+export interface CloudSessionResult {
+  ok: boolean;
+  error?: string;
+  /** هل الجلسة anonymous (مش مستخدم مسجّل في Supabase Auth) */
+  anonymous?: boolean;
+}
+
+let sessionPromise: Promise<CloudSessionResult> | null = null;
+
+export async function ensureCloudSession(force = false): Promise<CloudSessionResult> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  if (!client) {
+    return { ok: false, error: 'Supabase غير مهيأ — أضف الـ URL والـ anon key من الإعدادات.' };
+  }
+
+  // منع تكرار محاولات متوازية (كل عملية مزامنة بتستدعي الدالة دي)
+  if (!force && sessionPromise) return sessionPromise;
+
+  sessionPromise = (async (): Promise<CloudSessionResult> => {
+    try {
+      const { data } = await client.auth.getSession();
+      if (data?.session) {
+        return { ok: true, anonymous: !data.session.user?.email };
+      }
+
+      const { data: signed, error } = await client.auth.signInAnonymously();
+      if (error || !signed?.session) {
+        return {
+          ok: false,
+          error:
+            'فشل إنشاء جلسة سحابية. فعّل Anonymous Sign-Ins من ' +
+            'Supabase Dashboard → Authentication → Sign In / Up، وتأكد إنك شغّلت ' +
+            'أحدث نسخة من supabase_schema.sql (السياسات بترفض دور anon). ' +
+            (error?.message ? `(${error.message})` : ''),
+        };
+      }
+      return { ok: true, anonymous: true };
+    } catch (e) {
+      return { ok: false, error: `تعذّر الاتصال بـ Supabase: ${String(e)}` };
+    } finally {
+      // نسيب الوعد شوية عشان الطلبات المتزامنة تشترك فيه، ثم نُفرغه
+      setTimeout(() => { sessionPromise = null; }, 2000);
+    }
+  })();
+
+  return sessionPromise;
+}
+
+// ==================== CONNECTION TEST ====================
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  error?: string;
+  /** عدد الصفوف المقروءة من جدول الإعدادات (دليل إن RLS بتسمح بالقراءة) */
+  readable?: boolean;
+}
+
+/** اختبار اتصال مفصّل: جلسة + قراءة فعلية (بتكشف مشاكل RLS) */
+export async function testSupabaseConnectionDetailed(): Promise<ConnectionTestResult> {
+  const client = getSupabaseClient();
+  if (!client) return { ok: false, error: 'Supabase غير مهيأ.' };
+
+  const session = await ensureCloudSession(true);
+  if (!session.ok) return { ok: false, error: session.error };
+
   try {
     const { error } = await client.from('settings').select('id').limit(1);
-    return !error;
-  } catch {
-    return false;
+    if (error) {
+      return {
+        ok: false,
+        readable: false,
+        error:
+          'الجلسة اتعملت لكن القراءة مرفوضة — غالباً RLS. تأكد إنك شغّلت ' +
+          `أحدث نسخة من supabase_schema.sql. (${error.message})`,
+      };
+    }
+    return { ok: true, readable: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
   }
+}
+
+/** اختبار الاتصال (متوافق مع الاستخدام القديم) */
+export async function testSupabaseConnection(): Promise<boolean> {
+  return (await testSupabaseConnectionDetailed()).ok;
 }

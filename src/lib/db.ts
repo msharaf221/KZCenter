@@ -5,25 +5,57 @@ import {
   Installment,
   InstallmentStatus,
   BalanceSummary,
+  PricingInput,
   buildMonthlyPlan,
   applyPayment,
   computeBalance,
+  creditOf,
+  effectiveMonthlyPrice,
   installmentRemaining,
   installmentState,
+  isCountedPayment,
   proratedFirstPeriod,
+  resolveSessionsPerMonth,
   summarize,
 } from './billing';
+import { getBillingPolicy } from './settings';
+import { nextReceiptNo } from './receipts';
 
 // ==================== INTERFACES ====================
 
 export type StudentStatus = 'active' | 'suspended' | 'ended';
 export type Gender = 'male' | 'female';
 export type TeacherStatus = 'active' | 'vacation' | 'suspended';
+/**
+ * طريقة حساب مستحقات المدرس:
+ *  - fixed      → راتب شهري ثابت
+ *  - per_session→ مبلغ لكل حصة مسلَّمة (بيتحسب من أيام الحضور المسجلة)
+ *  - percentage → نسبة % من المحصّل فعلياً لمجموعاته في الشهر
+ *  - per_group  → مبلغ ثابت لكل مجموعة في الشهر
+ */
+export type TeacherPayModel = 'fixed' | 'per_session' | 'percentage' | 'per_group';
 export type GroupStatus = 'open' | 'full' | 'ended';
 export type PaymentStatus = 'paid' | 'pending' | 'late';
 export type PaymentType = 'subscription' | 'books' | 'other';
+/** طريقة القبض — مطلوبة لمطابقة الخزينة والبنك/المحفظة */
+export type PaymentMethod =
+  | 'cash'          // نقدي
+  | 'wallet'        // محفظة (فودافون كاش / اتصالات كاش / أورنج كاش)
+  | 'instapay'      // إنستاباي
+  | 'card'          // فيزا/ماستركارد (POS)
+  | 'bank'          // تحويل بنكي
+  | 'other';
 export type AttendanceStatus = 'present' | 'absent' | 'late' | 'excused';
-export type UserRole = 'admin' | 'teacher';
+/**
+ * الأدوار:
+ *  - admin      → كل حاجة
+ *  - secretary  → استقبال: تسجيل طلاب/حضور/تحصيل، من غير مصروفات ولا رواتب ولا حذف
+ *  - accountant → فلوس وتقارير مالية، من غير تعديل أكاديمي
+ *  - supervisor → إشراف أكاديمي: مجموعات/حضور/اختبارات، من غير فلوس
+ *  - teacher    → مجموعاته هو بس (حضور + درجات)
+ * الصلاحيات التفصيلية في src/lib/permissions.ts
+ */
+export type UserRole = 'admin' | 'secretary' | 'accountant' | 'supervisor' | 'teacher';
 export type ExpenseCategory = 'salaries' | 'bills' | 'maintenance' | 'purchases' | 'rent' | 'other';
 
 export interface Student {
@@ -39,6 +71,19 @@ export interface Student {
   totalPaid: number;
   totalOwed?: number;
   enrolledGroups: string[];
+
+  // ==================== v7: CRM ومتابعة ====================
+  /** المدرسة (لتقارير ولي الأمر والمتابعة) */
+  school?: string;
+  /** الصف الدراسي */
+  gradeLevel?: string;
+  /** مصدر معرفة الطالب بالمركز (إعلان فيسبوك/توصية/لافتة…) — لقياس تكلفة الاكتساب */
+  source?: string;
+  /** اسم ولي الأمر */
+  parentName?: string;
+  /** إخوة في نفس المركز (لخصم الإخوة) */
+  siblingIds?: string[];
+
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
@@ -50,10 +95,80 @@ export interface Teacher {
   specialization: string;
   phone: string;
   email?: string;
+  /** الراتب الشهري الثابت (يُستخدم مع payModel = 'fixed' أو كنسبة افتراضية) */
   salary: number;
   status: TeacherStatus;
   avatar?: string;
   notes?: string;
+
+  // ==================== v7: مستحقات المدرس ====================
+  /** طريقة الحساب — لو مش محددة بتعتبر 'fixed' (سلوك قديم) */
+  payModel?: TeacherPayModel;
+  /**
+   * قيمة طريقة الحساب:
+   *  per_session → جنيه/حصة · percentage → نسبة مئوية (0-100) · per_group → جنيه/مجموعة/شهر
+   *  fixed → بيستخدم `salary`
+   */
+  payRate?: number;
+  payNotes?: string;
+
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+/** سجل مستحقات/راتب مدرس عن شهر */
+export interface PayrollRecord {
+  id: string;
+  teacherId: string;
+  teacherName: string;
+  /** YYYY-MM */
+  period: string;
+  model: TeacherPayModel;
+  /** الأساس المحسوب عليه (عدد حصص / إجمالي محصّل / عدد مجموعات) */
+  base: number;
+  baseLabel: string;
+  /** المستحق قبل الخصومات */
+  gross: number;
+  /** خصومات (غياب/جزاءات) */
+  deductions: number;
+  /** سلف اتخصمت من الشهر ده */
+  advances: number;
+  /** الصافي المستحق */
+  net: number;
+  /** المدفوع فعلياً */
+  paidAmount: number;
+  status: 'pending' | 'partial' | 'paid';
+  /** تفصيل الحساب لكل مجموعة (للشفافية مع المدرس) */
+  lines?: PayrollLine[];
+  /** رقم سند الصرف في المصروفات (لو اتسجل تلقائياً) */
+  expenseId?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+export interface PayrollLine {
+  groupId: string;
+  groupName: string;
+  /** حصص مسلَّمة في الشهر (من أيام الحضور المسجلة) */
+  sessions: number;
+  /** محصّل المجموعة في الشهر */
+  collected: number;
+  /** تكلفة المدرس على المجموعة دي */
+  amount: number;
+}
+
+/** سلفة/عهدة على مدرس */
+export interface TeacherAdvance {
+  id: string;
+  teacherId: string;
+  amount: number;
+  date: string;
+  reason?: string;
+  /** اتخصمت من أنهي شهر (YYYY-MM) */
+  settledInPeriod?: string;
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
@@ -69,6 +184,12 @@ export interface Course {
   icon: string;
   color: string;
   levels: CourseLevel[];
+  /**
+   * عدد الحصص في الشهر للكورس ده.
+   * لو مش محدد بيتحسب من جدول المجموعة (عدد الأيام × 4)، ولو مفيش جدول
+   * بيستخدم الإعداد العام `settings.sessionsPerMonth` (الافتراضي 8).
+   */
+  sessionsPerMonth?: number;
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
@@ -115,14 +236,79 @@ export interface Payment {
   notes?: string;
   /** الأقساط التي غطّتها هذه الدفعة */
   installmentIds?: string[];
+
+  // ==================== v7: محاسبة ومسؤولية ====================
+  /** طريقة القبض (كاش/محفظة/إنستاباي/فيزا/تحويل) — أساس مطابقة الخزينة */
+  method?: PaymentMethod;
+  /** المستخدم اللي سجّل الدفعة (مساءلة + تقرير تحصيل لكل موظف) */
+  collectedBy?: string;
+  collectedByName?: string;
+  /** رقم إيصال تسلسلي (مثال: 2026-0001) — مش معرّف عشوائي */
+  receiptNo?: string;
+  /** دفعة ملغاة (void): بتفضل في السجل للأثر لكن مش بتتحسب في أي مجموع */
+  voided?: boolean;
+  voidedAt?: string;
+  voidReason?: string;
+  voidedBy?: string;
+
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
 }
 
+/** استرداد مبلغ لطالب (انسحاب/دفعة بالغلط/خصم خدمة) */
+export interface Refund {
+  id: string;
+  studentId: string;
+  /** الدفعة الأصلية لو الاسترداد مرتبط بيها */
+  paymentId?: string;
+  groupId?: string;
+  amount: number;
+  reason: string;
+  /** الطريقة اللي اتصرف بيها الفلوس */
+  method?: PaymentMethod;
+  date: string;
+  userId?: string;
+  username?: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+/** وردية/تقفيل خزينة */
+export interface CashSession {
+  id: string;
+  /** اليوم اللي بيتقفل (YYYY-MM-DD) */
+  date: string;
+  status: 'open' | 'closed';
+  openedAt: string;
+  openedBy?: string;
+  openedByName?: string;
+  /** رصيد أول المدة (نقدي) */
+  openingBalance: number;
+  closedAt?: string;
+  closedBy?: string;
+  closedByName?: string;
+  /** المفروض في الدرج (محسوب من الدفعات − الاسترداد − المصروفات النقدية) */
+  expectedCash?: number;
+  /** المعدود فعلياً */
+  countedCash?: number;
+  /** الفرق (counted − expected): سالب = عجز، موجب = زيادة */
+  difference?: number;
+  /** تفصيل المحصّل بكل طريقة وقت التقفيل (لقطة ثابتة) */
+  byMethod?: Record<PaymentMethod, number>;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // الأقساط/المستحقات — التعريف في src/lib/billing.ts (منطق نقي قابل للاختبار)
-export type { Installment, InstallmentStatus, BalanceSummary };
-export { installmentRemaining, installmentState, summarize, SESSIONS_PER_MONTH } from './billing';
+export type { Installment, InstallmentStatus, BalanceSummary, PricingInput, AgingBucket, UpcomingDues } from './billing';
+export {
+  installmentRemaining, installmentState, summarize, SESSIONS_PER_MONTH,
+  isCountedPayment, effectiveMonthlyPrice, discountBreakdown, resolveSessionsPerMonth,
+  computeDueDate, sessionPrice, creditOf, debtAging, upcomingDues, daysOverdue, AGING_RANGES,
+} from './billing';
 
 export interface Attendance {
   id: string;
@@ -164,6 +350,85 @@ export interface Settings {
   notifyNewStudent: boolean;
   notifyAbsence: boolean;
   notifyLatePayment: boolean;
+
+  // ==================== v7: سياسة التحصيل والفواتير ====================
+  /**
+   * يوم الاستحقاق الموحد للأقساط (1-28).
+   * لو محدد، كل الأقساط تستحق في اليوم ده من كل شهر بدل «يوم التسجيل + شهر»،
+   * وده بيخلي التحصيل منتظم وقابل للمتابعة.
+   */
+  dueDayOfMonth?: number;
+  /** أيام سماح قبل ما القسط يتحول لـ«متأخر» */
+  graceDays?: number;
+  /** عدد الحصص في الشهر افتراضياً (لو الكورس/المجموعة مش محددة) */
+  sessionsPerMonth?: number;
+  /** بادئة رقم الإيصال (افتراضي: السنة) */
+  receiptPrefix?: string;
+  /** تذييل الإيصال المطبوع (مثال: «الاشتراك غير قابل للاسترداد بعد أول حصة») */
+  receiptFooter?: string;
+  /** شعار المركز (data URL) للإيصالات والتقارير المطبوعة */
+  logo?: string;
+
+  // ==================== v7: التنبيهات ====================
+  /** تنبيه بالأقساط اللي استحقاقها قرب (قبل ما تتأخر) */
+  notifyUpcomingDue?: boolean;
+  /** كام يوم قبل الاستحقاق نبدأ التنبيه */
+  upcomingDueDays?: number;
+  /** حد المخزون المنخفض (تنبيه إعادة الطلب) */
+  lowStockThreshold?: number;
+}
+
+/** رسالة لولي أمر (سجل مراسلات) */
+export interface MessageLog {
+  id: string;
+  studentId?: string;
+  studentName?: string;
+  phone?: string;
+  /** سبب/نوع الرسالة */
+  kind: 'late_payment' | 'upcoming_due' | 'absence' | 'exam_result' | 'general' | 'renewal';
+  channel: 'whatsapp' | 'sms' | 'call' | 'email';
+  text: string;
+  /** اتبعتت فعلاً ولا مجرد تحضير */
+  sent: boolean;
+  date: string;
+  userId?: string;
+  username?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+/** قالب رسالة جاهز */
+export interface MessageTemplate {
+  id: string;
+  name: string;
+  kind: MessageLog['kind'];
+  /** النص مع متغيرات: {student} {group} {amount} {dueDate} {center} {teacher} */
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+/** قائمة انتظار مجموعة مكتملة */
+export interface WaitlistEntry {
+  id: string;
+  groupId: string;
+  studentId: string;
+  addedAt: string;
+  /** أولوية (أصغر = أقدم/أهم) */
+  priority: number;
+  notes?: string;
+  status: 'waiting' | 'enrolled' | 'cancelled';
+  createdAt: string;
+  updatedAt: string;
+  deleted?: boolean;
+}
+
+/** عدّاد تسلسلي (ترقيم الإيصالات) */
+export interface Counter {
+  id: string;
+  value: number;
+  updatedAt: string;
 }
 
 export interface Expense {
@@ -172,6 +437,25 @@ export interface Expense {
   amount: number;
   description: string;
   date: string;
+
+  // ==================== v7: تتبع ومسؤولية ====================
+  /** ربط بمجموعة (مصروف مباشر → يدخل في ربحية المجموعة) */
+  groupId?: string;
+  /** ربط بمدرس (رواتب/مكافآت) */
+  teacherId?: string;
+  /** المستخدم اللي سجّل المصروف */
+  userId?: string;
+  username?: string;
+  /** طريقة الدفع */
+  method?: PaymentMethod;
+  /** مصروف متكرر شهرياً (إيجار/كهربا/نت) — بيتولد تلقائياً */
+  recurring?: 'none' | 'monthly' | 'weekly' | 'yearly';
+  /** مرفق (صورة الفاتورة) كـ data URL */
+  attachment?: string;
+  attachmentName?: string;
+  /** رقم سند/فاتورة المورد */
+  reference?: string;
+
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
@@ -239,6 +523,22 @@ export interface Enrollment {
   /** لو الحالة transferred: المجموعة اللي اتحوّل ليها */
   transferredToGroupId?: string;
   initialPayment?: number;
+
+  // ==================== v7: تسعير وخصومات ====================
+  /**
+   * سعر شهري خاص بالتسجيل ده (يتجاوز سعر الكورس).
+   * بيستخدم لما الطالب بيتفق على سعر مختلف أو المجموعة سعرها أعلى/أقل.
+   */
+  priceOverride?: number;
+  /** خصم بقيمة ثابتة على كل قسط */
+  discountAmount?: number;
+  /** خصم بنسبة مئوية (0-100) على كل قسط — بيتحسب بعد priceOverride */
+  discountPercent?: number;
+  /** سبب الخصم (إخوة/منحة/حالة اجتماعية/عرض…) */
+  discountReason?: string;
+  /** حصة/شهر تجريبي مجاني أو بسعر رمزي */
+  isTrial?: boolean;
+
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -248,7 +548,15 @@ export interface Enrollment {
 // ==================== DB INIT ====================
 
 const DB_NAME = 'EduCenterProDB';
-const DB_VERSION = 6;
+/**
+ * الإصدارات:
+ *  6 → المتاجر الأساسية + enrollments + installments
+ *  7 → audit_logs (سجل مراجعة في القاعدة بدل localStorage) · counters (ترقيم الإيصالات)
+ *      refunds (استرداد) · cashbox_sessions (الخزينة/التقفيل) · payroll + teacher_advances
+ *      (رواتب المدرسين) · message_logs + message_templates (تواصل أولياء الأمور)
+ *      waitlist (قائمة الانتظار) + فهارس إضافية على payments
+ */
+const DB_VERSION = 7;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let dbInstance: IDBPDatabase<any> | null = null;
@@ -258,7 +566,7 @@ export async function getDB(): Promise<IDBPDatabase<any>> {
   if (dbInstance) return dbInstance;
 
   dbInstance = await openDB(DB_NAME, DB_VERSION, {
-    upgrade(db) {
+    upgrade(db, _oldVersion, _newVersion, tx) {
       // Students
       if (!db.objectStoreNames.contains('students')) {
         const s = db.createObjectStore('students', { keyPath: 'id' });
@@ -369,6 +677,95 @@ export async function getDB(): Promise<IDBPDatabase<any>> {
         s.createIndex('by-dueDate', 'dueDate');
         s.createIndex('by-studentGroup', ['studentId', 'groupId']);
       }
+
+      // ==================== v7 ====================
+
+      // سجل المراجعة — في القاعدة (مش localStorage) عشان يتنسخ ويتزامن
+      if (!db.objectStoreNames.contains('audit_logs')) {
+        const s = db.createObjectStore('audit_logs', { keyPath: 'id' });
+        s.createIndex('by-timestamp', 'timestamp');
+        s.createIndex('by-action', 'action');
+        s.createIndex('by-entity', 'entity');
+        s.createIndex('by-userId', 'userId');
+      }
+
+      // عدّادات تسلسلية (ترقيم الإيصالات)
+      if (!db.objectStoreNames.contains('counters')) {
+        db.createObjectStore('counters', { keyPath: 'id' });
+      }
+
+      // استرداد/إلغاء دفعات
+      if (!db.objectStoreNames.contains('refunds')) {
+        const s = db.createObjectStore('refunds', { keyPath: 'id' });
+        s.createIndex('by-studentId', 'studentId');
+        s.createIndex('by-date', 'date');
+        s.createIndex('by-paymentId', 'paymentId');
+      }
+
+      // الخزينة: ورديات/تقفيل يومي
+      if (!db.objectStoreNames.contains('cashbox_sessions')) {
+        const s = db.createObjectStore('cashbox_sessions', { keyPath: 'id' });
+        s.createIndex('by-status', 'status');
+        s.createIndex('by-openedAt', 'openedAt');
+        s.createIndex('by-date', 'date');
+      }
+
+      // رواتب المدرسين
+      if (!db.objectStoreNames.contains('payroll')) {
+        const s = db.createObjectStore('payroll', { keyPath: 'id' });
+        s.createIndex('by-teacherId', 'teacherId');
+        s.createIndex('by-period', 'period');
+        s.createIndex('by-teacherPeriod', ['teacherId', 'period']);
+        s.createIndex('by-status', 'status');
+      }
+
+      // سلف/عهدة المدرسين
+      if (!db.objectStoreNames.contains('teacher_advances')) {
+        const s = db.createObjectStore('teacher_advances', { keyPath: 'id' });
+        s.createIndex('by-teacherId', 'teacherId');
+        s.createIndex('by-date', 'date');
+      }
+
+      // تواصل أولياء الأمور (سجل مراسلات)
+      if (!db.objectStoreNames.contains('message_logs')) {
+        const s = db.createObjectStore('message_logs', { keyPath: 'id' });
+        s.createIndex('by-studentId', 'studentId');
+        s.createIndex('by-date', 'date');
+        s.createIndex('by-channel', 'channel');
+      }
+
+      // قوالب الرسائل
+      if (!db.objectStoreNames.contains('message_templates')) {
+        const s = db.createObjectStore('message_templates', { keyPath: 'id' });
+        s.createIndex('by-kind', 'kind');
+      }
+
+      // قائمة الانتظار للمجموعات المكتملة
+      if (!db.objectStoreNames.contains('waitlist')) {
+        const s = db.createObjectStore('waitlist', { keyPath: 'id' });
+        s.createIndex('by-groupId', 'groupId');
+        s.createIndex('by-studentId', 'studentId');
+        s.createIndex('by-groupStudent', ['groupId', 'studentId']);
+      }
+
+      // ==================== فهارس مضافة لمتاجر موجودة ====================
+      // (المتاجر القديمة مش هتدخل بلوك الإنشاء فوق، فلازم نضيف الفهارس صراحة)
+      const ensureIndex = (
+        store: string,
+        name: string,
+        keyPath: string | string[],
+      ) => {
+        if (!db.objectStoreNames.contains(store)) return;
+        const s = tx.objectStore(store);
+        if (!s.indexNames.contains(name)) s.createIndex(name, keyPath);
+      };
+
+      // ربحية المجموعات + تقفيل الخزينة بيستعلموا بالدفعات حسب المجموعة/التاريخ
+      ensureIndex('payments', 'by-groupId', 'groupId');
+      ensureIndex('payments', 'by-type', 'type');
+      ensureIndex('payments', 'by-collectedBy', 'collectedBy');
+      ensureIndex('expenses', 'by-teacherId', 'teacherId');
+      ensureIndex('students', 'by-updatedAt', 'updatedAt');
     },
   });
 
@@ -433,13 +830,25 @@ type StoreName =
   | 'payments' | 'attendance' | 'users' | 'settings'
   | 'expenses' | 'exams' | 'grades'
   | 'inventory' | 'inventory_transactions'
-  | 'enrollments' | 'installments';
+  | 'enrollments' | 'installments'
+  // v7
+  | 'audit_logs' | 'counters' | 'refunds' | 'cashbox_sessions'
+  | 'payroll' | 'teacher_advances' | 'message_logs' | 'message_templates'
+  | 'waitlist';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function dbGetAll<T = any>(storeName: StoreName): Promise<T[]> {
+export type { StoreName };
+
+export interface DbGetAllOptions {
+  /** رجّع الصفوف المحذوفة كمان (لسلة المحذوفات) */
+  includeDeleted?: boolean;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- الافتراضي any عشان النداءات من غير generic تفضل شغالة
+export async function dbGetAll<T = any>(storeName: StoreName, opts: DbGetAllOptions = {}): Promise<T[]> {
   try {
     const db = await getDB();
     const all: T[] = await db.getAll(storeName);
+    if (opts.includeDeleted) return all;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return all.filter((item: any) => !item.deleted);
   } catch (e) {
@@ -484,12 +893,26 @@ export async function dbPut<T = any>(storeName: StoreName, item: T): Promise<voi
   }
 }
 
-export async function dbSoftDelete(storeName: StoreName, id: string): Promise<void> {
+export interface SoftDeleteMeta {
+  /** المستخدم اللي حذف (يظهر في سلة المحذوفات) */
+  deletedBy?: string;
+  reason?: string;
+}
+
+export async function dbSoftDelete(storeName: StoreName, id: string, meta: SoftDeleteMeta = {}): Promise<void> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const item = await dbGetById<any>(storeName, id);
     if (item) {
-      await dbPut(storeName, { ...item, deleted: true, updatedAt: new Date().toISOString() });
+      const now = new Date().toISOString();
+      await dbPut(storeName, {
+        ...item,
+        deleted: true,
+        deletedAt: now,
+        deletedBy: meta.deletedBy,
+        deleteReason: meta.reason,
+        updatedAt: now,
+      });
     }
   } catch (e) {
     console.error(`dbSoftDelete(${storeName}) error:`, e);
@@ -576,12 +999,31 @@ export async function dbGetByIndex<T = any>(
  * @param opts.startSession رقم الحصة اللي التحق منها (للالتحاق في نص الكورس) —
  *        بيخلّي القسط الأول محسوب على الحصص الباقية بس
  */
+export interface EnrollOptions {
+  startSession?: number;
+  // ==================== v7: تسعير وخصومات ====================
+  /** سعر شهري خاص بالتسجيل (يتجاوز سعر الكورس) */
+  priceOverride?: number;
+  /** خصم ثابت (جنيه) */
+  discountAmount?: number;
+  /** خصم نسبة (0-100) */
+  discountPercent?: number;
+  /** سبب الخصم (إخوة/منحة/حالة اجتماعية/عرض) */
+  discountReason?: string;
+  /** تسجيل تجريبي */
+  isTrial?: boolean;
+  // ==================== v7: بيانات الدفعة الأولى ====================
+  paymentMethod?: PaymentMethod;
+  collectedBy?: string;
+  collectedByName?: string;
+}
+
 export async function enrollStudent(
   studentId: string,
   groupId: string,
   initialPayment?: number,
-  opts?: { startSession?: number }
-): Promise<{ success: boolean; error?: string }> {
+  opts?: EnrollOptions
+): Promise<{ success: boolean; error?: string; enrollmentId?: string; monthlyPrice?: number }> {
   try {
     // 1. Validate
     const [student, group] = await Promise.all([
@@ -610,6 +1052,19 @@ export async function enrollStudent(
     const enrollmentId = generateId();
     const now = new Date().toISOString();
     const startSession = opts?.startSession && opts.startSession > 1 ? opts.startSession : undefined;
+
+    const course = await dbGetById<Course>('courses', group.courseId);
+    const policy = await getBillingPolicy();
+
+    // التسعير الفعلي: سعر خاص → خصم نسبة → خصم مبلغ
+    const pricing: PricingInput = {
+      coursePrice: course?.price || 0,
+      priceOverride: opts?.priceOverride,
+      discountAmount: opts?.discountAmount,
+      discountPercent: opts?.discountPercent,
+    };
+    const monthlyPrice = effectiveMonthlyPrice(pricing);
+
     const enrollment: Enrollment = {
       id: enrollmentId,
       studentId,
@@ -618,20 +1073,33 @@ export async function enrollStudent(
       enrolledAt: now,
       startSession,
       initialPayment: initialPayment || 0,
+      priceOverride: opts?.priceOverride,
+      discountAmount: opts?.discountAmount,
+      discountPercent: opts?.discountPercent,
+      discountReason: opts?.discountReason,
+      isTrial: opts?.isTrial,
       createdAt: now,
       updatedAt: now,
     };
     await dbAdd('enrollments', enrollment);
 
     // 4b. توليد خطة الأقساط الشهرية لهذا التسجيل (المستحقات الحقيقية على الطالب)
-    const course = await dbGetById<Course>('courses', group.courseId);
+    // عدد الحصص الفعلي في الشهر بيحدد تناسب الالتحاق في نص الكورس
+    const sessionsPerMonth = resolveSessionsPerMonth({
+      courseSessionsPerMonth: course?.sessionsPerMonth,
+      scheduleDays: group.schedule?.map(s => s.days),
+      settingSessionsPerMonth: policy.sessionsPerMonth,
+    });
+
     const plan = buildMonthlyPlan({
-      coursePrice: course?.price || 0,
+      ...pricing,
       durationMonths: course?.durationMonths || 1,
       startDate: now,
+      dueDayOfMonth: policy.dueDayOfMonth,
+      graceDays: policy.graceDays,
       // الالتحاق في نص الكورس: الشهر الأول يتحسب على الحصص الباقية بس
-      firstPeriodAmount: startSession && course
-        ? proratedFirstPeriod(course.price, startSession)
+      firstPeriodAmount: startSession
+        ? proratedFirstPeriod(monthlyPrice, startSession, sessionsPerMonth)
         : undefined,
     });
     const createdInstallments: Installment[] = plan.map(p => ({
@@ -666,20 +1134,26 @@ export async function enrollStudent(
     await dbBulkAdd('installments', createdInstallments);
 
     if (initialPayment && initialPayment > 0) {
+      const paymentDate = now.split('T')[0];
+      const receiptNo = await nextReceiptNo(paymentDate, policy.receiptPrefix);
       await dbAdd('payments', {
         id: generateId(),
         studentId,
         courseId: group.courseId,
         groupId,
         amount: initialPayment,
-        date: now.split('T')[0],
+        date: paymentDate,
         type: 'subscription',
         status: 'paid',
         installmentIds: [],
+        method: opts?.paymentMethod || 'cash',
+        collectedBy: opts?.collectedBy,
+        collectedByName: opts?.collectedByName,
+        receiptNo,
         notes: `تسجيل في ${group.name}`,
         createdAt: now,
         updatedAt: now,
-      });
+      } satisfies Payment);
     }
 
     // 7. Sync group status
@@ -688,7 +1162,7 @@ export async function enrollStudent(
     // 8. توزيع الدفعات على الأقساط + إعادة حساب أرصدة الطالب
     await rebuildInstallmentsFromPayments(studentId);
 
-    return { success: true };
+    return { success: true, enrollmentId, monthlyPrice };
   } catch (error) {
     console.error('enrollStudent error:', error);
     return { success: false, error: String(error) };
@@ -997,6 +1471,10 @@ export interface StudentBalance extends BalanceSummary {
   unpaidCount: number;
   overdueCount: number;
   overdueAmount: number;
+  /** رصيد دائن لصالح الطالب (دفع أكتر من المستحق) — بيظهر في ملفه وفي التحصيل */
+  credit: number;
+  /** إجمالي الاستردادات */
+  refunded: number;
   groups: GroupBalance[];
 }
 
@@ -1072,6 +1550,8 @@ export interface PaymentResult {
   /** المبلغ اللي اتوزّع فعلاً على الأقساط */
   applied?: number;
   remainingAfter?: number;
+  /** رصيد دائن لصالح الطالب بعد الدفعة (لو دفع أكتر من المستحق) */
+  creditAfter?: number;
 }
 
 /**
@@ -1094,15 +1574,17 @@ export async function getStudentBalance(studentId: string): Promise<StudentBalan
   const student = await dbGetById<Student>('students', studentId);
   if (!student) return null;
 
-  const [installments, payments, groups, courses] = await Promise.all([
+  const [installments, payments, refunds, groups, courses] = await Promise.all([
     getStudentInstallments(studentId),
     dbGetByIndex<Payment>('payments', 'by-studentId', studentId),
+    getStudentRefunds(studentId),
     dbGetAll<Group>('groups'),
     dbGetAll<Course>('courses'),
   ]);
 
-  const overall = computeBalance({ installments, payments });
+  const overall = computeBalance({ installments, payments, refunds });
   const overallSummary = summarize(installments);
+  const refundedTotal = refunds.reduce((s, r) => s + (r.amount || 0), 0);
 
   // الأقساط الملغاة (تحويل/خروج من مجموعة) ما تظهرش في المستحقات
   const visible = installments.filter(i => i.status !== 'cancelled');
@@ -1142,6 +1624,8 @@ export async function getStudentBalance(studentId: string): Promise<StudentBalan
     unpaidCount: overallSummary.unpaidCount,
     overdueCount: overallSummary.overdueCount,
     overdueAmount: overallSummary.overdueAmount,
+    credit: creditOf(overall),
+    refunded: Math.round(refundedTotal * 100) / 100,
     groups: groupBalances,
   };
 }
@@ -1152,7 +1636,7 @@ export async function getStudentBalance(studentId: string): Promise<StudentBalan
  * - التوزيع: الأقدم استحقاقاً الأول.
  * - أي مبلغ زيادة عن المستحق يُسجَّل كدفعة (فائض) بدون أقساط مرتبطة.
  */
-export async function recordInstallmentPayment(opts: {
+export interface RecordPaymentOptions {
   studentId: string;
   amount: number;
   groupId?: string;
@@ -1160,7 +1644,15 @@ export async function recordInstallmentPayment(opts: {
   notes?: string;
   courseId?: string;
   type?: PaymentType;
-}): Promise<PaymentResult> {
+  // ==================== v7: محاسبة ومسؤولية ====================
+  method?: PaymentMethod;
+  collectedBy?: string;
+  collectedByName?: string;
+  /** رقم إيصال محدد (لو فاضي بيتحجز رقم تسلسلي تلقائياً) */
+  receiptNo?: string;
+}
+
+export async function recordInstallmentPayment(opts: RecordPaymentOptions): Promise<PaymentResult> {
   const { studentId, amount } = opts;
   if (!studentId) return { success: false, error: 'اختر طالباً' };
   if (!(amount > 0)) return { success: false, error: 'المبلغ يجب أن يكون أكبر من صفر' };
@@ -1172,6 +1664,9 @@ export async function recordInstallmentPayment(opts: {
   const now = new Date().toISOString();
   const group = opts.groupId ? await dbGetById<Group>('groups', opts.groupId) : undefined;
 
+  const policy = await getBillingPolicy();
+  const receiptNo = (opts.receiptNo || '').trim() || await nextReceiptNo(date, policy.receiptPrefix);
+
   const payment: Payment = {
     id: generateId(),
     studentId,
@@ -1182,6 +1677,10 @@ export async function recordInstallmentPayment(opts: {
     status: 'paid',
     date,
     installmentIds: [],
+    method: opts.method || 'cash',
+    collectedBy: opts.collectedBy,
+    collectedByName: opts.collectedByName,
+    receiptNo,
     notes: opts.notes || (group ? `سداد — ${group.name}` : 'سداد أقساط'),
     createdAt: now,
     updatedAt: now,
@@ -1192,7 +1691,100 @@ export async function recordInstallmentPayment(opts: {
   await rebuildInstallmentsFromPayments(studentId);
   const after = await getStudentBalance(studentId);
 
-  return { success: true, payment, applied: amount, remainingAfter: after?.remaining ?? 0 };
+  return {
+    success: true,
+    payment,
+    applied: amount,
+    remainingAfter: Math.max(0, after?.remaining ?? 0),
+    creditAfter: after?.credit ?? 0,
+  };
+}
+
+/**
+ * إلغاء دفعة (void) — مش حذف.
+ * الدفعة بتفضل في السجل برقم إيصالها وسبب الإلغاء ومين ألغاها، لكنها ما بتتحسبش
+ * في أي مجموع وما بتغطّيش أي قسط (rebuild بيستثنيها).
+ */
+export async function voidPayment(opts: {
+  paymentId: string;
+  reason: string;
+  userId?: string;
+  username?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const payment = await dbGetById<Payment>('payments', opts.paymentId);
+  if (!payment) return { success: false, error: 'الدفعة غير موجودة' };
+  if (payment.voided) return { success: false, error: 'الدفعة ملغاة بالفعل' };
+
+  const reason = (opts.reason || '').trim();
+  if (!reason) return { success: false, error: 'سبب الإلغاء مطلوب' };
+
+  await dbPut('payments', {
+    ...payment,
+    voided: true,
+    voidedAt: new Date().toISOString(),
+    voidReason: reason,
+    voidedBy: opts.username || opts.userId || 'غير معروف',
+    installmentIds: [],
+    updatedAt: new Date().toISOString(),
+  });
+
+  // إعادة توزيع الأقساط من الدفعات الصالحة فقط
+  await rebuildInstallmentsFromPayments(payment.studentId);
+  return { success: true };
+}
+
+/** تسجيل استرداد مبلغ لطالب (بيقلل المدفوع وبيظهر في الخزينة كمصروف نقدي) */
+export async function recordRefund(opts: {
+  studentId: string;
+  amount: number;
+  reason: string;
+  paymentId?: string;
+  groupId?: string;
+  method?: PaymentMethod;
+  date?: string;
+  userId?: string;
+  username?: string;
+}): Promise<{ success: boolean; error?: string; refund?: Refund }> {
+  if (!(opts.amount > 0)) return { success: false, error: 'المبلغ يجب أن يكون أكبر من صفر' };
+
+  const reason = (opts.reason || '').trim();
+  if (!reason) return { success: false, error: 'سبب الاسترداد مطلوب' };
+
+  const student = await dbGetById<Student>('students', opts.studentId);
+  if (!student) return { success: false, error: 'الطالب غير موجود' };
+
+  // ما نرجّعش أكتر من اللي الطالب دفعه فعلاً
+  const balance = await getStudentBalance(opts.studentId);
+  const paid = balance?.paid ?? 0;
+  if (opts.amount > paid) {
+    return { success: false, error: `الاسترداد (${opts.amount}) أكبر من إجمالي المدفوع (${paid})` };
+  }
+
+  const now = new Date().toISOString();
+  const refund: Refund = {
+    id: generateId(),
+    studentId: opts.studentId,
+    paymentId: opts.paymentId,
+    groupId: opts.groupId,
+    amount: opts.amount,
+    reason,
+    method: opts.method || 'cash',
+    date: opts.date || dayjs().format('YYYY-MM-DD'),
+    userId: opts.userId,
+    username: opts.username,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await dbAdd('refunds', refund);
+  await recalculateStudentTotalPaid(opts.studentId);
+
+  return { success: true, refund };
+}
+
+/** كل الاستردادات (الأحدث الأول) — بتُخصم من الإيراد وتظهر في الخزينة */
+export async function getRefunds(): Promise<Refund[]> {
+  const rows = await dbGetAll<Refund>('refunds');
+  return rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 }
 
 /**
@@ -1218,8 +1810,9 @@ export async function rebuildInstallmentsFromPayments(studentId: string): Promis
   // تصفير المدفوع (الملغي يفضل ملغي — applyPayment بيتخطاه)
   let current: Installment[] = installments.map(i => ({ ...i, paidAmount: 0 }));
 
+  // الدفعات المحسوبة بس (مش محذوفة/ملغاة) — الملغاة ما بتغطّيش أي قسط
   const paidSubscription = payments
-    .filter(p => !p.deleted && p.status === 'paid' && p.type === 'subscription')
+    .filter(p => isCountedPayment(p) && p.type === 'subscription')
     .slice()
     .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
 
@@ -1429,15 +2022,16 @@ export async function recalculateStudentTotalPaid(studentId: string): Promise<vo
   const student = await dbGetById<Student>('students', studentId);
   if (!student) return;
 
-  const [payments, installments] = await Promise.all([
+  const [payments, installments, refunds] = await Promise.all([
     dbGetByIndex<Payment>('payments', 'by-studentId', studentId),
     dbGetByIndex<Installment>('installments', 'by-studentId', studentId),
+    getStudentRefunds(studentId),
   ]);
 
   // الأقساط هي مصدر الحقيقة للمستحقات. لو مفيش أقساط (بيانات قديمة قبل الترحيل)
   // نرجع للحساب التقريبي القديم عشان الأرقام ما تتغيرش فجأة على المستخدم.
   const balance = installments.length > 0
-    ? computeBalance({ installments, payments })
+    ? computeBalance({ installments, payments, refunds })
     : await computeLegacyBalance(student, payments);
 
   await dbPut('students', {
@@ -1446,6 +2040,16 @@ export async function recalculateStudentTotalPaid(studentId: string): Promise<vo
     totalOwed: balance.owed,
     updatedAt: new Date().toISOString(),
   });
+}
+
+/** استردادات طالب (بتقلل المدفوع) */
+export async function getStudentRefunds(studentId: string): Promise<Refund[]> {
+  try {
+    const rows = await dbGetByIndex<Refund>('refunds', 'by-studentId', studentId);
+    return rows.filter(r => !r.deleted);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -1482,13 +2086,11 @@ async function computeLegacyBalance(
   }
 
   const extraOwed = payments
-    .filter(p => p.type !== 'subscription' && !p.deleted)
+    .filter(p => p.type !== 'subscription' && !p.deleted && !p.voided)
     .reduce((sum, p) => sum + p.amount, 0);
   totalOwed += extraOwed;
 
-  const totalPaid = payments
-    .filter(p => p.status === 'paid' && !p.deleted)
-    .reduce((sum, p) => sum + p.amount, 0);
+  const totalPaid = payments.filter(isCountedPayment).reduce((sum, p) => sum + p.amount, 0);
 
   return {
     owed: Math.round(totalOwed * 100) / 100,
@@ -1646,59 +2248,62 @@ export async function getGroupAttendanceForDate(
 
 // ==================== BACKUP / RESTORE ====================
 
-export async function exportAllData(): Promise<object> {
-  const db = await getDB();
-  const [students, teachers, courses, groups, payments, attendance, expenses, exams, grades, enrollments, installments, inventory, inventoryTransactions, users] =
-    await Promise.all([
-      db.getAll('students'),
-      db.getAll('teachers'),
-      db.getAll('courses'),
-      db.getAll('groups'),
-      db.getAll('payments'),
-      db.getAll('attendance'),
-      db.getAll('expenses'),
-      db.getAll('exams'),
-      db.getAll('grades'),
-      db.getAll('enrollments'),
-      db.getAll('installments'),
-      db.getAll('inventory'),
-      db.getAll('inventory_transactions'),
-      db.getAll('users'),
-    ]);
-  const settings = await db.get('settings', 'main');
+/** كل المتاجر اللي بتدخل في النسخة الاحتياطية (بالترتيب) */
+export const BACKUP_STORES: StoreName[] = [
+  'students', 'teachers', 'courses', 'groups',
+  'payments', 'attendance', 'expenses', 'exams', 'grades',
+  'enrollments', 'installments', 'inventory', 'inventory_transactions',
+  // v7
+  'refunds', 'cashbox_sessions', 'payroll', 'teacher_advances',
+  'message_logs', 'message_templates', 'waitlist', 'audit_logs', 'counters',
+];
 
-  return {
-    version: 6,
+/** مفتاح التصدير لاسم متجر (التصدير تاريخياً استخدم camelCase لبعض الجداول) */
+function exportKey(store: StoreName): string {
+  return store === 'inventory_transactions' ? 'inventoryTransactions' : store;
+}
+
+export interface ExportOptions {
+  /**
+   * تضمين جدول `users` (فيه password hashes).
+   * افتراضي `true` للنسخ المحلية (عشان استرجاع تسجيل الدخول)،
+   * ولازم يكون `false` لأي نسخة بتترفع للسحابة.
+   */
+  includeUsers?: boolean;
+}
+
+export async function exportAllData(opts: ExportOptions = {}): Promise<object> {
+  const db = await getDB();
+  const includeUsers = opts.includeUsers !== false;
+
+  const stores = includeUsers ? [...BACKUP_STORES, 'users' as StoreName] : BACKUP_STORES;
+
+  const payload: Record<string, unknown> = {
+    version: DB_VERSION,
     exportedAt: new Date().toISOString(),
-    students,
-    teachers,
-    courses,
-    groups,
-    payments,
-    attendance,
-    settings,
-    expenses,
-    exams,
-    grades,
-    enrollments,
-    installments,
-    inventory,
-    inventoryTransactions,
-    users,
+    includeUsers,
   };
+
+  for (const store of stores) {
+    if (!db.objectStoreNames.contains(store)) continue;
+    payload[exportKey(store)] = await db.getAll(store);
+  }
+
+  payload['settings'] = await db.get('settings', 'main');
+
+  return payload;
 }
 
 export async function importAllData(data: Record<string, unknown>): Promise<void> {
-  const stores: StoreName[] = [
-    'students', 'teachers', 'courses', 'groups',
-    'payments', 'attendance', 'expenses', 'exams', 'grades',
-    'enrollments', 'installments', 'inventory', 'inventory_transactions', 'users'
-  ];
+  const db = await getDB();
+  // `users` بيتستورد فقط لو النسخة فيها فعلاً (نسخ السحابة مش بتحتويه)
+  const stores: StoreName[] = [...BACKUP_STORES];
+  if (Array.isArray(data['users'])) stores.push('users');
 
   for (const store of stores) {
-    // Handle both 'enrollments' and 'inventoryTransactions' naming
-    const storeKey = store === 'inventory_transactions' ? 'inventoryTransactions' : store;
-    const items = data[storeKey] ?? data[store];
+    if (!db.objectStoreNames.contains(store)) continue;
+    const key = exportKey(store);
+    const items = data[key] ?? data[store];
     // Only touch a store if the backup actually contains it (older backups
     // may lack newer stores such as `users` — never wipe those by accident).
     if (!Array.isArray(items)) continue;
@@ -1709,7 +2314,6 @@ export async function importAllData(data: Record<string, unknown>): Promise<void
   }
 
   if (data['settings'] && typeof data['settings'] === 'object' && !Array.isArray(data['settings'])) {
-    const db = await getDB();
     await db.put('settings', data['settings'] as Settings);
   }
 }
