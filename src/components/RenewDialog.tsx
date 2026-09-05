@@ -25,7 +25,7 @@ interface Props {
 }
 
 /**
- * فتح شهر جديد لطالب في مجموعة (التجديد).
+ * تجديد اشتراك طالب في مجموعة (شهر جديد أو أكتر).
  * بسيطة: الشهر اللي هيتفتح + سعره + دفع دلوقتي كام. الباقي يفضل ظاهر لحد ما يجيبه.
  */
 export default function RenewDialog({ open, studentId, studentName, groupId, onClose, onDone }: Props) {
@@ -106,14 +106,14 @@ export default function RenewDialog({ open, studentId, studentName, groupId, onC
       });
       if (!r.success) { notify.error(r.error || 'حدث خطأ'); return; }
       notify.success(
-        `اتفتح ${months === 1 ? `شهر ${monthName}` : `${months} شهور`} لـ ${studentName}` +
+        `تم تجديد ${studentName} — ${months === 1 ? `شهر ${monthName}` : `${months} شهور`}` +
         (pay > 0 ? ` · دفع ${formatCurrency(pay, currency)}` : '') +
         ((r.remainingAfter ?? 0) > 0 ? ` · باقي ${formatCurrency(r.remainingAfter ?? 0, currency)}` : ' · خالص')
       );
       addAuditEntry({
         userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
         action: 'update', entity: 'enrollment', entityId: enrollment?.id || `${studentId}:${groupId}`,
-        details: `فتح ${months} شهر لـ ${studentName} في ${group?.name || groupId} من ${startDate}` +
+        details: `تجديد ${months} شهر لـ ${studentName} في ${group?.name || groupId} من ${startDate}` +
           (pay > 0 ? ` — دفعة ${pay} (${METHOD_LABEL[method]})` : ''),
       });
       onDone();
@@ -128,7 +128,7 @@ export default function RenewDialog({ open, studentId, studentName, groupId, onC
   const inputCls = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white';
 
   return (
-    <Modal isOpen={open} onClose={onClose} title={`شهر جديد — ${studentName}`} size="sm">
+    <Modal isOpen={open} onClose={onClose} title={`تجديد — ${studentName}`} size="sm">
       {loading ? (
         <div className="py-8 text-center text-gray-400 animate-pulse">جاري التحميل...</div>
       ) : (
@@ -211,7 +211,7 @@ export default function RenewDialog({ open, studentId, studentName, groupId, onC
             <button onClick={handleRenew} disabled={saving}
               className="flex-1 py-2.5 rounded-xl font-semibold text-sm disabled:opacity-60 flex items-center justify-center gap-2"
               style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
-              <RefreshCw size={16} /> {saving ? 'جاري الحفظ...' : 'تأكيد'}
+              <RefreshCw size={16} /> {saving ? 'جاري الحفظ...' : 'تجديد'}
             </button>
             <button onClick={onClose} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm hover:bg-gray-200">
               إلغاء

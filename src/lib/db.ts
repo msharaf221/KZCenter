@@ -1641,12 +1641,18 @@ export async function transferStudent(opts: {
   await dbAdd('enrollments', newEnrollment);
 
   const course = await dbGetById<Course>('courses', toGroup.courseId);
-  // شهر واحد في المجموعة الجديدة (نفس قاعدة التسجيل)
+  const transferPolicy = await getBillingPolicy();
+  const toSessionsPerMonth = resolveSessionsPerMonth({
+    courseSessionsPerMonth: course?.sessionsPerMonth,
+    scheduleDays: toGroup.schedule?.map(s => s.days),
+    settingSessionsPerMonth: transferPolicy.sessionsPerMonth,
+  });
+  // شهر واحد في المجموعة الجديدة (نفس قاعدة التسجيل) — ولو دخل من نص الشهر يتحاسب على الحصص الباقية
   const plan = buildMonthlyPlan({
     coursePrice: course?.price || 0,
     durationMonths: 1,
     startDate: now,
-    firstPeriodAmount: startSession && course ? proratedFirstPeriod(course.price, startSession) : undefined,
+    firstPeriodAmount: startSession && course ? proratedFirstPeriod(course.price, startSession, toSessionsPerMonth) : undefined,
   });
   await dbBulkAdd<Installment>('installments', plan.map(p => ({
     id: generateId(),

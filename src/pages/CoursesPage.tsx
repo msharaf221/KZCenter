@@ -26,7 +26,7 @@ export default function CoursesPage() {
   const [studentCounts, setStudentCounts] = useState<Record<string, number>>({});
   const [form, setForm] = useState({
     name: '', category: 'علوم', description: '', price: 0,
-    durationMonths: 3, icon: '📚', color: COLORS[0], levels: [] as CourseLevel[],
+    durationMonths: 3, sessionsPerMonth: undefined as number | undefined, icon: '📚', color: COLORS[0], levels: [] as CourseLevel[],
   });
   const [newLevelName, setNewLevelName] = useState('');
 
@@ -54,13 +54,13 @@ export default function CoursesPage() {
 
   function openAdd() {
     setEditing(null);
-    setForm({ name: '', category: 'علوم', description: '', price: 0, durationMonths: 3, icon: '📚', color: COLORS[0], levels: [] });
+    setForm({ name: '', category: 'علوم', description: '', price: 0, durationMonths: 3, sessionsPerMonth: undefined, icon: '📚', color: COLORS[0], levels: [] });
     setShowModal(true);
   }
 
   function openEdit(c: Course) {
     setEditing(c);
-    setForm({ name: c.name, category: c.category, description: c.description || '', price: c.price, durationMonths: c.durationMonths, icon: c.icon, color: c.color, levels: [...c.levels] });
+    setForm({ name: c.name, category: c.category, description: c.description || '', price: c.price, durationMonths: c.durationMonths, sessionsPerMonth: c.sessionsPerMonth, icon: c.icon, color: c.color, levels: [...c.levels] });
     setShowModal(true);
   }
 
@@ -205,11 +205,23 @@ export default function CoursesPage() {
                 {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
-            <div className="sm:col-span-2">
+            <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">السعر الشهري</label>
               <input type="number" min={0} value={form.price} onChange={e => setForm({...form, price: +e.target.value})}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-              <p className="text-[11px] text-gray-400 mt-1">الطالب بيتحاسب شهر بشهر — ده المبلغ المطلوب منه كل شهر</p>
+              <p className="text-[11px] text-gray-400 mt-1">المبلغ المطلوب من الطالب كل شهر</p>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">عدد الحصص في الشهر</label>
+              <input type="number" min={1} max={40} placeholder="من جدول المجموعة"
+                value={form.sessionsPerMonth ?? ''}
+                onChange={e => setForm({...form, sessionsPerMonth: e.target.value === '' ? undefined : Math.max(1, +e.target.value)})}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+              <p className="text-[11px] text-gray-400 mt-1">
+                {form.price > 0 && form.sessionsPerMonth
+                  ? <>الحصة = <strong>{formatCurrency(Math.round((form.price / form.sessionsPerMonth) * 100) / 100, settings?.currency)}</strong> — للي بييجي في نص الشهر</>
+                  : 'سيبها فاضية يتحسب من أيام المجموعة (يوم واحد أسبوعياً = 4 حصص)'}
+              </p>
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">الأيقونة</label>

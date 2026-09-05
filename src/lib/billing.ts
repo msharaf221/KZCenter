@@ -583,9 +583,9 @@ export interface RenewalInfo {
 }
 
 export const RENEWAL_STATE_LABEL: Record<RenewalState, string> = {
-  active: 'مدفوع الشهر',
-  expiring: 'الشهر بيخلص',
-  expired: 'الشهر خلص',
+  active: 'ساري',
+  expiring: 'محتاج تجديد قريب',
+  expired: 'محتاج تجديد',
 };
 
 /**

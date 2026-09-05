@@ -10,6 +10,7 @@ import RenewDialog from '../components/RenewDialog';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, enrollStudent, unenrollStudent, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
 import { getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { resolveSessionsPerMonth } from '../lib/billing';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
@@ -40,6 +41,7 @@ export default function GroupsPage() {
   const [viewGroup, setViewGroup] = useState<Group | null>(null);
   const [selectedStudentToAdd, setSelectedStudentToAdd] = useState('');
   const [paymentAmountToAdd, setPaymentAmountToAdd] = useState<number | ''>('');
+  const [startSessionToAdd, setStartSessionToAdd] = useState(1);
   const [transferTarget, setTransferTarget] = useState<{ studentId: string; studentName: string; fromGroupId: string } | null>(null);
   const [renewTarget, setRenewTarget] = useState<{ studentId: string; studentName: string; groupId: string } | null>(null);
   const [form, setForm] = useState({
@@ -158,7 +160,7 @@ export default function GroupsPage() {
         studentId,
         groupId,
         paymentAmountToAdd ? Number(paymentAmountToAdd) : undefined,
-        undefined
+        startSessionToAdd > 1 ? { startSession: startSessionToAdd } : undefined
       );
       if (!result.success) {
         notify.error(result.error || 'حدث خطأ');
@@ -175,6 +177,7 @@ export default function GroupsPage() {
       if (viewGroup && updatedGroup) setViewGroup(updatedGroup);
       setSelectedStudentToAdd('');
       setPaymentAmountToAdd('');
+      setStartSessionToAdd(1);
     } catch (e) {
       console.error('addStudentToGroup error:', e);
       notify.error('حدث خطأ');
@@ -358,7 +361,7 @@ export default function GroupsPage() {
 
       {/* View Students Modal */}
       {viewGroup && (
-        <Modal isOpen={!!viewGroup} onClose={() => { setViewGroup(null); setSelectedStudentToAdd(''); setPaymentAmountToAdd(''); }} title={`طلاب مجموعة: ${viewGroup.name}`} size="md">
+        <Modal isOpen={!!viewGroup} onClose={() => { setViewGroup(null); setSelectedStudentToAdd(''); setPaymentAmountToAdd(''); setStartSessionToAdd(1); }} title={`طلاب مجموعة: ${viewGroup.name}`} size="md">
           <div className="mb-4 flex flex-col sm:flex-row gap-2">
             <select value={selectedStudentToAdd} onChange={e => setSelectedStudentToAdd(e.target.value)}
               className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
@@ -367,9 +370,26 @@ export default function GroupsPage() {
                 <option key={s.id} value={s.id}>{s.name} - {s.parentPhone}</option>
               ))}
             </select>
-            <input type="number" placeholder="المبلغ المدفوع (اختياري)" min="0"
+            {(() => {
+              const vc = courses.find(c => c.id === viewGroup.courseId);
+              const n = resolveSessionsPerMonth({
+                courseSessionsPerMonth: vc?.sessionsPerMonth,
+                scheduleDays: viewGroup.schedule?.map(x => x.days),
+                settingSessionsPerMonth: settings?.sessionsPerMonth,
+              });
+              return (
+                <select value={startSessionToAdd} onChange={e => setStartSessionToAdd(+e.target.value)}
+                  title="بدأ من الحصة"
+                  className="w-full sm:w-auto px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
+                  {Array.from({ length: n }, (_, i) => i + 1).map(k => (
+                    <option key={k} value={k}>{k === 1 ? 'من أول حصة' : `من الحصة ${k}/${n}`}</option>
+                  ))}
+                </select>
+              );
+            })()}
+            <input type="number" placeholder="دفع دلوقتي" min="0"
               value={paymentAmountToAdd} onChange={e => setPaymentAmountToAdd(e.target.value === '' ? '' : +e.target.value)}
-              className="w-full sm:w-1/3 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+              className="w-full sm:w-28 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
             <button onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
               className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors"
               style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>

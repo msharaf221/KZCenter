@@ -4,6 +4,7 @@ import { transferStudent, getStudentBalance, Group, Course, Teacher } from '../l
 import { formatCurrency, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
+import { proratedFirstPeriod, resolveSessionsPerMonth } from '../lib/billing';
 
 interface Props {
   open: boolean;
@@ -37,6 +38,7 @@ export default function TransferDialog({
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [paidInFromGroup, setPaidInFromGroup] = useState(0);
+  const [startSession, setStartSession] = useState(1);
 
   // اللي مدفوع في المجموعة الحالية (الرصيد المرشّح للترحيل)
   useEffect(() => {
@@ -69,6 +71,13 @@ export default function TransferDialog({
 
   const target = candidates.find(c => c.group.id === toGroupId);
   const targetPrice = target?.course?.price || 0;
+  const targetSessions = resolveSessionsPerMonth({
+    courseSessionsPerMonth: target?.course?.sessionsPerMonth,
+    scheduleDays: target?.group.schedule?.map(x => x.days),
+    settingSessionsPerMonth: settings?.sessionsPerMonth,
+  });
+  const firstMonth = startSession > 1 ? proratedFirstPeriod(targetPrice, startSession, targetSessions) : targetPrice;
+  const previewLeft = Math.round((firstMonth - paidInFromGroup) * 100) / 100;
 
   async function handleTransfer() {
     if (!toGroupId) { notify.error('اختر المجموعة الجديدة'); return; }
@@ -79,6 +88,7 @@ export default function TransferDialog({
         fromGroupId,
         toGroupId,
         reason: reason.trim() || undefined,
+        startSession: startSession > 1 ? startSession : undefined,
       });
       if (!result.success) { notify.error(result.error || 'حدث خطأ أثناء التحويل'); return; }
 
@@ -140,16 +150,33 @@ export default function TransferDialog({
           )}
         </div>
 
-        {/* ترحيل الرصيد (سلوك ثابت) */}
         {target && (
-          <div className="p-3 rounded-xl bg-indigo-50/60 border border-indigo-100 text-xs text-gray-600 space-y-0.5">
-            <p>سعر الشهر في المجموعة الجديدة: <strong className="text-gray-800">{formatCurrency(targetPrice, settings?.currency)}</strong></p>
-            <p>
-              <strong className="text-gray-800">المدفوع بيتّرحل.</strong>
-              {' '}الـ {formatCurrency(paidInFromGroup, settings?.currency)} اللي اتدفعت هنا هتتحسب على المجموعة الجديدة،
-              ولو فيه فرق يظهر كمتبقي (أو كفائض لصالح الطالب).
-            </p>
-          </div>
+          <>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">هيبدأ في المجموعة الجديدة من الحصة</label>
+              <select value={startSession} onChange={e => setStartSession(+e.target.value)}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
+                {Array.from({ length: targetSessions }, (_, i) => i + 1).map(n => (
+                  <option key={n} value={n}>{n === 1 ? 'الأولى (شهر كامل)' : `رقم ${n} من ${targetSessions}`}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="p-3 rounded-xl bg-indigo-50/60 border border-indigo-100 text-xs text-gray-600 space-y-0.5">
+              <p>
+                المطلوب في المجموعة الجديدة: <strong className="text-gray-800">{formatCurrency(firstMonth, settings?.currency)}</strong>
+                {startSession > 1 && <> ({targetSessions - startSession + 1} حصص من {targetSessions})</>}
+              </p>
+              <p>المدفوع هنا وهيتّرحل: <strong className="text-green-600">{formatCurrency(paidInFromGroup, settings?.currency)}</strong></p>
+              <p>
+                {previewLeft > 0
+                  ? <>هيفضل عليه: <strong className="text-red-600">{formatCurrency(previewLeft, settings?.currency)}</strong></>
+                  : previewLeft < 0
+                    ? <>ليه فائض: <strong className="text-green-600">{formatCurrency(-previewLeft, settings?.currency)}</strong></>
+                    : <strong className="text-green-600">خالص ✓</strong>}
+              </p>
+            </div>
+          </>
         )}
 
         <div>

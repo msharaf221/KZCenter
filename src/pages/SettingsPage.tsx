@@ -343,8 +343,8 @@ export default function SettingsPage() {
             <div className="sm:col-span-2 border-t border-gray-100 pt-4 space-y-3">
               <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                 <div>
-                  <span className="text-sm font-medium text-gray-700">🔔 تنبيه قبل ما شهر الطالب يخلص</span>
-                  <p className="text-[11px] text-gray-400 mt-0.5">يظهر في لوحة التحكم عشان تفتح له شهر جديد</p>
+                  <span className="text-sm font-medium text-gray-700">🔔 تنبيه قبل ميعاد التجديد</span>
+                  <p className="text-[11px] text-gray-400 mt-0.5">يظهر في لوحة التحكم قبل ما اشتراك الطالب يخلص</p>
                 </div>
                 <button onClick={() => setForm(f => ({ ...f, notifyUpcomingDue: !f.notifyUpcomingDue }))}
                   className={`relative w-12 h-6 rounded-full transition-colors ${form.notifyUpcomingDue ? '' : 'bg-gray-300'}`}
@@ -354,10 +354,17 @@ export default function SettingsPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">التنبيه قبل نهاية الشهر بـ (يوم)</label>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">التنبيه قبل التجديد بـ (يوم)</label>
                   <input type="number" min={1} max={15} value={form.upcomingDueDays}
                     onChange={e => setForm({ ...form, upcomingDueDays: Number(e.target.value) })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">عدد الحصص في الشهر (افتراضي)</label>
+                  <input type="number" min={1} max={40} value={form.sessionsPerMonth}
+                    onChange={e => setForm({ ...form, sessionsPerMonth: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+                  <p className="text-[10px] text-gray-400 mt-0.5">لحساب اللي بييجي في نص الشهر — لو الكورس أو جدول المجموعة مش محددين</p>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-600 mb-1">حد المخزون المنخفض</label>

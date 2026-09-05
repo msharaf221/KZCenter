@@ -258,7 +258,7 @@ export default function StudentProfilePage() {
           <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4 flex flex-wrap items-center gap-3">
             <RefreshCw size={18} className="text-yellow-600" />
             <div className="flex-1 min-w-[200px] text-sm">
-              <p className="font-bold text-yellow-800">الشهر خلص — محتاج يفتح شهر جديد</p>
+              <p className="font-bold text-yellow-800">الاشتراك خلص — محتاج تجديد</p>
               <p className="text-yellow-700 text-xs">
                 {groups
                   .filter(g => renewalByGroup[g.id]?.state !== 'active' && balance?.groups.some(b => b.groupId === g.id))
@@ -276,7 +276,7 @@ export default function StudentProfilePage() {
                   if (g) setRenewTarget({ groupId: g.id });
                 }}
                 className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-yellow-600 hover:bg-yellow-700 transition-colors">
-                افتح شهر جديد
+                تجديد
               </button>
             )}
           </div>
@@ -287,7 +287,7 @@ export default function StudentProfilePage() {
             <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><BookOpen className="text-indigo-500" /> المجموعات والمدرسين</h2>
             <div className="overflow-auto flex-1 max-h-[300px]">
               <table className="w-full text-right">
-                <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المجموعة</th><th className="pb-3 font-semibold">الكورس</th><th className="pb-3 font-semibold text-center">المدرس</th><th className="pb-3 font-semibold text-center">الشهر الحالي</th>{canCollect && <th className="pb-3 font-semibold text-center">إجراءات</th>}</tr></thead>
+                <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المجموعة</th><th className="pb-3 font-semibold">الكورس</th><th className="pb-3 font-semibold text-center">المدرس</th><th className="pb-3 font-semibold text-center">الاشتراك</th>{canCollect && <th className="pb-3 font-semibold text-center">إجراءات</th>}</tr></thead>
                 <tbody className="divide-y divide-gray-50 text-sm">
                   {groups.length === 0 ? <tr><td colSpan={canCollect ? 5 : 4} className="py-4 text-center text-gray-400">لا توجد مجموعات</td></tr> :
                    groups.map(g => {
@@ -316,8 +316,8 @@ export default function StudentProfilePage() {
                           <div className="flex items-center justify-center gap-1 flex-wrap">
                             <button onClick={() => setRenewTarget({ groupId: g.id })}
                               className={`text-xs px-2 py-1 rounded-lg transition-colors flex items-center gap-1 ${r?.state === 'expired' ? 'text-white bg-red-500 hover:bg-red-600' : r?.state === 'expiring' ? 'text-yellow-800 bg-yellow-100 hover:bg-yellow-200' : 'text-green-700 bg-green-50 hover:bg-green-100'}`}
-                              title="فتح شهر جديد في نفس المجموعة">
-                              <RefreshCw size={12} /> شهر جديد
+                              title="تجديد الاشتراك في نفس المجموعة">
+                              <RefreshCw size={12} /> تجديد
                             </button>
                             <button onClick={() => setTransferFrom({ groupId: g.id, groupName: g.name })}
                               className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
@@ -415,8 +415,8 @@ export default function StudentProfilePage() {
                       {canCollect && groups.some(x => x.id === g.groupId) && (
                         <button onClick={() => setRenewTarget({ groupId: g.groupId })}
                           className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 flex items-center gap-1"
-                          title="فتح شهر جديد">
-                          <RefreshCw size={12} /> شهر جديد
+                          title="تجديد">
+                          <RefreshCw size={12} /> تجديد
                         </button>
                       )}
                     </div>

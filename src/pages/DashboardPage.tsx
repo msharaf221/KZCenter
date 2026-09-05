@@ -457,7 +457,7 @@ export default function DashboardPage() {
           <div className="bg-white rounded-2xl border border-yellow-100 shadow-sm overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex items-center gap-2 flex-wrap">
               <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
-                <RefreshCw size={18} className="text-yellow-500" /> طلاب شهرهم خلص أو بيخلص
+                <RefreshCw size={18} className="text-yellow-500" /> طلاب محتاجين تجديد
               </h3>
               <span className="text-xs bg-yellow-50 text-yellow-700 px-2 py-0.5 rounded-full font-medium">
                 {renewals.filter(r => r.info.state === 'expired').length} خلص • {renewals.filter(r => r.info.state === 'expiring').length} بيخلص
@@ -494,7 +494,7 @@ export default function DashboardPage() {
                     {isAdmin() && (
                       <button onClick={() => setRenewTarget(r)}
                         className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 transition-colors">
-                        شهر جديد
+                        تجديد
                       </button>
                     )}
                   </div>
