@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Clock, AlertCircle, LogOut, Save, MessageCircle, Printer } from 'lucide-react';
 import Layout from '../components/layout/Layout';
-import { dbGetAll, dbAdd, dbPut, getGroupAttendanceForDate, getGroupStudents, generateId, Group, Student, Course, Attendance, AttendanceStatus } from '../lib/db';
+import { dbGetAll, dbGetByIndex, dbAdd, dbPut, getGroupAttendanceForDate, getGroupStudents, generateId, Group, Student, Course, Attendance, AttendanceStatus, Enrollment } from '../lib/db';
 import { formatDate, getWhatsAppLink, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -21,6 +21,8 @@ export default function AttendancePage() {
   const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceStatus>>({});
   const [saving, setSaving] = useState(false);
   const [groupStudents, setGroupStudents] = useState<Student[]>([]);
+  /** الطلاب اللي التحقوا بالمجموعة بعد تاريخ الكشف — ماينفعش يتسجللهم غياب عن يوم قبل ما يدخلوا */
+  const [lateJoiners, setLateJoiners] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadData();
@@ -53,6 +55,16 @@ export default function AttendancePage() {
     if (selectedGroup) {
       const enrolled = await getGroupStudents(selectedGroup);
       setGroupStudents(enrolled);
+
+      // طالب التحق بعد تاريخ الكشف؟ يطلع من حساب الغياب (مكانش موجود أصلاً)
+      const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-groupId', selectedGroup);
+      const late = new Set<string>();
+      const day = selectedDate.slice(0, 10);
+      for (const e of enrollments) {
+        if (e.status !== 'active' || e.deleted) continue;
+        if ((e.enrolledAt || '').slice(0, 10) > day) late.add(e.studentId);
+      }
+      setLateJoiners(late);
     }
   }
 
@@ -63,19 +75,30 @@ export default function AttendancePage() {
   }
 
   function setAll(status: AttendanceStatus) {
-    const map: Record<string, AttendanceStatus> = {};
-    groupStudents.forEach(s => { map[s.id] = status; });
-    setAttendanceMap(map);
+    setAttendanceMap(prev => {
+      const map: Record<string, AttendanceStatus> = { ...prev };
+      groupStudents.forEach(s => {
+        // اللي التحق بعد تاريخ الكشف ماياخدش حالة بالجملة (مكانش موجود)
+        if (lateJoiners.has(s.id)) return;
+        map[s.id] = status;
+      });
+      return map;
+    });
   }
 
   async function handleSave() {
     if (!selectedGroup) { notify.error('اختر مجموعة أولاً'); return; }
     setSaving(true);
     try {
+      let savedCount = 0;
       for (const student of groupStudents) {
-        const status = attendanceMap[student.id] || 'absent';
-        
+        // طالب التحق بعد تاريخ الكشف ولا سجل قديم له؟ مايتسجلش غياب غلط عن يوم قبل ما يدخل
         const existing = existingAttendance.find(r => r.studentId === student.id);
+        if (lateJoiners.has(student.id) && !existing) continue;
+
+        const status = attendanceMap[student.id] || 'absent';
+        savedCount++;
+
         const wasAbsent = existing ? existing.status === 'absent' : false;
 
         if (status === 'absent' && !wasAbsent) {
@@ -96,11 +119,11 @@ export default function AttendancePage() {
           await dbAdd('attendance', record);
         }
       }
-      notifyAttendanceSaved(group?.name || '', groupStudents.length);
+      notifyAttendanceSaved(group?.name || '', savedCount);
       addAuditEntry({
         userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
         action: 'update', entity: 'attendance', entityId: selectedGroup,
-        details: `تسجيل حضور: ${group?.name || ''} - ${formatDate(selectedDate)} (${groupStudents.length} طالب)`,
+        details: `تسجيل حضور: ${group?.name || ''} - ${formatDate(selectedDate)} (${savedCount} طالب)`,
       });
       loadAttendance();
     } catch { notify.error('حدث خطأ أثناء الحفظ'); }
@@ -127,10 +150,10 @@ export default function AttendancePage() {
     const statusLabel: Record<AttendanceStatus, string> = {
       present: 'حاضر', absent: 'غائب', late: 'متأخر', excused: 'مستأذن',
     };
-    const rows = groupStudents.map((s, i) => ({
+    const rows = eligibleStudents.map((s, i) => ({
       no: i + 1,
       name: s.name,
-      status: attendanceMap[s.id] ? statusLabel[attendanceMap[s.id]] : '—',
+      status: attendanceMap[s.id] ? statusLabel[attendanceMap[s.id]] : statusLabel.absent,
     }));
     printTable({
       title: `ورقة حضور — ${group?.name ?? ''}`,
@@ -162,11 +185,14 @@ export default function AttendancePage() {
     { status: 'excused' as AttendanceStatus, label: 'مستأذن', icon: <AlertCircle size={14} />, color: 'bg-blue-100 text-blue-700 border-blue-200' },
   ];
 
+  /** الطلاب اللي ينطبق عليهم الكشف ده (الموجودين فعلًا في تاريخه) */
+  const eligibleStudents = groupStudents.filter(s => !lateJoiners.has(s.id));
+
   const counts = {
-    present: groupStudents.filter(s => attendanceMap[s.id] === 'present').length,
-    absent: groupStudents.filter(s => attendanceMap[s.id] === 'absent').length,
-    late: groupStudents.filter(s => attendanceMap[s.id] === 'late').length,
-    excused: groupStudents.filter(s => attendanceMap[s.id] === 'excused').length,
+    present: eligibleStudents.filter(s => attendanceMap[s.id] === 'present').length,
+    absent: eligibleStudents.filter(s => (attendanceMap[s.id] || 'absent') === 'absent').length,
+    late: eligibleStudents.filter(s => attendanceMap[s.id] === 'late').length,
+    excused: eligibleStudents.filter(s => attendanceMap[s.id] === 'excused').length,
   };
 
   return (
@@ -233,14 +259,22 @@ export default function AttendancePage() {
               {groupStudents.map((student, idx) => {
                 const status = attendanceMap[student.id];
                 const attendance = existingAttendance.find(r => r.studentId === student.id);
+                const isLateJoiner = lateJoiners.has(student.id) && !attendance;
                 return (
-                  <div key={student.id} className="flex items-center gap-4 p-4 hover:bg-gray-50 transition-colors">
+                  <div key={student.id} className={`flex items-center gap-4 p-4 transition-colors ${isLateJoiner ? 'bg-gray-50/60 opacity-70' : 'hover:bg-gray-50'}`}>
                     <span className="w-6 text-sm text-gray-400 font-medium">{idx + 1}</span>
                     <div className="w-9 h-9 rounded-full bg-indigo-100 flex items-center justify-center text-lg">
                       {student.gender === 'male' ? '👦' : '👧'}
                     </div>
                     <div className="flex-1">
-                      <p className="text-sm font-semibold text-gray-900">{student.name}</p>
+                      <p className="text-sm font-semibold text-gray-900 flex items-center gap-2 flex-wrap">
+                        {student.name}
+                        {isLateJoiner && (
+                          <span className="px-1.5 py-0.5 rounded-md bg-gray-200 text-gray-600 text-[10px] font-bold">
+                            التحق بعد هذا التاريخ — لا يُحتسب
+                          </span>
+                        )}
+                      </p>
                       <p className="text-xs text-gray-500">{student.parentPhone}</p>
                       {attendance?.checkInTime && (
                         <p className="text-xs text-green-600">دخول: {attendance.checkInTime}
@@ -249,23 +283,27 @@ export default function AttendancePage() {
                       )}
                     </div>
                     <div className="flex items-center gap-1">
+                      {isLateJoiner && (
+                        <span className="text-[11px] text-gray-400 ml-2">غير مشمول بالكشف</span>
+                      )}
                       {statusButtons.map(btn => (
                         <button key={btn.status}
-                          onClick={() => setStatus(student.id, btn.status)}
-                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all
+                          disabled={isLateJoiner}
+                          onClick={() => !isLateJoiner && setStatus(student.id, btn.status)}
+                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed
                             ${status === btn.status ? btn.color + ' border-current shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100 hover:bg-gray-100'}`}>
                           {btn.icon}
                           <span className="hidden sm:inline">{btn.label}</span>
                         </button>
                       ))}
-                      {status === 'present' && attendance && !attendance.checkOutTime && (
+                      {!isLateJoiner && status === 'present' && attendance && !attendance.checkOutTime && (
                         <button onClick={() => handleCheckOut(student.id)}
                           className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100">
                           <LogOut size={14} />
                           <span className="hidden sm:inline">خروج</span>
                         </button>
                       )}
-                      {status === 'absent' && student.parentPhone && (
+                      {!isLateJoiner && status === 'absent' && student.parentPhone && (
                         <a href={getWhatsAppLink(student.parentPhone, `نود إعلامكم بغياب الطالب/ة ${student.name} عن مجموعة ${group.name} بتاريخ ${formatDate(selectedDate)}.`)}
                           target="_blank" rel="noopener noreferrer"
                           className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border bg-green-50 text-green-700 border-green-200 hover:bg-green-100" title="إرسال عبر واتساب">
