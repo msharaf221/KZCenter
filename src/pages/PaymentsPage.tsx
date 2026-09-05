@@ -9,11 +9,12 @@ import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, dbGetById, recalc
 import { printReceipt, amountToArabicWords } from '../lib/printing';
 import { nextReceiptNo, peekReceiptNo } from '../lib/receipts';
 import { METHOD_LABEL } from '../lib/cashbox';
-import { formatDate, formatCurrency, toCSV, downloadCSV, getWhatsAppLink, getContrastColor } from '../lib/utils';
+import { formatDate, formatCurrency, toCSV, downloadCSV, getWhatsAppLink, getContrastColor, paymentStatusLabel } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyLatePayment, notifyPaymentReceived } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
+import { isCountedPayment } from '../lib/billing';
 import dayjs from 'dayjs';
 
 const PAGE_SIZE = 20;
@@ -308,7 +309,7 @@ export default function PaymentsPage() {
       course: getCourseName(p.courseId),
       amount: p.amount,
       type: p.type === 'subscription' ? 'اشتراك' : p.type === 'books' ? 'كتب' : 'أخرى',
-      status: p.voided ? 'ملغاة' : p.status === 'paid' ? 'مدفوع' : p.status === 'pending' ? 'معلق' : 'متأخر',
+      status: paymentStatusLabel(p),
       date: p.date,
       notes: p.notes || '',
     }));
@@ -327,7 +328,7 @@ export default function PaymentsPage() {
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
   // الملغي (voided) مش محسوب لا في المدفوع ولا في المعلق
-  const totalPaid = payments.filter(p => !p.deleted && !p.voided && p.status === 'paid').reduce((s, p) => s + p.amount, 0);
+  const totalPaid = payments.filter(isCountedPayment).reduce((s, p) => s + p.amount, 0);
   const totalPending = payments.filter(p => !p.deleted && !p.voided && p.status !== 'paid').reduce((s, p) => s + p.amount, 0);
   // المتبقي الحقيقي على كل الطلاب (مبني على المستحقات/الأقساط المخزّنة على الطالب)
   const remainingOnStudents = students.filter(st => !st.deleted).reduce((s, st) => s + Math.max(0, (st.totalOwed || 0) - st.totalPaid), 0);

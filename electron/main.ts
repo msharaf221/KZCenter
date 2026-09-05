@@ -44,9 +44,23 @@ function createWindow(): void {
     show: false, // Show when ready
   });
 
-  // Open external links in browser
+  // Open external links in the browser, but only safe schemes.
+  // about:blank/empty windows are the in-app print popups — let them open inside.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (!url || url === 'about:blank') {
+      return { action: 'allow' };
+    }
+    let parsed: URL | null = null;
+    try {
+      parsed = new URL(url);
+    } catch {
+      parsed = null;
+    }
+    // Only hand http(s) links to the OS (WhatsApp/external sites).
+    // Block file:, smb:, custom protocols that could launch executables.
+    if (parsed && (parsed.protocol === 'https:' || parsed.protocol === 'http:')) {
+      shell.openExternal(url);
+    }
     return { action: 'deny' };
   });
 

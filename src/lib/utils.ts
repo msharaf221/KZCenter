@@ -172,6 +172,24 @@ export function getStatusColor(status: string): string {
   return map[status] || 'bg-gray-100 text-gray-800';
 }
 
+/**
+ * وصف حالة الدفعة للعرض: الملغاة تظهر «ملغاة» (الإلغاء لا يغيّر status).
+ * تستخدم في القوائم والتصدير والشارات.
+ */
+export function paymentStatusLabel(p: { status?: string; voided?: boolean }): string {
+  if (p.voided) return 'ملغاة';
+  return p.status === 'paid' ? 'مدفوع' : p.status === 'pending' ? 'معلق' : p.status === 'late' ? 'متأخر' : '—';
+}
+
+/** صنف لون شارة حالة الدفعة (Tailwind) — يطابق paymentStatusLabel. */
+export function paymentStatusBadge(p: { status?: string; voided?: boolean }): string {
+  if (p.voided) return 'bg-gray-200 text-gray-600 line-through';
+  return p.status === 'paid' ? 'bg-green-100 text-green-700'
+    : p.status === 'pending' ? 'bg-yellow-100 text-yellow-700'
+    : p.status === 'late' ? 'bg-red-100 text-red-700'
+    : 'bg-gray-100 text-gray-500';
+}
+
 export function getStatusLabel(status: string): string {
   const map: Record<string, string> = {
     active: 'نشط',

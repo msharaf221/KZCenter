@@ -8,7 +8,7 @@ import Layout from '../components/layout/Layout';
 import { dbGetAll, dbGetByIndex, getRefunds } from '../lib/db';
 import type { Payment, Expense, Student, Course } from '../lib/db';
 import { isCountedPayment } from '../lib/billing';
-import { formatCurrency, formatDate, toCSV, downloadCSV, getContrastColor } from '../lib/utils';
+import { formatCurrency, formatDate, toCSV, downloadCSV, getContrastColor, paymentStatusLabel, paymentStatusBadge } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
 import dayjs from 'dayjs';
@@ -147,15 +147,6 @@ export default function DailyReportsPage() {
   function getPaymentType(type: string) {
     return type === 'subscription' ? 'اشتراك' : type === 'books' ? 'كتب' : 'أخرى';
   }
-  function getPaymentStatus(p: Payment) {
-    if (p.voided) return 'ملغاة';
-    return p.status === 'paid' ? 'مدفوع' : p.status === 'pending' ? 'معلق' : 'متأخر';
-  }
-  function getStatusColor(p: Payment) {
-    if (p.voided) return 'bg-gray-200 text-gray-600 line-through';
-    return p.status === 'paid' ? 'bg-green-100 text-green-700' : p.status === 'pending' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
-  }
-
   // Export functions
   function exportDailyReport() {
     const data = payments.map(p => ({
@@ -163,7 +154,7 @@ export default function DailyReportsPage() {
       course: getCourseName(p.courseId),
       amount: p.amount,
       type: getPaymentType(p.type),
-      status: getPaymentStatus(p),
+      status: paymentStatusLabel(p),
       notes: p.notes || '',
     }));
     const csv = toCSV(data as unknown as Record<string, unknown>[], [
@@ -481,8 +472,8 @@ export default function DailyReportsPage() {
                         </span>
                       </td>
                       <td className="p-4">
-                        <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(payment)}`}>
-                          {getPaymentStatus(payment)}
+                        <span className={`text-xs px-2 py-1 rounded-full ${paymentStatusBadge(payment)}`}>
+                          {paymentStatusLabel(payment)}
                         </span>
                       </td>
                       <td className="p-4 text-sm text-gray-500">{payment.notes || '—'}</td>
