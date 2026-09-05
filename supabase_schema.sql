@@ -590,3 +590,109 @@ CREATE TRIGGER update_installments_updated_at BEFORE UPDATE ON installments
 -- -- النسخ الاحتياطية للمسؤول فقط
 -- CREATE POLICY "backups_owner_only" ON backups FOR ALL TO authenticated
 --   USING (current_role() IN ('owner','admin')) WITH CHECK (current_role() IN ('owner','admin'));
+
+-- =====================================================
+-- 🔐 عزل المستأجرين (TENANT ISOLATION) — نسخة 2026-09
+-- =====================================================
+-- الهدف: قفل قاعدة البيانات بحساب Supabase Auth واحد لكل مركز (tenant).
+-- كل صف بيتوسم تلقائياً بـ tenant_id = auth.uid() عن طريق trigger في القاعدة
+-- (مش من العميل — فمستحيل مستخدم يكتب tenant_id بتاع حد تاني)، والسياسات
+-- بتسمح لصاحب الصف هو الوحيد بقراءته/تعديله.
+--
+-- ⚠️ خطوات التشغيل (مرة واحدة):
+--   1) فعّل تسجيل الدخول بالبريد/كلمة المرور:
+--      Supabase Dashboard → Authentication → Providers → Email → ON
+--      (واقفل "Confirm email" أو أكّد بريدك عشان تقدر تعمل sign in).
+--   2) اعمل مستخدم/حساب واحد للمركز: Authentication → Users → Add user.
+--   3) شغّل هذا الملف كاملاً في SQL Editor (idempotent — يتشغل بأمان أكتر من مرة).
+--   4) في التطبيق: الإعدادات → التخزين السحابي → ضع البريد وكلمة المرور
+--      واعمل "رفع للنسخة الاحتياطية" (أول رفعة هتوسم كل بياناتك بحسابك).
+--
+-- بعد التفعيل: الـ anon key مبني في الكود لكنه من غير جلسة مصادق عليها =
+-- مرفوض تماماً (مفيش أي سياسة لدور anon). دور anonymous السابق اتشال.
+-- =====================================================
+
+-- 1) العمود tenant_id على كل الجداول القابلة للمزامنة (ما عدا users: مقفول أصلاً)
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOR t IN SELECT unnest(ARRAY[
+    'students','teachers','courses','groups','payments','attendance',
+    'settings','expenses','exams','grades','inventory','inventory_transactions',
+    'enrollments','installments','backups'
+  ])
+  LOOP
+    EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS tenant_id UUID', t);
+  END LOOP;
+END $$;
+
+-- settings: مفتاحه 'main' لكل مركز، فنعزل بـ (id, tenant_id) بدل الـ id العام.
+-- بنشيل الصفوف القديمة اللي من العصر المفتوح (tenant_id فاضي) — المحلي هو المصدر،
+-- وأول رفعة بعد التفعيل هتعيد إنشاء صف الإعدادات الخاص بالمركز.
+DELETE FROM settings WHERE tenant_id IS NULL;
+ALTER TABLE settings DROP CONSTRAINT IF EXISTS settings_pkey;
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'settings_pkey'
+  ) THEN
+    ALTER TABLE settings ADD CONSTRAINT settings_pkey PRIMARY KEY (id, tenant_id);
+  END IF;
+END $$;
+
+-- 2) دالة مشتركة: تجبر tenant_id = المستخدم المصادق عليه عند الإدراج،
+--    وتمنع نقل الصف لمستأجر آخر عند التعديل.
+CREATE OR REPLACE FUNCTION enforce_tenant_id()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'لا توجد جلسة مصادق عليها — ممنوع الوصول';
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    NEW.tenant_id := auth.uid();
+  ELSIF TG_OP = 'UPDATE' THEN
+    NEW.tenant_id := OLD.tenant_id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+
+-- 3) ربط الـ trigger بكل الجداول (idempotent)
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOR t IN SELECT unnest(ARRAY[
+    'students','teachers','courses','groups','payments','attendance',
+    'settings','expenses','exams','grades','inventory','inventory_transactions',
+    'enrollments','installments','backups'
+  ])
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_set_tenant_%I ON %I', t, t);
+    EXECUTE format(
+      'CREATE TRIGGER trg_set_tenant_%I BEFORE INSERT OR UPDATE ON %I
+         FOR EACH ROW EXECUTE FUNCTION enforce_tenant_id()', t, t);
+  END LOOP;
+END $$;
+
+-- 4) إزالة السياسات القديمة المفتوحة (app_sync_*) واستبدالها بسياسات معزولة
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOR t IN SELECT unnest(ARRAY[
+    'students','teachers','courses','groups','payments','attendance',
+    'settings','expenses','exams','grades','inventory','inventory_transactions',
+    'enrollments','installments','backups'
+  ])
+  LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', 'app_sync_'||t, t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', 'app_all_'||t, t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', 'tenant_iso_'||t, t);
+    EXECUTE format(
+      'CREATE POLICY %I ON %I FOR ALL TO authenticated
+         USING (tenant_id = auth.uid())
+         WITH CHECK (tenant_id = auth.uid())',
+      'tenant_iso_'||t, t);
+  END LOOP;
+END $$;
+
+-- users: يظل مقفولاً بالكامل (RLS مفعّل، لا سياسات = رفض الكل). كلمات السر
+-- الخاصة بالنظام محلية (IndexedDB) ولا تُزامَن.

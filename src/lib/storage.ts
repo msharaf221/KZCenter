@@ -53,6 +53,22 @@ export const SENSITIVE_FIELDS = [
   'passwordHash', 'password_hash', 'password', 'token', 'secret', 'apiKey', 'api_key',
 ];
 
+/**
+ * حقول داخلية لقاعدة السحابة فقط (tenant_id يُفرض من trigger، ممنوع تعيينه من
+ * العميل). تُزال من أي صف وارد حتى لا تُكتب في IndexedDB.
+ */
+export const INTERNAL_CLOUD_FIELDS = ['tenant_id'];
+
+/**
+ * مفتاح التعارض (ON CONFLICT) لكل جدول عند الـ upsert.
+ * جداول singleton (مفتاحها ثابت مثل 'main' لكل مركز) تحتاج عمود المستأجر في
+ * المفتاح المركّب لأن id لوحده لا يعود فريداً عبر المستأجرين.
+ */
+const CONFLICT_TARGET: Record<string, string> = {
+  settings: 'id,tenant_id',
+  counters: 'id,tenant_id',
+};
+
 /** حجم الدفعة في الـ upsert (تجنّب طلبات ضخمة) */
 export const UPSERT_BATCH = 400;
 /** حد الصفوف في الطلب الواحد عند القراءة من Supabase */
@@ -84,6 +100,16 @@ export function stripSensitive(row: Record<string, unknown>): Record<string, unk
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(row)) {
     if (SENSITIVE_FIELDS.includes(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/** يشيل الحقول الداخلية للسحابة (مثل tenant_id) قبل الكتابة محلياً */
+export function stripInternalCloud(row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (INTERNAL_CLOUD_FIELDS.includes(k)) continue;
     out[k] = v;
   }
   return out;
@@ -226,7 +252,9 @@ export async function syncLocalToCloud(opts?: { silent?: boolean }): Promise<Syn
 
       for (let i = 0; i < rows.length; i += UPSERT_BATCH) {
         const batch = rows.slice(i, i + UPSERT_BATCH);
-        const { error } = await client.from(table).upsert(batch, { onConflict: 'id' });
+        const { error } = await client
+          .from(table)
+          .upsert(batch, { onConflict: CONFLICT_TARGET[table] || 'id' });
         if (error) {
           result.error = error.message;
           break;
@@ -291,7 +319,7 @@ export async function syncCloudToLocal(opts?: { silent?: boolean }): Promise<Syn
         }
 
         // settings/counters: مفتاحهم مش UUID لكن نفس المنطق ينفع
-        await localDB.dbPut(table, stripSensitive(remote));
+        await localDB.dbPut(table, stripInternalCloud(stripSensitive(remote)));
         result.pulled++;
       }
     } catch (e) {

@@ -14,6 +14,9 @@ import {
   clearSupabaseConfig,
   testSupabaseConnection,
   isSupabaseConfigured,
+  getCloudCredentials,
+  saveCloudCredentials,
+  clearCloudCredentials,
 } from '../lib/supabase';
 import { syncLocalToCloud, syncCloudToLocal, type SyncReport } from '../lib/storage';
 
@@ -49,6 +52,10 @@ export default function SettingsPage() {
   // Supabase config state
   const [supabaseUrl, setSupabaseUrl] = useState('');
   const [supabaseKey, setSupabaseKey] = useState('');
+  // حساب المركز في السحابة (tenant) — البريد وكلمة المرور لحساب Supabase Auth
+  const [cloudEmail, setCloudEmail] = useState('');
+  const [cloudPassword, setCloudPassword] = useState('');
+  const [showCloudPassword, setShowCloudPassword] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
@@ -104,6 +111,9 @@ export default function SettingsPage() {
     const config = getStoredSupabaseConfig();
     setSupabaseUrl(config.url);
     setSupabaseKey(config.anonKey);
+    const creds = getCloudCredentials();
+    setCloudEmail(creds.email);
+    setCloudPassword(creds.password);
   }, []);
 
   async function handleSaveGeneral() {
@@ -143,11 +153,16 @@ export default function SettingsPage() {
       notify.error('يرجى إدخال URL و Anon Key');
       return;
     }
+    if (!cloudEmail.trim() || !cloudPassword) {
+      notify.error('يرجى إدخال بريد وكلمة مرور حساب المركز السحابي');
+      return;
+    }
     setTestingConnection(true);
     setConnectionStatus('idle');
     try {
-      // Save config first so test can use it
+      // Save config + credentials first so test can authenticate as the tenant
       saveSupabaseConfig(supabaseUrl, supabaseKey);
+      saveCloudCredentials(cloudEmail, cloudPassword);
       const success = await testSupabaseConnection();
       setConnectionStatus(success ? 'success' : 'error');
       if (success) {
@@ -168,8 +183,17 @@ export default function SettingsPage() {
       notify.error('يرجى إدخال URL و Anon Key');
       return;
     }
+    if (!cloudEmail.trim() || !cloudPassword) {
+      notify.error('يرجى إدخال بريد وكلمة مرور حساب المركز السحابي (حساب Supabase Auth)');
+      return;
+    }
+    if (!validateEmail(cloudEmail.trim())) {
+      notify.error('بريد الحساب السحابي غير صحيح');
+      return;
+    }
     saveSupabaseConfig(supabaseUrl, supabaseKey);
-    notify.success('تم حفظ إعدادات Supabase. يُنصح بإعادة تحميل الصفحة.');
+    saveCloudCredentials(cloudEmail.trim(), cloudPassword);
+    notify.success('تم حفظ إعدادات Supabase وحساب المركز. يُنصح بإعادة تحميل الصفحة.');
     // Show reload prompt
     setTimeout(() => {
       if (confirm('هل تريد إعادة تحميل الصفحة لتطبيق الإعدادات؟')) {
@@ -179,10 +203,13 @@ export default function SettingsPage() {
   }
 
   function handleClearSupabaseConfig() {
-    if (!confirm('هل أنت متأكد من حذف إعدادات Supabase؟')) return;
+    if (!confirm('هل أنت متأكد من حذف إعدادات Supabase واعتماد الحساب السحابي؟ البيانات المحلية لن تتأثر.')) return;
     clearSupabaseConfig();
+    clearCloudCredentials();
     setSupabaseUrl('');
     setSupabaseKey('');
+    setCloudEmail('');
+    setCloudPassword('');
     setConnectionStatus('idle');
     notify.success('تم حذف إعدادات Supabase. يُنصح بإعادة تحميل الصفحة.');
   }
@@ -554,6 +581,58 @@ export default function SettingsPage() {
                 </p>
               </div>
 
+              {/* حساب المركز في السحابة (tenant) — البريد وكلمة المرور */}
+              <div className="border-t border-gray-100 pt-4">
+                <h4 className="text-sm font-bold text-gray-800 mb-1 flex items-center gap-2">
+                  <Cloud size={15} style={{ color: primaryColor }} />
+                  حساب المركز السحابي (Supabase Auth)
+                </h4>
+                <p className="text-xs text-gray-500 mb-3">
+                  أنشئ مستخدم واحد لمركزك من Authentication → Users، ثم ضع بياناته هنا.
+                  بياناتك محمية بحسابك — لا يمكن لأي مركز آخر رؤيتها.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
+                      البريد
+                    </label>
+                    <input
+                      type="email"
+                      value={cloudEmail}
+                      onChange={e => setCloudEmail(e.target.value)}
+                      placeholder="center@example.com"
+                      className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      dir="ltr"
+                      autoComplete="email"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
+                      كلمة المرور
+                    </label>
+                    <div className="relative">
+                      <input
+                        type={showCloudPassword ? 'text' : 'password'}
+                        value={cloudPassword}
+                        onChange={e => setCloudPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full px-3 py-2.5 pl-10 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        dir="ltr"
+                        autoComplete="current-password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowCloudPassword(!showCloudPassword)}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      >
+                        {showCloudPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Connection Status */}
               {connectionStatus === 'success' && (
                 <div className="p-3 bg-green-50 border border-green-100 rounded-xl flex items-center gap-2">
@@ -572,7 +651,7 @@ export default function SettingsPage() {
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={handleTestConnection}
-                  disabled={testingConnection || !supabaseUrl || !supabaseKey}
+                  disabled={testingConnection || !supabaseUrl || !supabaseKey || !cloudEmail.trim() || !cloudPassword}
                   className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 text-blue-600 rounded-xl text-sm font-medium hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {testingConnection ? (
@@ -585,7 +664,7 @@ export default function SettingsPage() {
 
                 <button
                   onClick={handleSaveSupabaseConfig}
-                  disabled={!supabaseUrl || !supabaseKey}
+                  disabled={!supabaseUrl || !supabaseKey || !cloudEmail.trim() || !cloudPassword}
                   className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                   style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}
                 >
@@ -607,9 +686,10 @@ export default function SettingsPage() {
                 <p className="text-xs font-bold text-blue-800 mb-2">📋 خطوات التفعيل:</p>
                 <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
                   <li>أنشئ مشروع على <a href="https://supabase.com" target="_blank" rel="noopener" className="underline">supabase.com</a></li>
-                  <li>اذهب لـ SQL Editor وأنشئ الجداول (اضغط "نسخ SQL Schema" أدناه)</li>
-                  <li>انسخ Project URL و Anon Key من Settings → API</li>
-                  <li>الصقهما هنا واختبر الاتصال ثم احفظ</li>
+                  <li>اذهب لـ SQL Editor والصق الـ Schema واعمل Run (اضغط "نسخ SQL Schema" أدناه) — فيه تأمين وعزل المستأجرين</li>
+                  <li>فعّل تسجيل الدخول بالبريد: Authentication → Providers → Email، ثم أنشئ مستخدم واحد لمركزك من Authentication → Users → Add user</li>
+                  <li>انسخ Project URL و Anon Key من Settings → API، وضع بريد وكلمة مرور حساب المركز بالأعلى</li>
+                  <li>اضغط "اختبار الاتصال" ثم "حفظ الإعدادات"</li>
                 </ol>
                 <button onClick={copySchema} className="mt-2 flex items-center gap-1 text-xs text-blue-600 hover:underline font-medium">
                   📋 نسخ SQL Schema (املأه في SQL Editor)
