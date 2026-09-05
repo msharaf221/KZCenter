@@ -5,6 +5,9 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useApp } from '../../contexts/AppContext';
 import { getAppNotifications, markAppNotificationsAsRead, clearAppNotifications, AppNotification } from '../../lib/notifications';
 import { formatDateTime, getContrastColor } from '../../lib/utils';
+import { globalSearch, kindLabel, type SearchResult } from '../../lib/search';
+import { visibleGroupIds } from '../../lib/permissions';
+import { dbGetAll, type Group } from '../../lib/db';
 
 interface HeaderProps {
   title: string;
@@ -16,7 +19,12 @@ export default function Header({ title }: HeaderProps) {
   const { darkMode, toggleDarkMode, setSidebarOpen, sidebarOpen, settings } = useApp();
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [globalSearch, setGlobalSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const searchBoxRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -26,6 +34,51 @@ export default function Header({ title }: HeaderProps) {
     loadNotifications();
     window.addEventListener('app_notifications_updated', loadNotifications);
     return () => window.removeEventListener('app_notifications_updated', loadNotifications);
+  }, []);
+
+  // مجموعات المستخدم (لتقييد بحث المدرس على مجموعاته)
+  const [myGroupIds, setMyGroupIds] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (user?.role !== 'teacher') { setMyGroupIds(null); return; }
+    dbGetAll<Group>('groups')
+      .then(gs => setMyGroupIds(visibleGroupIds({ role: user.role, teacherId: user.teacherId, groups: gs })))
+      .catch(() => setMyGroupIds(null));
+  }, [user?.role, user?.teacherId]);
+
+  // بحث شامل مُ debounce
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) { setResults([]); setSearchOpen(false); return; }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(() => {
+      globalSearch({ query: q, role: user?.role, allowedGroupIds: myGroupIds, currency: settings?.currency, limit: 10 })
+        .then(r => { if (!cancelled) { setResults(r); setSearchOpen(true); } })
+        .catch(() => { if (!cancelled) setResults([]); })
+        .finally(() => { if (!cancelled) setSearching(false); });
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [query, myGroupIds, user?.role, settings?.currency]);
+
+  // Ctrl+K / Cmd+K يركّز على البحث
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // إغلاق قائمة النتائج عند الضغط خارجها
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) setSearchOpen(false);
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
   }, []);
 
   useEffect(() => {
@@ -65,22 +118,55 @@ export default function Header({ title }: HeaderProps) {
 
         {/* Left side */}
         <div className="flex items-center gap-3">
-          {/* Global search - routes to the students list with the query */}
-          <div className="hidden md:flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-2">
-            <Search size={16} className="text-gray-400" />
-            <input
-              type="text"
-              placeholder="بحث سريع..."
-              value={globalSearch}
-              onChange={e => setGlobalSearch(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') {
-                  const q = globalSearch.trim();
-                  navigate(q ? `/students?q=${encodeURIComponent(q)}` : '/students');
-                }
-              }}
-              className="bg-transparent text-sm text-gray-700 placeholder-gray-400 outline-none w-48"
-            />
+          {/* بحث شامل (Ctrl+K) بنتائج فورية من كل الكيانات */}
+          <div ref={searchBoxRef} className="relative hidden md:block">
+            <div className="flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-2">
+              <Search size={16} className="text-gray-400" />
+              <input
+                ref={inputRef}
+                type="text"
+                placeholder="بحث شامل… (Ctrl+K)"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                onFocus={() => { if (results.length) setSearchOpen(true); }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    const first = results[0];
+                    if (first?.to) { navigate(first.to); setSearchOpen(false); setQuery(''); }
+                    else { const q = query.trim(); navigate(q ? `/students?q=${encodeURIComponent(q)}` : '/students'); }
+                  } else if (e.key === 'Escape') {
+                    setSearchOpen(false);
+                  }
+                }}
+                className="bg-transparent text-sm text-gray-700 placeholder-gray-400 outline-none w-48"
+              />
+              {searching && <span className="text-[10px] text-gray-400">…</span>}
+            </div>
+
+            {searchOpen && (
+              <div className="absolute left-0 mt-2 w-96 max-h-96 overflow-y-auto bg-white rounded-2xl shadow-xl border border-gray-100 z-50">
+                {results.length === 0 ? (
+                  <p className="p-4 text-sm text-gray-400 text-center">مفيش نتائج لـ «{query}»</p>
+                ) : (
+                  results.map(r => (
+                    <button
+                      key={`${r.kind}-${r.id}`}
+                      onClick={() => { if (r.to) navigate(r.to); setSearchOpen(false); setQuery(''); }}
+                      className="w-full text-right px-4 py-2.5 hover:bg-gray-50 border-b border-gray-50 last:border-0 flex items-center gap-3"
+                    >
+                      <span className="shrink-0 text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600">
+                        {kindLabel(r.kind)}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-semibold text-gray-900 truncate">{r.title}</span>
+                        {r.subtitle && <span className="block text-xs text-gray-500 truncate">{r.subtitle}</span>}
+                      </span>
+                      {r.badge && <span className="shrink-0 text-[10px] text-gray-400">{r.badge}</span>}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
           </div>
 
           {/* Dark mode toggle */}

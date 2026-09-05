@@ -36,12 +36,58 @@ export interface ParsedGroup {
   students: string[];
 }
 
+/**
+ * بيانات طالب مستخرجة من خلية الشيت.
+ *
+ * الشيتات الحقيقية بتكتب الاسم والتليفون في نفس الخلية أحياناً
+ * («أحمد محمد 01012345678»)، والمطابقة بالاسم لوحده بتعمل كوارث:
+ * طالبين بنفس الاسم بيتدمجوا في واحد، أو طالب موجود بيتعمله نسخة مكررة.
+ * فبنستخرج التليفون ونطابق بيه الأول.
+ */
+export interface StudentMeta {
+  /** الاسم بعد إزالة التليفون منه */
+  name: string;
+  /** التليفون بصيغة 11 رقم (01xxxxxxxxx) لو موجود في الخلية */
+  phone?: string;
+  /** النص الخام من الشيت */
+  raw: string;
+}
+
+/**
+ * استخراج رقم موبايل مصري من نص الخلية.
+ * بيدعم: 01012345678 · 1012345678 · +201012345678 · 010-1234-5678 · 010 1234 5678
+ */
+export function extractPhone(text: string): { phone?: string; name: string } {
+  const raw = String(text ?? '');
+  // نوحّد الفواصل عشان الأرقام المتقطعة تتجمع
+  const compact = raw.replace(/[\s\-().]/g, '');
+  // رقم موبايل مصري: 1[0125] + 8 أرقام (10 من غير الصفر)
+  // ممكن تسبقه بادئة دولة (0020 / +20 / 20) أو صفر محلي، وما بعدهوش رقم تاني
+  const m = compact.match(/(?:0020|\+?20|0)?(1[0125][0-9]{8})(?![0-9])/);
+  if (!m) return { name: raw.trim() };
+
+  const phone = `0${m[1]}`;
+  // نشيل الرقم كامل من الاسم — بالبادئة (دولة/صفر محلي) وأي فواصل بين الأرقام
+  const sep = '[\\s\\-().]*';
+  const joinDigits = (d: string) => d.split('').join(sep);
+  const prefixPat = `(?:\\+?${joinDigits('0020')}|\\+?${joinDigits('20')}|0)?`;
+  const name = raw
+    .replace(new RegExp(`${prefixPat}${sep}${joinDigits(m[1])}(?![0-9])`, 'g'), ' ')
+    .replace(/[\s\-().]+/g, ' ')
+    .trim();
+  return { phone, name: name || raw.trim() };
+}
+
 export interface SheetParseResult {
   /** أسماء المدرسين (الشيتات اللي فيها طلاب فعلاً) */
   teachers: string[];
   groups: ParsedGroup[];
   /** الأسماء الفريدة بعد إزالة التكرار */
   uniqueStudents: string[];
+  /** نفس الطلاب لكن مع التليفون المستخرج من الخلية (للمطابقة الأدق) */
+  studentMeta: StudentMeta[];
+  /** أسماء اتكررت في الشيت بأرقام مختلفة (محتمل يكونوا أشخاص مختلفين) */
+  duplicateNames: string[];
   /** عدد الخانات (اسم × مجموعة) قبل إزالة التكرار */
   totalSlots: number;
   /** طلاب مسجلين في أكتر من مجموعة */
@@ -312,6 +358,10 @@ export function parseSheetBuffer(data: ArrayBuffer | Uint8Array): SheetParseResu
   const groups: ParsedGroup[] = [];
   const teachers: string[] = [];
   const seenStudents = new Map<string, number>();
+  /** الاسم الموحّد ← بيانات الطالب (اسم + تليفون) */
+  const studentMeta = new Map<string, StudentMeta>();
+  /** أسماء ظهرت بأكتر من تليفون → محتمل أشخاص مختلفين */
+  const conflictingPhones = new Set<string>();
   let totalSlots = 0;
   let skippedColumns = 0;
 
@@ -332,7 +382,20 @@ export function parseSheetBuffer(data: ArrayBuffer | Uint8Array): SheetParseResu
       const students: string[] = [];
       for (let r = 1; r < rows.length; r++) {
         const v = normalize((rows[r] || [])[c]);
-        if (v) students.push(v);
+        if (!v) continue;
+        const { phone, name } = extractPhone(v);
+        // القائمة بتعرض الاسم بس (من غير رقم التليفون) — الرقم بيتستخدم في المطابقة
+        students.push(name);
+
+        const key = foldArabic(normalize(name));
+        const prev = studentMeta.get(key);
+        if (prev && phone && prev.phone && prev.phone !== phone) {
+          conflictingPhones.add(name);
+        } else if (!prev) {
+          studentMeta.set(key, { name, phone, raw: v });
+        } else if (prev && !prev.phone && phone) {
+          studentMeta.set(key, { name, phone, raw: v });
+        }
       }
 
       // عمود من غير طلاب = placeholder أو مجموعة لسه فاضية → نتخطاه
@@ -374,6 +437,8 @@ export function parseSheetBuffer(data: ArrayBuffer | Uint8Array): SheetParseResu
     teachers,
     groups,
     uniqueStudents: [...seenStudents.keys()],
+    studentMeta: [...studentMeta.values()],
+    duplicateNames: [...conflictingPhones],
     totalSlots,
     multiGroupStudents: [...seenStudents.values()].filter(n => n > 1).length,
     skippedColumns,
@@ -412,6 +477,10 @@ export interface SheetImportReport {
   groupsExisting: number;
   studentsCreated: number;
   studentsExisting: number;
+  /** طلاب اتطابقوا بالتليفون (مش بالاسم) */
+  studentsMatchedByPhone: number;
+  /** أسماء في الشيت مطابقة لأكتر من طالب موجود → محتاجة مراجعة يدوية */
+  ambiguousStudents: string[];
   enrollmentsCreated: number;
   enrollmentsSkipped: number;
   errors: string[];
@@ -422,7 +491,10 @@ export interface SheetImportReport {
  * مدرسين ← كورسات ← مجموعات ← طلاب ← تسجيلات (عن طريق enrollStudent
  * عشان الأقساط والقوائم تتظبط بنفس منطق التطبيق).
  *
- * الاستيراد idempotent: اللي موجود مش بيتكرر (المطابقة بالاسم).
+ * الاستيراد idempotent: اللي موجود مش بيتكرر.
+ * المطابقة بالترتيب ده: **التليفون الأول** (أدق حاجة)، وبعدين الاسم الموحّد.
+ * لو الاسم لوحده مطابق لأكتر من طالب موجود بنعتبره «غامض» وبنسجله للمراجعة
+ * بدل ما ندمج طالبين مختلفين في واحد بالغلط.
  */
 export async function importSheetIntoDb(
   parsed: SheetParseResult,
@@ -434,6 +506,7 @@ export async function importSheetIntoDb(
     coursesCreated: 0,
     groupsCreated: 0, groupsExisting: 0,
     studentsCreated: 0, studentsExisting: 0,
+    studentsMatchedByPhone: 0, ambiguousStudents: [],
     enrollmentsCreated: 0, enrollmentsSkipped: 0,
     errors: [],
   };
@@ -449,7 +522,29 @@ export async function importSheetIntoDb(
   const teacherByName = new Map(existingTeachers.map(t => [normalize(t.name), t]));
   const courseByName = new Map(existingCourses.map(c => [normalize(c.name), c]));
   const groupByKey = new Map(existingGroups.map(g => [`${g.teacherId}::${normalize(g.name)}`, g]));
-  const studentByName = new Map(existingStudents.map(s => [normalize(s.name), s]));
+  const normPhone = (p?: string) => {
+    const d = String(p || '').replace(/\D/g, '');
+    if (d.length === 11 && d.startsWith('0')) return d;
+    if (d.length === 12 && d.startsWith('20')) return `0${d.slice(2)}`;
+    if (d.length === 10 && d.startsWith('1')) return `0${d}`;
+    return d || '';
+  };
+
+  /** الاسم الموحّد ← الطلاب الموجودين بنفس الاسم (أكتر من واحد = غموض) */
+  const studentsByFoldedName = new Map<string, Student[]>();
+  for (const st of existingStudents) {
+    const k = foldArabic(normalize(st.name));
+    const arr = studentsByFoldedName.get(k) || [];
+    arr.push(st);
+    studentsByFoldedName.set(k, arr);
+  }
+  const studentByPhone = new Map<string, Student>();
+  for (const st of existingStudents) {
+    const p = normPhone(st.phone) || normPhone(st.parentPhone);
+    if (p && !studentByPhone.has(p)) studentByPhone.set(p, st);
+  }
+  /** الاسم الموحّد ← الطالب المعتمد للمطابقة (بيتبني أثناء الاستيراد) */
+  const studentByName = new Map<string, Student>();
 
   const totalSteps = parsed.teachers.length + parsed.groups.length
     + parsed.uniqueStudents.length + parsed.totalSlots;
@@ -553,14 +648,49 @@ export async function importSheetIntoDb(
   }
 
   // ---------- 4) الطلاب ----------
-  let phoneSeq = 1;
-  for (const name of parsed.uniqueStudents) {
-    const key = normalize(name);
-    if (studentByName.has(key)) { report.studentsExisting++; continue; }
+  // بنمشي على `studentMeta` (اسم + تليفون) مش على الأسماء الخام،
+  // عشان المطابقة بالتليفون تمنع التكرار ودمج الأشخاص الغلط.
+  const metaList: StudentMeta[] = parsed.studentMeta.length > 0
+    ? parsed.studentMeta
+    : parsed.uniqueStudents.map(n => ({ name: n, raw: n }));
 
-    // 0100000 + 0001 = 01000000001 (11 رقم) — placeholder المستخدم هيعدّله
-    const phone = `${opts.phonePrefix}${String(phoneSeq).padStart(4, '0')}`;
-    phoneSeq++;
+  let phoneSeq = 1;
+  for (const meta of metaList) {
+    const name = meta.name;
+    const key = foldArabic(normalize(name));
+    const sheetPhone = normPhone(meta.phone);
+
+    // 1) مطابقة بالتليفون — أدق حاجة ومبتتأثرش بأخطاء كتابة الاسم
+    if (sheetPhone && studentByPhone.has(sheetPhone)) {
+      const found = studentByPhone.get(sheetPhone)!;
+      studentByName.set(key, found);
+      report.studentsExisting++;
+      report.studentsMatchedByPhone++;
+      continue;
+    }
+
+    // 2) مطابقة بالاسم الموحّد
+    const sameName = studentsByFoldedName.get(key) || [];
+    if (sameName.length === 1) {
+      studentByName.set(key, sameName[0]);
+      report.studentsExisting++;
+      continue;
+    }
+    if (sameName.length > 1) {
+      // اسم مكرر في القاعدة من غير تليفون يحدد → ما نخمنش
+      studentByName.set(key, sameName[0]);
+      if (!report.ambiguousStudents.includes(name)) report.ambiguousStudents.push(name);
+      report.errors.push(
+        `«${name}»: موجود ${sameName.length} مرات في النظام — تم اعتماد الأول، راجعهم يدوياً`
+      );
+      report.studentsExisting++;
+      continue;
+    }
+
+    // 3) جديد — نستخدم تليفون الشيت لو موجود، وإلا placeholder
+    const phone = sheetPhone || `${opts.phonePrefix}${String(phoneSeq).padStart(4, '0')}`;
+    if (!sheetPhone) phoneSeq++;
+
     const student: Student = {
       id: generateId(),
       name,
@@ -568,7 +698,7 @@ export async function importSheetIntoDb(
       gender: guessGender(name),
       phone,
       parentPhone: phone,
-      notes: 'مضاف من شيت إكسيل',
+      notes: sheetPhone ? 'مضاف من شيت إكسيل' : 'مضاف من شيت إكسيل (التليفون placeholder — عدّله)',
       status: 'active',
       totalPaid: 0,
       enrolledGroups: [],
@@ -577,8 +707,15 @@ export async function importSheetIntoDb(
     };
     await dbAdd('students', student);
     studentByName.set(key, student);
+    studentsByFoldedName.set(key, [student]);
+    if (sheetPhone) studentByPhone.set(sheetPhone, student);
     report.studentsCreated++;
     tick(`طالب: ${name}`);
+  }
+
+  // أسماء في الشيت نفسه appeared بأكتر من رقم → نبه المستخدم
+  for (const dup of parsed.duplicateNames || []) {
+    report.errors.push(`«${dup}»: الاسم ده ظهر بأكتر من رقم تليفون في الشيت — تأكد إنهم مش نفس الشخص`);
   }
 
   // ---------- 5) التسجيلات (عن طريق enrollStudent) ----------
@@ -587,7 +724,7 @@ export async function importSheetIntoDb(
     if (!groupId) continue;
 
     for (const studentName of g.students) {
-      const student = studentByName.get(normalize(studentName));
+      const student = studentByName.get(foldArabic(normalize(studentName)));
       if (!student) { report.errors.push(`طالب مش موجود: ${studentName}`); continue; }
 
       const result = await enrollStudent(student.id, groupId);

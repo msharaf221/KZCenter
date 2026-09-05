@@ -19,8 +19,9 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      // القواعد الجديدة من React Compiler preset - تحذيرات مؤقتاً لحين إعادة الهيكلة
-      'react-hooks/set-state-in-effect': 'warn',
+      // قاعدة موجّهة للـ React Compiler (مش مستخدم هنا): نمط "تحميل أولي ثم setState"
+      // هو النمط القياسي من غير framework، فبنطفّيها بدل ما نسيب ٣٠ تحذير دائم.
+      'react-hooks/set-state-in-effect': 'off',
       'react-hooks/immutability': 'warn',
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       // نسمح بـ console.error/warn فقط - أي console.log يعتبر تحذير
@@ -29,6 +30,14 @@ export default tseslint.config(
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
+    },
+  },
+  {
+    // ملفات الـ contexts بتصدّر Provider + hooks مع بعض بالتصميم —
+    // قاعدة fast-refresh مش منطبقة عليها، فبنطفّيها للملفات دي بس.
+    files: ['src/contexts/**/*.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
     },
   },
 );

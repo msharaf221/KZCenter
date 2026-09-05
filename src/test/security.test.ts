@@ -10,9 +10,6 @@ import {
   checkPasswordStrength,
   sanitizeInput,
   sanitizeObject,
-  getAuditLog,
-  addAuditEntry,
-  clearAuditLog,
   isSessionExpired,
   setSessionTimestamp,
   refreshSession,
@@ -116,61 +113,6 @@ describe('Input Sanitization', () => {
     const result = sanitizeObject(input);
     expect(result.name).not.toContain('<b>');
     expect(result.age).toBe(25);
-  });
-});
-
-describe('Audit Log', () => {
-  it('starts empty', () => {
-    const log = getAuditLog();
-    expect(log).toEqual([]);
-  });
-
-  it('adds entries', () => {
-    addAuditEntry({
-      userId: '1',
-      username: 'admin',
-      action: 'login',
-      entity: 'session',
-    });
-    const log = getAuditLog();
-    expect(log.length).toBe(1);
-    expect(log[0].username).toBe('admin');
-    expect(log[0].action).toBe('login');
-  });
-
-  it('includes timestamp', () => {
-    addAuditEntry({
-      userId: '1',
-      username: 'admin',
-      action: 'create',
-      entity: 'student',
-    });
-    const log = getAuditLog();
-    expect(log[0].timestamp).toBeDefined();
-  });
-
-  it('clears log', () => {
-    addAuditEntry({
-      userId: '1',
-      username: 'admin',
-      action: 'login',
-      entity: 'session',
-    });
-    clearAuditLog();
-    expect(getAuditLog()).toEqual([]);
-  });
-
-  it('limits entries to 500', () => {
-    for (let i = 0; i < 510; i++) {
-      addAuditEntry({
-        userId: '1',
-        username: 'admin',
-        action: 'create',
-        entity: 'test',
-      });
-    }
-    const log = getAuditLog();
-    expect(log.length).toBeLessThanOrEqual(500);
   });
 });
 

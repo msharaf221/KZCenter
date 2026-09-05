@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users, DollarSign, FileSpreadsheet } from 'lucide-react';
+import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users, DollarSign, FileSpreadsheet, Image as ImageIcon, AlertTriangle, Percent } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -9,7 +9,7 @@ import Pagination from '../components/ui/Pagination';
 import SheetImportDialog from '../components/SheetImportDialog';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
 import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone, getContrastColor } from '../lib/utils';
-import { SESSIONS_PER_MONTH, sessionPrice, proratedFirstPeriod } from '../lib/billing';
+import { SESSIONS_PER_MONTH, sessionPrice, proratedFirstPeriod, effectiveMonthlyPrice } from '../lib/billing';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyNewStudent } from '../lib/notifications';
@@ -21,7 +21,28 @@ const PAGE_SIZE = 24;
 const INITIAL_FORM: Omit<Student, 'id' | 'createdAt' | 'updatedAt'> = {
   name: '', age: 10, gender: 'male', phone: '', parentPhone: '',
   avatar: '', notes: '', status: 'active', totalPaid: 0, enrolledGroups: [],
+  school: '', gradeLevel: '', source: '', parentName: '',
 };
+
+/** تسعير خاص لكل تسجيل (سعر مختلف / خصم) */
+interface EnrollPricing {
+  priceOverride?: number;
+  discountAmount?: number;
+  discountPercent?: number;
+  discountReason?: string;
+}
+
+/**
+ * كشف التكرار: نفس التليفون = شبه مؤكد نفس الشخص،
+ * والاسم المتطابق بعد التوحيد = احتمال عالي. بننبّه المستخدم قبل ما يعمل نسخة مكررة.
+ */
+const foldName = (s: string) => s
+  .replace(/[\u064B-\u0652\u0640]/g, '')
+  .replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ؤ/g, 'و')
+  .replace(/ئ/g, 'ي').replace(/ة/g, 'ه')
+  .replace(/\s+/g, ' ').trim();
+
+const digits = (s?: string) => String(s || '').replace(/\D/g, '');
 
 export default function StudentsPage() {
   const navigate = useNavigate();
@@ -50,6 +71,9 @@ export default function StudentsPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [initialPayments, setInitialPayments] = useState<Record<string, number>>({});
   const [startSessions, setStartSessions] = useState<Record<string, number>>({});
+  const [enrollPricing, setEnrollPricing] = useState<Record<string, EnrollPricing>>({});
+  const [allStudents, setAllStudents] = useState<Student[]>([]);
+  const [duplicateWarning, setDuplicateWarning] = useState<{ kind: 'phone' | 'name'; matches: Student[] } | null>(null);
 
   const loadStudents = useCallback(async () => {
     setLoading(true);
@@ -81,6 +105,7 @@ export default function StudentsPage() {
       });
       setStudents(result.items);
       setTotal(result.total);
+      setAllStudents(await dbGetAll<Student>('students'));
     } finally {
       setLoading(false);
     }
@@ -100,11 +125,59 @@ export default function StudentsPage() {
     if (q !== null) setSearch(q);
   }, [searchParams]);
 
+  /**
+   * كشف التكرار أثناء الكتابة: نفس رقم ولي الأمر، أو نفس الاسم بعد التوحيد.
+   * الهدف نمنع «أحمد محمد» يتسجل مرتين وتضيع فلوسه على سجلين.
+   */
+  useEffect(() => {
+    if (!showModal) { setDuplicateWarning(null); return; }
+    const phone = digits(form.parentPhone);
+    const nameKey = foldName(form.name);
+
+    const matches = allStudents.filter(st => {
+      if (editingStudent && st.id === editingStudent.id) return false;
+      if (phone.length >= 10 && (digits(st.parentPhone) === phone || digits(st.phone) === phone)) return true;
+      if (nameKey.length >= 6 && foldName(st.name) === nameKey) return true;
+      return false;
+    });
+
+    if (matches.length === 0) { setDuplicateWarning(null); return; }
+    const byPhone = matches.some(st =>
+      phone.length >= 10 && (digits(st.parentPhone) === phone || digits(st.phone) === phone));
+    setDuplicateWarning({ kind: byPhone ? 'phone' : 'name', matches: matches.slice(0, 3) });
+  }, [form.parentPhone, form.name, showModal, allStudents, editingStudent]);
+
+  /** رفع صورة الطالب — بتتصغر وتتخزن data URL (من غير سيرفر ملفات) */
+  async function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { notify.error('الملف لازم يكون صورة'); return; }
+    if (file.size > 3 * 1024 * 1024) { notify.error('حجم الصورة كبير (الحد 3 ميجا)'); return; }
+    const dataUrl = await new Promise<string>((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const max = 256;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.82));
+      };
+      img.onerror = () => resolve('');
+      img.src = URL.createObjectURL(file);
+    });
+    if (!dataUrl) { notify.error('تعذّر قراءة الصورة'); return; }
+    setForm(f => ({ ...f, avatar: dataUrl }));
+    notify.success('تم رفع الصورة — اضغط حفظ لتفعيلها');
+  }
+
   function openAdd() {
     setEditingStudent(null);
     setForm(INITIAL_FORM);
     setInitialPayments({});
     setStartSessions({});
+    setEnrollPricing({});
     setShowModal(true);
   }
 
@@ -112,6 +185,7 @@ export default function StudentsPage() {
     setEditingStudent(student);
     setInitialPayments({});
     setStartSessions({});
+    setEnrollPricing({});
     setForm({
       name: student.name, age: student.age, gender: student.gender,
       phone: student.phone || '', parentPhone: student.parentPhone,
@@ -192,12 +266,19 @@ export default function StudentsPage() {
       for (const groupId of addedGroups) {
         const paidAmount = initialPayments[groupId] || 0;
         const fromSession = startSessions[groupId] || 1;
+        const pricing = enrollPricing[groupId] || {};
         try {
           const result = await enrollStudent(
             studentId,
             groupId,
             paidAmount > 0 ? paidAmount : undefined,
-            { startSession: fromSession }
+            {
+              startSession: fromSession,
+              priceOverride: pricing.priceOverride && pricing.priceOverride > 0 ? pricing.priceOverride : undefined,
+              discountAmount: pricing.discountAmount && pricing.discountAmount > 0 ? pricing.discountAmount : undefined,
+              discountPercent: pricing.discountPercent && pricing.discountPercent > 0 ? pricing.discountPercent : undefined,
+              discountReason: pricing.discountReason || undefined,
+            }
           );
           if (!result.success) {
             notify.error(`تعذّر التسجيل في "${groups.find(g => g.id === groupId)?.name}": ${result.error}`);
@@ -585,6 +666,49 @@ export default function StudentsPage() {
       {/* Add/Edit Modal */}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editingStudent ? 'تعديل بيانات الطالب' : 'إضافة طالب جديد'} size="lg">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* كشف التكرار */}
+          {duplicateWarning && (
+            <div className="sm:col-span-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
+              <p className="text-xs font-bold text-amber-800 flex items-center gap-1.5 mb-1.5">
+                <AlertTriangle size={14} />
+                {duplicateWarning.kind === 'phone'
+                  ? 'فيه طالب بنفس رقم ولي الأمر — تأكد إن ده مش نفس الشخص'
+                  : 'فيه طالب بنفس الاسم — تأكد إن ده مش تسجيل مكرر'}
+              </p>
+              <div className="space-y-1">
+                {duplicateWarning.matches.map(m => (
+                  <button key={m.id} type="button"
+                    onClick={() => { setShowModal(false); navigate(`/students/${m.id}`); }}
+                    className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-white/70 hover:bg-white text-right">
+                    <span className="text-xs font-semibold text-gray-800">{m.name}</span>
+                    <span className="text-[11px] text-gray-500" dir="ltr">{m.parentPhone}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* الصورة */}
+          <div className="sm:col-span-2 flex items-center gap-3">
+            <div className="w-16 h-16 rounded-xl border-2 border-dashed border-gray-200 flex items-center justify-center overflow-hidden bg-gray-50 flex-shrink-0">
+              {form.avatar
+                ? <img src={form.avatar} alt={form.name} className="w-full h-full object-cover" />
+                : <ImageIcon size={20} className="text-gray-300" />}
+            </div>
+            <div className="flex gap-2">
+              <label className="inline-flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-xl text-xs text-gray-700 hover:bg-gray-50 cursor-pointer">
+                <Upload size={13} /> رفع صورة
+                <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
+              </label>
+              {form.avatar && (
+                <button type="button" onClick={() => setForm(f => ({ ...f, avatar: '' }))}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 border border-red-200 rounded-xl text-xs text-red-600 hover:bg-red-50">
+                  <Trash2 size={13} /> إزالة
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="sm:col-span-2">
             <label className="block text-sm font-semibold text-gray-700 mb-1">الاسم الكامل *</label>
             <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
@@ -672,6 +796,47 @@ export default function StudentsPage() {
                             ))}
                           </select>
                         </div>
+                        {/* تسعير خاص / خصم للتسجيل ده */}
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                            <Percent size={11} /> سعر/خصم خاص:
+                          </span>
+                          <input type="number" min={0} placeholder="سعر شهري خاص"
+                            value={enrollPricing[g.id]?.priceOverride ?? ''}
+                            onChange={e => setEnrollPricing(p => ({ ...p, [g.id]: { ...p[g.id], priceOverride: e.target.value === '' ? undefined : +e.target.value } }))}
+                            className="w-28 px-2 py-1 border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-indigo-500" />
+                          <input type="number" min={0} placeholder="خصم مبلغ"
+                            value={enrollPricing[g.id]?.discountAmount ?? ''}
+                            onChange={e => setEnrollPricing(p => ({ ...p, [g.id]: { ...p[g.id], discountAmount: e.target.value === '' ? undefined : +e.target.value } }))}
+                            className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-indigo-500" />
+                          <input type="number" min={0} max={100} placeholder="خصم %"
+                            value={enrollPricing[g.id]?.discountPercent ?? ''}
+                            onChange={e => setEnrollPricing(p => ({ ...p, [g.id]: { ...p[g.id], discountPercent: e.target.value === '' ? undefined : +e.target.value } }))}
+                            className="w-20 px-2 py-1 border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-indigo-500" />
+                          <input type="text" placeholder="سبب الخصم (إخوة/منحة)"
+                            value={enrollPricing[g.id]?.discountReason ?? ''}
+                            onChange={e => setEnrollPricing(p => ({ ...p, [g.id]: { ...p[g.id], discountReason: e.target.value } }))}
+                            className="flex-1 min-w-32 px-2 py-1 border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-indigo-500" />
+                          {course && (() => {
+                            const pr = enrollPricing[g.id] || {};
+                            const eff = effectiveMonthlyPrice({
+                              coursePrice: course.price,
+                              priceOverride: pr.priceOverride,
+                              discountAmount: pr.discountAmount,
+                              discountPercent: pr.discountPercent,
+                            });
+                            if (eff === course.price) return null;
+                            return (
+                              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg">
+                                السعر الفعلي: {formatCurrency(eff, settings?.currency)}/شهر
+                                <span className="text-gray-400 font-normal line-through mr-1">
+                                  {formatCurrency(course.price, settings?.currency)}
+                                </span>
+                              </span>
+                            );
+                          })()}
+                        </div>
+
                         {course && (
                           <p className="text-xs text-gray-400">
                             {sess > 1 ? (
@@ -693,6 +858,33 @@ export default function StudentsPage() {
               {groups.length === 0 && <p className="text-sm text-gray-500 text-center py-2">لا توجد مجموعات متاحة</p>}
             </div>
           </div>
+          {/* بيانات المتابعة (CRM) */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">اسم ولي الأمر</label>
+            <input type="text" value={form.parentName || ''} onChange={e => setForm({...form, parentName: e.target.value})}
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" placeholder="اختياري" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">المدرسة</label>
+            <input type="text" value={form.school || ''} onChange={e => setForm({...form, school: e.target.value})}
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" placeholder="اختياري" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">الصف الدراسي</label>
+            <input type="text" value={form.gradeLevel || ''} onChange={e => setForm({...form, gradeLevel: e.target.value})}
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" placeholder="مثال: تالتة ابتدائي" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-1">إزاي عرف المركز؟</label>
+            <select value={form.source || ''} onChange={e => setForm({...form, source: e.target.value})}
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
+              <option value="">غير محدد</option>
+              {['إعلان فيسبوك', 'توصية من ولي أمر', 'لافتة المركز', 'بحث جوجل', 'إنستجرام', 'أخ/أخت في المركز', 'أخرى'].map(o => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+          </div>
+
           <div className="sm:col-span-2">
             <label className="block text-sm font-semibold text-gray-700 mb-1">ملاحظات</label>
             <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})}

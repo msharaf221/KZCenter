@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="EduCenter Pro">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#818cf8"/>
+      <stop offset="0.55" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#4338ca"/>
+    </linearGradient>
+    <linearGradient id="cap" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e0e7ff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- خلفية مربّعة بحواف دائرية -->
+  <rect width="512" height="512" rx="112" ry="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" ry="112" fill="none" stroke="#ffffff" stroke-opacity="0.12" stroke-width="6"/>
+
+  <!-- لوحة التخرّج (cap) -->
+  <g>
+    <!-- الجزء العلوي (المعيّن) -->
+    <path d="M256 150 L436 224 L256 298 L76 224 Z" fill="url(#cap)"/>
+    <!-- قاعدة القبّعة -->
+    <path d="M150 268 v58 c0 26 47 47 106 47 s106-21 106-47 v-58 l-106 44 z" fill="#c7d2fe"/>
+    <path d="M150 268 v58 c0 26 47 47 106 47 s106-21 106-47 v-58 l-106 44 z" fill="none" stroke="#4338ca" stroke-opacity="0.15" stroke-width="4"/>
+    <!-- الزرّ -->
+    <circle cx="256" cy="224" r="13" fill="#4338ca"/>
+    <!-- الشرّابة -->
+    <path d="M418 231 v70" stroke="#fbbf24" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <circle cx="418" cy="312" r="15" fill="#fbbf24"/>
+    <path d="M418 327 v26" stroke="#f59e0b" stroke-width="10" stroke-linecap="round" fill="none"/>
+  </g>
+</svg>

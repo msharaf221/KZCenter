@@ -313,13 +313,32 @@ ON CONFLICT (username) DO NOTHING;
 INSERT INTO settings (id) VALUES ('main') ON CONFLICT (id) DO NOTHING;
 
 -- =====================================================
--- Row Level Security (RLS)
+-- Row Level Security (RLS) — مُشدَّدة (2026-09)
 -- =====================================================
--- ملاحظة مهمة:
--- التطبيق يعمل محلياً (IndexedDB) ويستخدم Supabase كطبقة نسخ احتياطي / مزامنة اختيارية
--- عبر anon key فقط (بدون Supabase Auth). لذلك تسمح السياسات أدناه بالوصول لدوري
--- `anon` و `authenticated`. إذا كنت ستعرض المشروع علناً على الإنترنت، يجب استبدال
--- هذه السياسات بنظام مصادقة حقيقي (Supabase Auth + RLS لكل مستخدم على حدة).
+-- ⚠️ مهم جداً — اقرأ قبل التشغيل:
+--
+-- 1) مفيش أي وصول لدور `anon`. النسخة القديمة من الملف ده كانت بتسمح لـ anon
+--    يقرا ويعدّل ويمسح كل الجداول — بما فيها:
+--       - `users`   → فيها bcrypt password hashes لكل مستخدمي النظام
+--       - `backups` → فيها `data_snapshot` = نسخة كاملة من قاعدة البيانات
+--    والـ anon key نفسه مبني في كود العميل، يعني أي حد كان يقدر يسحب كل بيانات
+--    المركز (وأسماء الأطفال) من غير أي صلاحية. ده اتقفل هنا.
+--
+-- 2) التطبيق دلوقتي بيعمل **Supabase Anonymous Sign-In** قبل أي مزامنة
+--    (`ensureCloudSession()` في `src/lib/supabase.ts`) عشان الدور يبقى
+--    `authenticated`. لازم تفعّله من:
+--       Supabase Dashboard → Authentication → Sign In / Up → Anonymous Sign-Ins → ON
+--    لو مقفول، المزامنة هتفشل برسالة واضحة (مش بصمت زي قبل كده).
+--
+-- 3) جدول `users` **مقفول بالكامل** (RLS شغال ومن غير أي سياسة = رفض الكل).
+--    مستخدمو النظام وكلمات مرورهم محليين في IndexedDB ومالهمش داعي في السحابة.
+--
+-- 4) السياسات هنا idempotent: تعمل DROP POLICY IF EXISTS قبل CREATE، فتنفع
+--    تشغّل الملف أكتر من مرة من غير أخطاء.
+--
+-- 5) لو هتنقل المصادقة لـ Supabase Auth (مستحسن لأي deployment عام):
+--    شوف القسم الأخير «المرحلة التالية: عزل لكل مستخدم» في آخر الملف.
+-- =====================================================
 
 ALTER TABLE students ENABLE ROW LEVEL SECURITY;
 ALTER TABLE teachers ENABLE ROW LEVEL SECURITY;
@@ -338,71 +357,124 @@ ALTER TABLE enrollments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE installments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE backups ENABLE ROW LEVEL SECURITY;
 
--- Full access for anon/authenticated roles (local-first backup/sync model)
-CREATE POLICY "app_all_students" ON students FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+-- إزالة السياسات القديمة المفتوحة (لو المشروع متعمل قبل كده)
+DROP POLICY IF EXISTS "app_all_students" ON students;
+DROP POLICY IF EXISTS "app_all_teachers" ON teachers;
+DROP POLICY IF EXISTS "app_all_courses" ON courses;
+DROP POLICY IF EXISTS "app_all_groups" ON groups;
+DROP POLICY IF EXISTS "app_all_payments" ON payments;
+DROP POLICY IF EXISTS "app_all_attendance" ON attendance;
+DROP POLICY IF EXISTS "app_all_users" ON users;
+DROP POLICY IF EXISTS "app_all_settings" ON settings;
+DROP POLICY IF EXISTS "app_all_expenses" ON expenses;
+DROP POLICY IF EXISTS "app_all_exams" ON exams;
+DROP POLICY IF EXISTS "app_all_grades" ON grades;
+DROP POLICY IF EXISTS "app_all_inventory" ON inventory;
+DROP POLICY IF EXISTS "app_all_inventory_transactions" ON inventory_transactions;
+DROP POLICY IF EXISTS "app_all_enrollments" ON enrollments;
+DROP POLICY IF EXISTS "app_all_installments" ON installments;
+DROP POLICY IF EXISTS "app_all_backups" ON backups;
 
-CREATE POLICY "app_all_teachers" ON teachers FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+-- سياسات authenticated-only (للمزامنة من التطبيق بعد anonymous sign-in)
+DROP POLICY IF EXISTS "app_sync_students" ON students;
+CREATE POLICY "app_sync_students" ON students FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_courses" ON courses FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_teachers" ON teachers;
+CREATE POLICY "app_sync_teachers" ON teachers FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_groups" ON groups FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_courses" ON courses;
+CREATE POLICY "app_sync_courses" ON courses FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_payments" ON payments FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_groups" ON groups;
+CREATE POLICY "app_sync_groups" ON groups FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_attendance" ON attendance FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_payments" ON payments;
+CREATE POLICY "app_sync_payments" ON payments FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_users" ON users FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_attendance" ON attendance;
+CREATE POLICY "app_sync_attendance" ON attendance FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_settings" ON settings FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_settings" ON settings;
+CREATE POLICY "app_sync_settings" ON settings FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_expenses" ON expenses FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_expenses" ON expenses;
+CREATE POLICY "app_sync_expenses" ON expenses FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_exams" ON exams FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_exams" ON exams;
+CREATE POLICY "app_sync_exams" ON exams FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_grades" ON grades FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_grades" ON grades;
+CREATE POLICY "app_sync_grades" ON grades FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_inventory" ON inventory FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_inventory" ON inventory;
+CREATE POLICY "app_sync_inventory" ON inventory FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_inventory_transactions" ON inventory_transactions FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_inventory_transactions" ON inventory_transactions;
+CREATE POLICY "app_sync_inventory_transactions" ON inventory_transactions FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_enrollments" ON enrollments FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_enrollments" ON enrollments;
+CREATE POLICY "app_sync_enrollments" ON enrollments FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_installments" ON installments FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_installments" ON installments;
+CREATE POLICY "app_sync_installments" ON installments FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
-CREATE POLICY "app_all_backups" ON backups FOR ALL
-  USING (auth.role() IN ('anon', 'authenticated'))
-  WITH CHECK (auth.role() IN ('anon', 'authenticated'));
+DROP POLICY IF EXISTS "app_sync_backups" ON backups;
+CREATE POLICY "app_sync_backups" ON backups FOR ALL
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
 
+
+-- جدول `users`: مقفول بالكامل (مفيش سياسة = RLS بيرفض كل حاجة).
+-- كلمات مرور النظام المحلي مش بتترفع للسحابة إطلاقاً (شوف CLOUD_TABLES في
+-- src/lib/storage.ts). لو محتاج تخزن مستخدمين في السحابة مستقبلاً، استخدم
+-- Supabase Auth + جدول `app_users` في القسم الأخير.
+
+-- =====================================================
+-- Functions & Triggers
+-- =====================================================
 -- =====================================================
 -- Functions & Triggers
 -- =====================================================
@@ -448,3 +520,73 @@ CREATE TRIGGER update_enrollments_updated_at BEFORE UPDATE ON enrollments
 
 CREATE TRIGGER update_installments_updated_at BEFORE UPDATE ON installments
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- =====================================================
+-- المرحلة التالية: عزل لكل مستخدم (Supabase Auth)
+-- =====================================================
+-- القسم ده **متعطّل** (كله comments). فعّله لما تنقل المصادقة من IndexedDB
+-- لـ Supabase Auth — وده مطلوب لأي deployment على النت بأكتر من مستخدم:
+--   • كل مستخدم بيشوف بيانات مركزه هو بس
+--   • أدوار (admin / secretary / accountant / teacher) enforced في القاعدة نفسها
+--   • مفيش اعتماد على حماية في المتصفح (اللي ممكن تجاوزها من DevTools)
+--
+-- خطوات التفعيل:
+--   1) شيل علامات التعليق من الكود ده وشغّله في SQL Editor.
+--   2) احذف السياسات `app_sync_*` اللي فوق (أو خليها للمسؤول فقط).
+--   3) في التطبيق: supabase.auth.signUp / signInWithPassword بدل تسجيل الدخول المحلي،
+--      واحفظ role + center_id في `app_users` من طرف مسؤول المشروع (مش من العميل).
+--
+-- CREATE TABLE IF NOT EXISTS app_users (
+--   auth_uid  UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+--   center_id UUID NOT NULL,
+--   role      TEXT NOT NULL CHECK (role IN ('owner','admin','secretary','accountant','supervisor','teacher')),
+--   teacher_id UUID REFERENCES teachers(id) ON DELETE SET NULL,
+--   created_at TIMESTAMPTZ DEFAULT NOW()
+-- );
+-- ALTER TABLE app_users ENABLE ROW LEVEL SECURITY;
+-- CREATE POLICY "app_users_self_read" ON app_users FOR SELECT
+--   TO authenticated USING (auth_uid = auth.uid());
+--
+-- -- مركز واحد لكل صف: أضف center_id للجداول (أو جدول ربط group↔center)
+-- ALTER TABLE students  ADD COLUMN IF NOT EXISTS center_id UUID;
+-- ALTER TABLE groups    ADD COLUMN IF NOT EXISTS center_id UUID;
+-- ALTER TABLE payments  ADD COLUMN IF NOT EXISTS center_id UUID;
+--
+-- -- دوال مساعدة (SECURITY DEFINER عشان تقرا app_users رغم RLS)
+-- CREATE OR REPLACE FUNCTION current_center() RETURNS UUID
+-- LANGUAGE sql SECURITY DEFINER STABLE AS $$
+--   SELECT center_id FROM app_users WHERE auth_uid = auth.uid()
+-- $$;
+--
+-- CREATE OR REPLACE FUNCTION current_role() RETURNS TEXT
+-- LANGUAGE sql SECURITY DEFINER STABLE AS $$
+--   SELECT role FROM app_users WHERE auth_uid = auth.uid()
+-- $$;
+--
+-- CREATE OR REPLACE FUNCTION is_staff() RETURNS BOOLEAN
+-- LANGUAGE sql SECURITY DEFINER STABLE AS $$
+--   SELECT COALESCE(current_role() IN ('owner','admin','secretary','accountant','supervisor'), FALSE)
+-- $$;
+--
+-- -- مثال سياسات لكل جدول:
+-- DROP POLICY IF EXISTS "app_sync_students" ON students;
+-- CREATE POLICY "students_center_isolation" ON students FOR ALL TO authenticated
+--   USING (center_id = current_center())
+--   WITH CHECK (center_id = current_center());
+--
+-- -- المدرس: قراءة لطلابه فقط (عن طريق مجموعاته) وكتابة حضور بس
+-- CREATE POLICY "students_teacher_read" ON students FOR SELECT TO authenticated
+--   USING (
+--     current_role() = 'teacher' AND EXISTS (
+--       SELECT 1 FROM enrollments e JOIN groups g ON g.id = e.group_id
+--       WHERE e.student_id = students.id AND g.teacher_id = (SELECT teacher_id FROM app_users WHERE auth_uid = auth.uid())
+--     )
+--   );
+--
+-- -- الفلوس للمسؤول/المحاسب فقط
+-- CREATE POLICY "payments_staff_only" ON payments FOR ALL TO authenticated
+--   USING (is_staff()) WITH CHECK (is_staff());
+--
+-- -- النسخ الاحتياطية للمسؤول فقط
+-- CREATE POLICY "backups_owner_only" ON backups FOR ALL TO authenticated
+--   USING (current_role() IN ('owner','admin')) WITH CHECK (current_role() IN ('owner','admin'));

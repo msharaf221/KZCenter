@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   GraduationCap, Users, BookOpen, Users2,
-  DollarSign, Clock, TrendingUp, AlertCircle, AlertTriangle,
+  DollarSign, Clock, TrendingUp, AlertCircle, AlertTriangle, CalendarX,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -9,7 +9,9 @@ import {
 } from 'recharts';
 import Layout from '../components/layout/Layout';
 import { StatCard } from '../components/ui/Card';
-import { dbGetAll, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, getDebtors, Student, Teacher, Group, Course, Payment, DebtorRow } from '../lib/db';
+import { dbGetAll, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, getDebtors, Student, Teacher, Group, Course, Payment, Installment, Enrollment, DebtorRow } from '../lib/db';
+import { upcomingDues, installmentRemaining } from '../lib/billing';
+import { findScheduleConflicts, type ScheduleConflict } from '../lib/schedule';
 import { formatDate, formatCurrency, getStatusLabel, getArabicDay } from '../lib/utils';
 import { requestNotificationPermission, showBrowserNotification } from '../lib/notifications';
 import { subscribeDebtAlert, refreshDebtAlert, DebtAlert } from '../lib/debtAlerts';
@@ -43,6 +45,8 @@ export default function DashboardPage() {
   const [recentStudents, setRecentStudents] = useState<Student[]>([]);
   const [debtAlert, setDebtAlert] = useState<DebtAlert | null>(null);
   const [topDebtors, setTopDebtors] = useState<DebtorRow[]>([]);
+  const [upcoming, setUpcoming] = useState<ReturnType<typeof upcomingDues> | null>(null);
+  const [conflicts, setConflicts] = useState<ScheduleConflict[]>([]);
   const [loading, setLoading] = useState(true);
 
   // تنبيهات المديونيات + إشعار المتأخرات (مرة واحدة في اليوم)
@@ -80,17 +84,20 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadDashboard();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- مقصود: إعادة التحميل مربوطة بالـ deps المكتوبة بس
   }, []);
 
   async function loadDashboard() {
     setLoading(true);
     try {
-      const [students, teachers, courses, groups, payments] = await Promise.all([
+      const [students, teachers, courses, groups, payments, installments, enrollments] = await Promise.all([
         dbGetAll<Student>('students'),
         dbGetAll<Teacher>('teachers'),
         dbGetAll<Course>('courses'),
         dbGetAll<Group>('groups'),
         dbGetAll<Payment>('payments'),
+        dbGetAll<Installment>('installments'),
+        dbGetAll<Enrollment>('enrollments'),
       ]);
 
       // Stats
@@ -165,6 +172,21 @@ export default function DashboardPage() {
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         .slice(0, 5);
       setRecentStudents(sorted);
+
+      // الأقساط اللي استحقاقها قريب — التنبيه قبل التأخر بيرفع التحصيل
+      setUpcoming(upcomingDues(installments, settings?.upcomingDueDays ?? 3));
+
+      // تعارضات الجدول (مدرس/قاعة في مكانين، أو طالب في مجموعتين متعارضتين)
+      const teacherNames: Record<string, string> = {};
+      for (const t of teachers) teacherNames[t.id] = t.name;
+      const studentNames: Record<string, string> = {};
+      for (const st of students) studentNames[st.id] = st.name;
+      setConflicts(findScheduleConflicts({
+        groups,
+        enrollments: enrollments.filter(e => e.status === 'active'),
+        teacherNames,
+        studentNames,
+      }));
     } catch (e) {
       console.error('Dashboard load error:', e);
     } finally {
@@ -204,6 +226,7 @@ export default function DashboardPage() {
       }
     };
     runMigration();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- مقصود: إعادة التحميل مربوطة بالـ deps المكتوبة بس
   }, []);
 
   if (loading) {
@@ -344,6 +367,79 @@ export default function DashboardPage() {
             </ResponsiveContainer>
           </div>
         </div>
+
+        {/* استحقاقات قريبة — التنبيه قبل ما القسط يتأخر */}
+        {upcoming && upcoming.count > 0 && (
+          <div className="bg-white rounded-2xl border border-amber-100 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-gray-100 flex items-center gap-2">
+              <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                <Clock size={18} className="text-amber-500" /> استحقاقات خلال {settings?.upcomingDueDays ?? 3} يوم
+              </h3>
+              <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+                {upcoming.count} قسط • {formatCurrency(upcoming.amount, settings?.currency)}
+              </span>
+              <button onClick={() => navigate('/payments')}
+                className="mr-auto text-xs font-semibold text-indigo-600 hover:text-indigo-800">
+                تحصيل ←
+              </button>
+            </div>
+            <div className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {upcoming.items.slice(0, 6).map(i => {
+                const st = recentStudents.find(x => x.id === i.studentId);
+                return (
+                  <div key={i.id} className="flex items-center gap-3 p-3 rounded-xl bg-amber-50/40 border border-amber-100">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{st?.name || 'طالب'}</p>
+                      <p className="text-xs text-gray-500">
+                        يستحق {formatDate(i.dueDate)}
+                        <span className={i.daysUntilDue <= 1 ? 'text-red-600 font-bold' : 'text-amber-600'}>
+                          {' '}• {i.daysUntilDue === 0 ? 'النهاردة' : `بعد ${i.daysUntilDue} يوم`}
+                        </span>
+                      </p>
+                    </div>
+                    <p className="text-sm font-bold text-amber-700 flex-shrink-0">
+                      {formatCurrency(installmentRemaining(i), settings?.currency)}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* تعارضات الجدول */}
+        {conflicts.length > 0 && (
+          <div className="bg-white rounded-2xl border border-red-100 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-gray-100 flex items-center gap-2">
+              <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                <CalendarX size={18} className="text-red-500" /> تعارضات في الجدول
+              </h3>
+              <span className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded-full font-medium">
+                {conflicts.length} تعارض
+              </span>
+              <button onClick={() => navigate('/timetable')}
+                className="mr-auto text-xs font-semibold text-indigo-600 hover:text-indigo-800">
+                الجدول الأسبوعي ←
+              </button>
+            </div>
+            <div className="p-3 space-y-2">
+              {conflicts.slice(0, 5).map((c, i) => (
+                <div key={i} className="flex items-start gap-3 p-3 rounded-xl bg-red-50/50 border border-red-100">
+                  <AlertCircle size={16} className="text-red-500 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-900">{c.message}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {c.dayLabel} · {c.time} · {c.groupNames.join(' + ')}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              {conflicts.length > 5 && (
+                <p className="text-xs text-gray-400 text-center pt-1">و{conflicts.length - 5} تعارضات أخرى في صفحة الجدول</p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* تنبيهات المديونيات */}
         {isAdmin() && topDebtors.length > 0 && (

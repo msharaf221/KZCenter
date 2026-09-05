@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Download, Upload, Bell, Cloud, RefreshCw, Wrench, Eye, EyeOff, CheckCircle, XCircle, Loader2 } from 'lucide-react';
+import { Save, Download, Upload, Bell, Cloud, RefreshCw, Wrench, Eye, EyeOff, CheckCircle, XCircle, Loader2, Receipt, Image as ImageIcon, Trash2 } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import BackupManager from '../components/BackupManager';
 import { runIntegrityFix, IntegrityReport } from '../lib/db';
@@ -15,7 +15,7 @@ import {
   testSupabaseConnection,
   isSupabaseConfigured,
 } from '../lib/supabase';
-import { syncLocalToCloud, syncCloudToLocal } from '../lib/storage';
+import { syncLocalToCloud, syncCloudToLocal, type SyncReport } from '../lib/storage';
 
 export default function SettingsPage() {
   const {
@@ -29,7 +29,18 @@ export default function SettingsPage() {
     academicYear: '', currency: 'EGP', primaryColor: '#6366f1',
     fontSize: 'md' as 'sm' | 'md' | 'lg',
     notifyNewStudent: true, notifyAbsence: true, notifyLatePayment: true,
+    // سياسة التحصيل والإيصالات
+    dueDayOfMonth: undefined as number | undefined,
+    graceDays: 0,
+    sessionsPerMonth: 8,
+    receiptPrefix: '',
+    receiptFooter: '',
+    logo: '',
+    notifyUpcomingDue: false,
+    upcomingDueDays: 3,
+    lowStockThreshold: 5,
   });
+  const [syncReport, setSyncReport] = useState<SyncReport | null>(null);
   const [passwordForm, setPasswordForm] = useState({ newPass: '', confirm: '' });
   const [syncing, setSyncing] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -75,6 +86,15 @@ export default function SettingsPage() {
         notifyNewStudent: settings.notifyNewStudent ?? true,
         notifyAbsence: settings.notifyAbsence ?? true,
         notifyLatePayment: settings.notifyLatePayment ?? true,
+        dueDayOfMonth: settings.dueDayOfMonth,
+        graceDays: settings.graceDays ?? 0,
+        sessionsPerMonth: settings.sessionsPerMonth ?? 8,
+        receiptPrefix: settings.receiptPrefix || '',
+        receiptFooter: settings.receiptFooter || '',
+        logo: settings.logo || '',
+        notifyUpcomingDue: settings.notifyUpcomingDue ?? false,
+        upcomingDueDays: settings.upcomingDueDays ?? 3,
+        lowStockThreshold: settings.lowStockThreshold ?? 5,
       });
     }
   }, [settings]);
@@ -89,6 +109,11 @@ export default function SettingsPage() {
   async function handleSaveGeneral() {
     if (form.email && !validateEmail(form.email)) { notify.error('البريد الإلكتروني غير صحيح'); return; }
     if (form.phone && !validatePhone(form.phone)) { notify.error('رقم الهاتف غير صحيح'); return; }
+    if (form.dueDayOfMonth !== undefined && form.dueDayOfMonth !== null) {
+      const d = Number(form.dueDayOfMonth);
+      if (!Number.isFinite(d) || d < 1 || d > 28) { notify.error('يوم الاستحقاق لازم يكون بين 1 و 28'); return; }
+    }
+    if (form.sessionsPerMonth < 1 || form.sessionsPerMonth > 40) { notify.error('عدد الحصص في الشهر لازم يكون بين 1 و 40'); return; }
     try {
       await updateSettings(form);
       notify.success('تم حفظ الإعدادات');
@@ -165,7 +190,7 @@ export default function SettingsPage() {
   async function handleSyncToCloud() {
     setSyncing(true);
     try {
-      await syncLocalToCloud();
+      setSyncReport(await syncLocalToCloud());
     } finally {
       setSyncing(false);
     }
@@ -174,10 +199,35 @@ export default function SettingsPage() {
   async function handleSyncFromCloud() {
     setSyncing(true);
     try {
-      await syncCloudToLocal();
+      setSyncReport(await syncCloudToLocal());
     } finally {
       setSyncing(false);
     }
+  }
+
+  /** رفع شعار المركز (data URL) — بيتصغر قبل الحفظ عشان ما ينفخش القاعدة */
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { notify.error('الملف لازم يكون صورة'); return; }
+    if (file.size > 2 * 1024 * 1024) { notify.error('حجم الصورة كبير (الحد 2 ميجا)'); return; }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const max = 320;
+        const scale = Math.min(1, max / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = () => reject(new Error('read failed'));
+      img.src = URL.createObjectURL(file);
+    }).catch(() => '');
+    if (!dataUrl) { notify.error('تعذّر قراءة الصورة'); return; }
+    setForm(f => ({ ...f, logo: dataUrl }));
+    notify.success('تم تحميل الشعار — اضغط حفظ لتفعيله');
   }
 
   function copySchema() {
@@ -235,6 +285,117 @@ export default function SettingsPage() {
             className="mt-5 flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-sm font-medium transition-colors"
             style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
             <Save size={16} /> حفظ الإعدادات العامة
+          </button>
+        </div>
+
+        {/* سياسة التحصيل والإيصالات */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <h2 className="text-lg font-bold text-gray-900 mb-1 flex items-center gap-2">
+            <Receipt size={20} /> سياسة التحصيل والإيصالات
+          </h2>
+          <p className="text-xs text-gray-400 mb-5">الإعدادات دي بتتحكم في مواعيد الاستحقاق وأرقام الإيصالات والمطبوعات</p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">يوم الاستحقاق الموحد</label>
+              <input type="number" min={1} max={28}
+                value={form.dueDayOfMonth ?? ''}
+                onChange={e => setForm({ ...form, dueDayOfMonth: e.target.value === '' ? undefined : Number(e.target.value) })}
+                placeholder="مثال: 5 (فاضي = يوم التسجيل)"
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+              <p className="text-[11px] text-gray-400 mt-1">كل الأقساط تستحق في اليوم ده من كل شهر (1-28)</p>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">أيام السماح</label>
+              <input type="number" min={0} max={30} value={form.graceDays}
+                onChange={e => setForm({ ...form, graceDays: Number(e.target.value) })}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+              <p className="text-[11px] text-gray-400 mt-1">بعد كام يوم من الاستحقاق يتحول القسط لـ«متأخر»</p>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">عدد الحصص في الشهر</label>
+              <input type="number" min={1} max={40} value={form.sessionsPerMonth}
+                onChange={e => setForm({ ...form, sessionsPerMonth: Number(e.target.value) })}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+              <p className="text-[11px] text-gray-400 mt-1">الافتراضي لو الكورس/المجموعة مش محددة — كان ثابت على 8 قبل كده</p>
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">بادئة رقم الإيصال</label>
+              <input type="text" value={form.receiptPrefix} maxLength={8}
+                onChange={e => setForm({ ...form, receiptPrefix: e.target.value.toUpperCase() })}
+                placeholder="KZ (افتراضي = السنة)"
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none font-mono" />
+              <p className="text-[11px] text-gray-400 mt-1">الأرقام بتكمل تسلسلياً: KZ-202609-0001</p>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-semibold text-gray-700 mb-1">تذييل الإيصال</label>
+              <input type="text" value={form.receiptFooter}
+                onChange={e => setForm({ ...form, receiptFooter: e.target.value })}
+                placeholder="مثال: الاشتراك غير قابل للاسترداد بعد أول حصة"
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+            </div>
+
+            {/* الشعار */}
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-1.5">
+                <ImageIcon size={14} /> شعار المركز (يظهر في الإيصالات والتقارير المطبوعة)
+              </label>
+              <div className="flex items-center gap-3">
+                <div className="w-20 h-20 rounded-xl border-2 border-dashed border-gray-200 flex items-center justify-center overflow-hidden bg-gray-50">
+                  {form.logo
+                    ? <img src={form.logo} alt="الشعار" className="w-full h-full object-contain" />
+                    : <span className="text-xs text-gray-400">مفيش شعار</span>}
+                </div>
+                <div className="space-y-2">
+                  <label className="inline-flex items-center gap-2 px-3 py-2 border border-gray-200 rounded-xl text-xs text-gray-700 hover:bg-gray-50 cursor-pointer">
+                    <Upload size={14} /> اختيار صورة
+                    <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+                  </label>
+                  {form.logo && (
+                    <button onClick={() => setForm(f => ({ ...f, logo: '' }))}
+                      className="flex items-center gap-1.5 px-3 py-2 border border-red-200 rounded-xl text-xs text-red-600 hover:bg-red-50">
+                      <Trash2 size={13} /> إزالة الشعار
+                    </button>
+                  )}
+                  <p className="text-[11px] text-gray-400">PNG/JPG — بيتصغر تلقائياً لأقصى 320px</p>
+                </div>
+              </div>
+            </div>
+
+            {/* التنبيهات الجديدة */}
+            <div className="sm:col-span-2 border-t border-gray-100 pt-4 space-y-3">
+              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                <div>
+                  <span className="text-sm font-medium text-gray-700">🔔 تنبيه بالأقساط اللي استحقاقها قريب</span>
+                  <p className="text-[11px] text-gray-400 mt-0.5">يظهر في لوحة التحكم قبل ما القسط يتأخر</p>
+                </div>
+                <button onClick={() => setForm(f => ({ ...f, notifyUpcomingDue: !f.notifyUpcomingDue }))}
+                  className={`relative w-12 h-6 rounded-full transition-colors ${form.notifyUpcomingDue ? '' : 'bg-gray-300'}`}
+                  style={form.notifyUpcomingDue ? { backgroundColor: primaryColor } : {}}>
+                  <span className={`absolute top-1 w-4 h-4 rounded-full shadow transition-transform bg-white ${form.notifyUpcomingDue ? 'translate-x-1' : 'translate-x-7'}`} />
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">التنبيه قبل الاستحقاق بـ (يوم)</label>
+                  <input type="number" min={1} max={15} value={form.upcomingDueDays}
+                    onChange={e => setForm({ ...form, upcomingDueDays: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">حد المخزون المنخفض</label>
+                  <input type="number" min={0} max={100} value={form.lowStockThreshold}
+                    onChange={e => setForm({ ...form, lowStockThreshold: Number(e.target.value) })}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button onClick={handleSaveGeneral}
+            className="mt-5 flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-sm font-medium"
+            style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
+            <Save size={16} /> حفظ سياسة التحصيل
           </button>
         </div>
 
@@ -486,12 +647,43 @@ export default function SettingsPage() {
             <div className="flex gap-2">
               <button onClick={handleSyncToCloud} disabled={syncing}
                 className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-blue-50 text-blue-600 rounded-xl text-sm font-medium hover:bg-blue-100 disabled:opacity-50">
-                <Upload size={16} /> رفع للسحابة
+                <Upload size={16} /> {syncing ? 'جاري المزامنة...' : 'رفع للسحابة'}
               </button>
               <button onClick={handleSyncFromCloud} disabled={syncing}
                 className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-purple-50 text-purple-600 rounded-xl text-sm font-medium hover:bg-purple-100 disabled:opacity-50">
                 <Download size={16} /> تنزيل من السحابة
               </button>
+            </div>
+          )}
+
+          {/* تقرير المزامنة — قبل كده المزامنة كانت بتنجح/تفشل في صمت */}
+          {syncReport && (
+            <div className={`mt-4 rounded-xl border p-4 text-sm ${syncReport.ok ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className={`font-bold flex items-center gap-1.5 ${syncReport.ok ? 'text-green-800' : 'text-red-800'}`}>
+                  {syncReport.ok ? <CheckCircle size={15} /> : <XCircle size={15} />}
+                  {syncReport.direction === 'push' ? 'رفع للسحابة' : 'تنزيل من السحابة'}
+                  {syncReport.ok ? ' — نجح' : ' — فشل جزئي أو كلي'}
+                </span>
+                <span className="text-[11px] text-gray-500">{(syncReport.durationMs / 1000).toFixed(1)} ثانية</span>
+              </div>
+              <div className="text-xs text-gray-700 space-y-1 max-h-40 overflow-y-auto">
+                {syncReport.tables.map(t => (
+                  <div key={t.table} className="flex items-center justify-between gap-2">
+                    <span className="font-mono">{t.table}</span>
+                    <span className={t.error ? 'text-red-600 font-bold' : 'text-gray-500'}>
+                      {t.error
+                        ? `خطأ: ${t.error}`
+                        : `رفع ${t.pushed} · تنزيل ${t.pulled}${t.skipped ? ` · متخطى ${t.skipped}` : ''}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {syncReport.errors.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-red-200 text-xs text-red-700 space-y-0.5">
+                  {syncReport.errors.map((e, i) => <p key={i}>• {e}</p>)}
+                </div>
+              )}
             </div>
           )}
         </div>

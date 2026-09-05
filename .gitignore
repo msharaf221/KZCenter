@@ -6,6 +6,11 @@ node_modules/
 # Build
 dist/
 build/
+# أيقونات Electron مولّدة بس لازم تترفع (electron-builder بيقرأها من build/)
+!build/
+!build/icon.png
+!build/icon.ico
+!build/icon.icns
 
 # Environment
 .env
@@ -44,3 +49,15 @@ docker-compose.override.yml
 tmp/
 temp/
 .tmp/
+
+# ==================== بيانات حقيقية (ممنوع رفعها) ====================
+# شيتات المركز فيها أسماء أطفال = بيانات شخصية حساسة
+*.xlsx
+*.xls
+*.csv
+!docs/samples/*.xlsx
+!docs/samples/*.csv
+!scripts/**/*.xlsx
+tmp/
+backups/
+*.backup.json

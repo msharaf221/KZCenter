@@ -6,6 +6,7 @@
 
 import { exportAllData, importAllData } from './db';
 import { getSupabaseClient, getSupabaseConfigured } from './supabase';
+import { CLOUD_TABLES, UPSERT_BATCH, prepareCloud, stripSensitive, toSnakeCase, transformKeys } from './storage';
 import { notify } from './notifications';
 import { addAuditEntry } from './security';
 import { markBackupDone } from './autoBackup';
@@ -151,8 +152,16 @@ async function backupToCloud(): Promise<{ success: boolean; size: number; error?
     return { success: false, size: 0, error: 'Supabase غير مهيأ. يرجى إعداد الاتصال من صفحة الإعدادات.' };
   }
 
+  // RLS بترفض دور anon → لازم جلسة قبل أي كتابة (وإلا النسخة الاحتياطية هتفشل بصمت)
+  const ready = await prepareCloud();
+  if (!ready.ok) {
+    return { success: false, size: 0, error: ready.error };
+  }
+
   try {
-    const data = await exportAllData();
+    // ⚠️ النسخة السحابية من غير جدول `users` (فيه password hashes) —
+    //    النسخ المحلية بس هي اللي بتحتفظ بيه عشان استرجاع تسجيل الدخول.
+    const data = await exportAllData({ includeUsers: false });
     const jsonString = JSON.stringify(data);
     const size = new Blob([jsonString]).size;
     const client = getSupabaseClient()!;
@@ -172,34 +181,38 @@ async function backupToCloud(): Promise<{ success: boolean; size: number; error?
       console.warn('Backups table not found, syncing data directly...');
     }
 
-    // Also sync each table to Supabase
-    const tables = ['students', 'teachers', 'courses', 'groups', 'payments', 
-                    'attendance', 'expenses', 'exams', 'grades', 'enrollments',
-                    'inventory', 'inventory_transactions', 'users'];
+    // مزامنة الجداول — نفس القائمة المستخدمة في storage.ts (CLOUD_TABLES)
+    // ⚠️ النسخة القديمة كانت قائمة يدوية ناقصة: مفيهاش `installments` (الأقساط/المديونيات)
+    //    ولا `refunds`/`payroll`… وفيها `users` (باسوردات) اللي مفروض ما تترفعش.
+    const syncErrors: string[] = [];
 
-    for (const table of tables) {
-      // exportAllData uses camelCase keys (e.g. `inventoryTransactions`)
+    for (const table of CLOUD_TABLES) {
       const dataKey = table === 'inventory_transactions' ? 'inventoryTransactions' : table;
       const tableData = (data as Record<string, unknown>)[dataKey];
-      if (Array.isArray(tableData) && tableData.length > 0) {
-        // Convert camelCase to snake_case for Supabase
-        const transformed = tableData.map(item => {
-          const result: Record<string, unknown> = {};
-          for (const [key, value] of Object.entries(item as Record<string, unknown>)) {
-            const snakeKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
-            result[snakeKey] = value;
-          }
-          return result;
-        });
+      if (!Array.isArray(tableData) || tableData.length === 0) continue;
 
-        const { error } = await client
-          .from(table)
-          .upsert(transformed, { onConflict: 'id' });
+      const transformed = tableData.map(item =>
+        transformKeys(stripSensitive(item as Record<string, unknown>), toSnakeCase)
+      );
 
+      for (let i = 0; i < transformed.length; i += UPSERT_BATCH) {
+        const batch = transformed.slice(i, i + UPSERT_BATCH);
+        const { error } = await client.from(table).upsert(batch, { onConflict: 'id' });
         if (error) {
           console.error(`Failed to sync ${table}:`, error);
+          syncErrors.push(`${table}: ${error.message}`);
+          break;
         }
       }
+    }
+
+    if (syncErrors.length > 0) {
+      // فشل جزئي = النسخة الاحتياطية مش مضمونة، فلازم نبلّغ المستخدم (مش console بس)
+      return {
+        success: false,
+        size,
+        error: `تعذّر رفع بعض الجداول للسحابة — ${syncErrors.slice(0, 3).join(' | ')}`,
+      };
     }
 
     return { success: true, size };
@@ -352,13 +365,11 @@ export function startBackupScheduler(): void {
       const lastDate = config.lastBackupDate?.split('T')[0];
 
       if (lastDate !== today) {
-        console.log('Executing scheduled backup...');
         executeBackup(config.destination, true);
       }
     }
   }, BACKUP_CHECK_INTERVAL);
 
-  console.log('Backup scheduler started');
 }
 
 /**

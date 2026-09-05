@@ -37,16 +37,16 @@ export default function BackupManager() {
   const [isRunning, setIsRunning] = useState(false);
   const [schedulerActive, setSchedulerActive] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
   async function loadData() {
     setConfig(getBackupConfig());
     setHistory(getBackupHistory().logs);
     const size = await getDataSize();
     setDataSize(size);
   }
+
+  useEffect(() => {
+    loadData();
+  }, []);
 
   function handleToggleScheduler() {
     if (schedulerActive) {

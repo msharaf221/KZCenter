@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { Settings, dbGetById, dbPut } from '../lib/db';
+import { setSettingsCache, DEFAULT_SETTINGS_VALUES } from '../lib/settings';
 import { requestNotificationPermission, updateNotificationSettings } from '../lib/notifications';
 import { getSupabaseConfigured } from '../lib/supabase';
 
@@ -18,17 +19,8 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | null>(null);
 
-const DEFAULT_SETTINGS: Settings = {
-  id: 'main',
-  centerName: 'EduCenter Pro',
-  currency: 'EGP',
-  primaryColor: '#6366f1',
-  fontSize: 'md',
-  darkMode: false,
-  notifyNewStudent: true,
-  notifyAbsence: true,
-  notifyLatePayment: true,
-};
+/** نفس الافتراضيات الموجودة في lib/settings (مصدر واحد للحقيقة) */
+const DEFAULT_SETTINGS: Settings = DEFAULT_SETTINGS_VALUES;
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -39,6 +31,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     refreshSettings();
     checkNotificationPermission();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- مقصود: إعادة التحميل مربوطة بالـ deps المكتوبة بس
   }, []);
 
   async function checkNotificationPermission() {
@@ -56,6 +49,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const s = await dbGetById<Settings>('settings', 'main');
       if (s) {
+        setSettingsCache(s);
         setSettings(s);
         applySettings(s);
         updateNotificationSettings({
@@ -64,11 +58,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           notifyLatePayment: s.notifyLatePayment,
         });
       } else {
+        setSettingsCache(DEFAULT_SETTINGS);
         setSettings(DEFAULT_SETTINGS);
         applySettings(DEFAULT_SETTINGS);
       }
     } catch (e) {
       console.error('refreshSettings error:', e);
+      setSettingsCache(DEFAULT_SETTINGS);
       setSettings(DEFAULT_SETTINGS);
     }
   }, []);
@@ -95,6 +91,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const current = settings || DEFAULT_SETTINGS;
     const updated = { ...current, ...partial };
     await dbPut('settings', updated);
+    setSettingsCache(updated);
     setSettings(updated);
     applySettings(updated);
     

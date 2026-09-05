@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useRef, ReactNode } fro
 import bcrypt from 'bcryptjs';
 import { User, UserRole, seedDefaultData, getUserByUsername, dbGetAll, dbPut, dbAdd, dbSoftDelete, generateId } from '../lib/db';
 import { notify } from '../lib/notifications';
+import { migrateAuditFromLocalStorage } from '../lib/audit';
 import {
   checkRateLimit,
   recordLoginAttempt,
@@ -61,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       if (sessionCheckRef.current) clearInterval(sessionCheckRef.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- مقصود: إعادة التحميل مربوطة بالـ deps المكتوبة بس
   }, []);
 
   // Check session expiry periodically
@@ -76,11 +78,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       if (sessionCheckRef.current) clearInterval(sessionCheckRef.current);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- مقصود: إعادة التحميل مربوطة بالـ deps المكتوبة بس
   }, [user]);
 
   async function initApp() {
     try {
       await seedDefaultData();
+      // نقل سجل المراجعة القديم من localStorage لـ IndexedDB (مرة واحدة)
+      await migrateAuditFromLocalStorage();
 
       // Try to restore session (strip any legacy passwordHash)
       const savedSession = sessionStorage.getItem(SESSION_KEY);
