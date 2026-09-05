@@ -80,7 +80,7 @@ export default function DebtorsPage() {
   function reminderText(d: DebtorRow) {
     const center = settings?.centerName || 'المركز';
     const groups = d.groups.map(g => g.groupName).join('، ');
-    return `السلام عليكم، نود تذكيركم بأن المتبقي على الطالب/ة ${d.name} هو ${d.remaining} ${settings?.currency || ''}${groups ? ` (${groups})` : ''}.${d.overdueCount > 0 ? ` منه ${d.overdueCount} قسط متأخر.` : ''} برجاء السداد في أقرب وقت. ${center}`;
+    return `السلام عليكم، نود تذكيركم بأن الباقي على الطالب/ة ${d.name} هو ${d.remaining} ${settings?.currency || ''}${groups ? ` (${groups})` : ''}. برجاء السداد في أقرب وقت. ${center}`;
   }
 
   function exportCSV() {
@@ -101,10 +101,10 @@ export default function DebtorsPage() {
         { key: 'name', label: 'الطالب' },
         { key: 'parentPhone', label: 'هاتف ولي الأمر' },
         { key: 'groups', label: 'المجموعات' },
-        { key: 'owed', label: 'المستحق' },
+        { key: 'owed', label: 'المطلوب' },
         { key: 'paid', label: 'المدفوع' },
         { key: 'remaining', label: 'المتبقي' },
-        { key: 'overdueCount', label: 'أقساط متأخرة' },
+        { key: 'overdueCount', label: 'شهور متأخرة' },
         { key: 'overdueAmount', label: 'قيمة المتأخرات' },
         { key: 'lastPayment', label: 'آخر دفعة' },
         { key: 'days', label: 'أيام من آخر دفعة' },
@@ -170,7 +170,7 @@ export default function DebtorsPage() {
             <p className="text-2xl font-bold text-red-600">{formatCurrency(totals.remaining, settings?.currency)}</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-            <p className="text-sm text-gray-500 flex items-center gap-1.5"><AlertTriangle size={14} /> أقساط متأخرة</p>
+            <p className="text-sm text-gray-500 flex items-center gap-1.5"><AlertTriangle size={14} /> متأخرات</p>
             <p className="text-2xl font-bold text-orange-500">{totals.overdueCount}</p>
             <p className="text-xs text-gray-400 mt-1">{formatCurrency(totals.overdueAmount, settings?.currency)}</p>
           </div>
@@ -225,7 +225,7 @@ export default function DebtorsPage() {
                 <tr>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الطالب</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المجموعات</th>
-                  <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المستحق</th>
+                  <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المطلوب</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المدفوع</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المتبقي</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">التأخير</th>
@@ -267,7 +267,7 @@ export default function DebtorsPage() {
                     <td className="p-4">
                       {d.overdueCount > 0 ? (
                         <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-red-50 text-red-600">
-                          <AlertTriangle size={12} /> {d.overdueCount} قسط • {formatCurrency(d.overdueAmount, settings?.currency)}
+                          <AlertTriangle size={12} /> متأخر {formatCurrency(d.overdueAmount, settings?.currency)}
                         </span>
                       ) : (
                         <span className="text-xs text-gray-400">—</span>
@@ -317,7 +317,7 @@ export default function DebtorsPage() {
           <div className="space-y-4">
             <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 text-sm space-y-1">
               <div className="flex justify-between">
-                <span className="text-gray-500">المستحق</span>
+                <span className="text-gray-500">المطلوب</span>
                 <span className="font-bold">{formatCurrency(payTarget.owed, settings?.currency)}</span>
               </div>
               <div className="flex justify-between">

@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import Modal from './ui/Modal';
 import { transferStudent, getStudentBalance, Group, Course, Teacher } from '../lib/db';
-import { SESSIONS_PER_MONTH, sessionPrice, proratedFirstPeriod } from '../lib/billing';
 import { formatCurrency, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
+import { proratedFirstPeriod, resolveSessionsPerMonth } from '../lib/billing';
 
 interface Props {
   open: boolean;
@@ -35,10 +35,10 @@ export default function TransferDialog({
 
   const [toGroupId, setToGroupId] = useState('');
   const [sameCourseOnly, setSameCourseOnly] = useState(true);
-  const [startSession, setStartSession] = useState(1);
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
   const [paidInFromGroup, setPaidInFromGroup] = useState(0);
+  const [startSession, setStartSession] = useState(1);
 
   // اللي مدفوع في المجموعة الحالية (الرصيد المرشّح للترحيل)
   useEffect(() => {
@@ -71,10 +71,13 @@ export default function TransferDialog({
 
   const target = candidates.find(c => c.group.id === toGroupId);
   const targetPrice = target?.course?.price || 0;
-
-  // معاينة قيمة الشهر الأول لو هيدخل في نص الكورس
-  const firstPeriod = startSession > 1 ? proratedFirstPeriod(targetPrice, startSession) : targetPrice;
-  const savedByProration = Math.max(0, targetPrice - firstPeriod);
+  const targetSessions = resolveSessionsPerMonth({
+    courseSessionsPerMonth: target?.course?.sessionsPerMonth,
+    scheduleDays: target?.group.schedule?.map(x => x.days),
+    settingSessionsPerMonth: settings?.sessionsPerMonth,
+  });
+  const firstMonth = startSession > 1 ? proratedFirstPeriod(targetPrice, startSession, targetSessions) : targetPrice;
+  const previewLeft = Math.round((firstMonth - paidInFromGroup) * 100) / 100;
 
   async function handleTransfer() {
     if (!toGroupId) { notify.error('اختر المجموعة الجديدة'); return; }
@@ -84,8 +87,8 @@ export default function TransferDialog({
         studentId,
         fromGroupId,
         toGroupId,
-        startSession,
         reason: reason.trim() || undefined,
+        startSession: startSession > 1 ? startSession : undefined,
       });
       if (!result.success) { notify.error(result.error || 'حدث خطأ أثناء التحويل'); return; }
 
@@ -147,44 +150,34 @@ export default function TransferDialog({
           )}
         </div>
 
-        {/* من الحصة رقم كام */}
         {target && (
-          <div className="p-3 rounded-xl border border-gray-100">
-            <label className="block text-sm font-semibold text-gray-700 mb-2">
-              هيكمل من الحصة رقم كام في المجموعة الجديدة؟
-            </label>
-            <div className="flex flex-wrap gap-1 mb-2">
-              {Array.from({ length: SESSIONS_PER_MONTH }, (_, i) => i + 1).map(n => (
-                <button key={n} type="button" onClick={() => setStartSession(n)}
-                  className={`w-8 h-8 rounded-lg text-xs font-bold transition-colors ${
-                    startSession === n ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                  style={startSession === n ? { backgroundColor: primaryColor, color: getContrastColor(primaryColor) } : {}}>
-                  {n}
-                </button>
-              ))}
+          <>
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">هيبدأ في المجموعة الجديدة من الحصة</label>
+              <select value={startSession} onChange={e => setStartSession(+e.target.value)}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
+                {Array.from({ length: targetSessions }, (_, i) => i + 1).map(n => (
+                  <option key={n} value={n}>{n === 1 ? 'الأولى (شهر كامل)' : `رقم ${n} من ${targetSessions}`}</option>
+                ))}
+              </select>
             </div>
-            <div className="text-xs text-gray-600 space-y-0.5">
-              <p>سعر الحصة: <strong>{formatCurrency(sessionPrice(targetPrice), settings?.currency)}</strong> ({SESSIONS_PER_MONTH} حصص/شهر)</p>
-              {startSession > 1 ? (
-                <p>
-                  الشهر الأول: <strong className="text-indigo-600">{formatCurrency(firstPeriod, settings?.currency)}</strong>
-                  {' '}بدل {formatCurrency(targetPrice, settings?.currency)}
-                  <span className="text-green-600"> (خصم {formatCurrency(savedByProration, settings?.currency)})</span>
-                </p>
-              ) : (
-                <p>الشهر الأول: <strong>{formatCurrency(targetPrice, settings?.currency)}</strong> (كامل)</p>
-              )}
-            </div>
-          </div>
-        )}
 
-        {/* ترحيل الرصيد (سلوك ثابت) */}
-        <div className="p-3 rounded-xl bg-indigo-50/60 border border-indigo-100 text-xs text-gray-600">
-          <strong className="text-gray-800">المدفوع بيتّرحل كرصيد للمجموعة الجديدة.</strong>
-          {' '}الـ {formatCurrency(paidInFromGroup, settings?.currency)} اللي اتدفعت في المجموعة الحالية هتتحسب على
-          المجموعة الجديدة، ولو سعرها مختلف الفرق يظهر كمتبقي (أو كفائض لصالح الطالب).
-        </div>
+            <div className="p-3 rounded-xl bg-indigo-50/60 border border-indigo-100 text-xs text-gray-600 space-y-0.5">
+              <p>
+                المطلوب في المجموعة الجديدة: <strong className="text-gray-800">{formatCurrency(firstMonth, settings?.currency)}</strong>
+                {startSession > 1 && <> ({targetSessions - startSession + 1} حصص من {targetSessions})</>}
+              </p>
+              <p>المدفوع هنا وهيتّرحل: <strong className="text-green-600">{formatCurrency(paidInFromGroup, settings?.currency)}</strong></p>
+              <p>
+                {previewLeft > 0
+                  ? <>هيفضل عليه: <strong className="text-red-600">{formatCurrency(previewLeft, settings?.currency)}</strong></>
+                  : previewLeft < 0
+                    ? <>ليه فائض: <strong className="text-green-600">{formatCurrency(-previewLeft, settings?.currency)}</strong></>
+                    : <strong className="text-green-600">خالص ✓</strong>}
+              </p>
+            </div>
+          </>
+        )}
 
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-1">سبب التحويل</label>

@@ -6,6 +6,9 @@
  * الربط بقاعدة البيانات موجود في src/lib/db.ts.
  */
 import dayjs from 'dayjs';
+import 'dayjs/locale/ar';
+
+dayjs.locale('ar');
 
 /** عدد الحصص في الشهر — الافتراضي لو مفيش تحديد من الكورس/المجموعة/الإعدادات */
 export const SESSIONS_PER_MONTH = 8;
@@ -194,33 +197,49 @@ export interface MonthlyPlanOptions extends PricingInput {
   firstPeriodAmount?: number;
   dueDayOfMonth?: number | null;
   graceDays?: number | null;
+  /**
+   * رقم أول قسط في الخطة (افتراضي 1).
+   * بيستخدم في **التجديد** عشان ترقيم الأقساط يكمّل بعد الخطة القديمة
+   * (لو الخطة الأولى كانت 3 أقساط، التجديد يبدأ من القسط 4).
+   */
+  startPeriodIndex?: number;
+  /** بادئة اسم القسط (مثال: «تجديد 1») عشان يبان في كشف الحساب إنه دورة جديدة */
+  labelPrefix?: string;
 }
 
 /**
- * بناء خطة تقسيط شهرية.
- * سعر الكورس شهري، إذن عدد الأقساط = مدة الكورس بالشهور، وقيمة كل قسط = السعر الفعلي
- * (بعد السعر الخاص والخصومات).
+ * بناء خطة شهرية.
+ * النظام بيحاسب **شهر بشهر**: التسجيل بيفتح شهر واحد (durationMonths = 1)،
+ * والتجديد بيضيف شهر (أو أكتر لو الطالب دفع مقدم). كل شهر = سطر واحد
+ * باسم الشهر («شهر مارس 2026») وقيمته السعر الشهري الفعلي.
  */
 export function buildMonthlyPlan(opts: MonthlyPlanOptions): InstallmentDraft[] {
   const { durationMonths, startDate, firstPeriodAmount } = opts;
   const periods = Math.max(1, Math.floor(durationMonths || 1));
   const price = effectiveMonthlyPrice(opts);
+  const firstIndex = Math.max(1, Math.floor(opts.startPeriodIndex || 1));
+  const prefix = (opts.labelPrefix || '').trim();
 
   const plan: InstallmentDraft[] = [];
   for (let i = 0; i < periods; i++) {
     const amount = i === 0 && firstPeriodAmount !== undefined
       ? Math.max(0, round2(firstPeriodAmount))
       : price;
+    const dueDate = computeDueDate({
+      startDate,
+      periodOffset: i,
+      dueDayOfMonth: opts.dueDayOfMonth,
+      graceDays: opts.graceDays,
+    });
+    // شهر واحد → اسم الشهر نفسه؛ أكتر من شهر → «الشهر 2 من 3»
+    const label = periods === 1
+      ? `شهر ${dayjs(dueDate).format('MMMM YYYY')}`
+      : `الشهر ${i + 1} من ${periods}`;
     plan.push({
-      periodIndex: i + 1,
-      periodLabel: `الشهر ${i + 1} من ${periods}`,
+      periodIndex: firstIndex + i,
+      periodLabel: `${prefix ? `${prefix} — ` : ''}${label}`,
       amount,
-      dueDate: computeDueDate({
-        startDate,
-        periodOffset: i,
-        dueDayOfMonth: opts.dueDayOfMonth,
-        graceDays: opts.graceDays,
-      }),
+      dueDate,
     });
   }
   return plan;
@@ -540,6 +559,71 @@ export function upcomingDues(
     count: items.length,
     amount: round2(items.reduce((s, i) => s + installmentRemaining(i), 0)),
     items,
+  };
+}
+
+// ==================== RENEWAL (تجديد الاشتراك) ====================
+
+export type RenewalState = 'active' | 'expiring' | 'expired';
+
+export interface RenewalInfo {
+  state: RenewalState;
+  /** عدد الأقساط (الشهور) في الخطة الحالية غير الملغاة */
+  periods: number;
+  /** أكبر رقم قسط موجود (التجديد يبدأ من اللي بعده) */
+  lastPeriodIndex: number;
+  /** استحقاق آخر قسط (بداية آخر شهر مدفوع/مستحق) */
+  lastDueDate?: string;
+  /** اليوم اللي الاشتراك بينتهي فيه (آخر استحقاق + شهر) */
+  endDate?: string;
+  /** أيام متبقية على الانتهاء (سالب = منتهي من كام يوم) */
+  daysLeft?: number;
+  /** التاريخ المقترح لبداية خطة التجديد */
+  nextStartDate: string;
+}
+
+export const RENEWAL_STATE_LABEL: Record<RenewalState, string> = {
+  active: 'ساري',
+  expiring: 'محتاج تجديد قريب',
+  expired: 'محتاج تجديد',
+};
+
+/**
+ * حالة اشتراك طالب في مجموعة من أقساطه:
+ * الاشتراك بيغطي من أول استحقاق لحد (آخر استحقاق + شهر). لو التاريخ ده عدّى → منتهي،
+ * ولو باقي عليه `daysAhead` يوم أو أقل → قرب ينتهي.
+ *
+ * بداية خطة التجديد المقترحة = يوم انتهاء الاشتراك الحالي لو لسه جاي (استمرارية من غير فجوة)،
+ * أو النهاردة لو الطالب انقطع فترة (ما نحاسبوش على شهور ما حضرهاش).
+ */
+export function renewalInfo(
+  installments: Installment[],
+  today: string = dayjs().format('YYYY-MM-DD'),
+  daysAhead: number = 7,
+): RenewalInfo {
+  const active = installments.filter(i => !i.deleted && i.status !== 'cancelled');
+  const lastPeriodIndex = active.reduce((m, i) => Math.max(m, i.periodIndex || 0), 0);
+  if (active.length === 0) {
+    return { state: 'expired', periods: 0, lastPeriodIndex, nextStartDate: today };
+  }
+
+  const lastDueDate = active.map(i => i.dueDate).sort().pop() as string;
+  const end = dayjs(lastDueDate).add(1, 'month').startOf('day');
+  const t = dayjs(today).startOf('day');
+  const daysLeft = end.diff(t, 'day');
+
+  let state: RenewalState = 'active';
+  if (daysLeft <= 0) state = 'expired';
+  else if (daysLeft <= Math.max(0, daysAhead)) state = 'expiring';
+
+  return {
+    state,
+    periods: active.length,
+    lastPeriodIndex,
+    lastDueDate,
+    endDate: end.format('YYYY-MM-DD'),
+    daysLeft,
+    nextStartDate: (daysLeft > 0 ? end : t).format('YYYY-MM-DD'),
   };
 }
 
