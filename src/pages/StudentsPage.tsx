@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users, DollarSign, FileSpreadsheet, Image as ImageIcon, AlertTriangle, Percent } from 'lucide-react';
+import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users, DollarSign, FileSpreadsheet, Image as ImageIcon, AlertTriangle } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -9,7 +9,7 @@ import Pagination from '../components/ui/Pagination';
 import SheetImportDialog from '../components/SheetImportDialog';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
 import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone, getContrastColor } from '../lib/utils';
-import { SESSIONS_PER_MONTH, sessionPrice, proratedFirstPeriod, effectiveMonthlyPrice } from '../lib/billing';
+import { effectiveMonthlyPrice } from '../lib/billing';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyNewStudent } from '../lib/notifications';
@@ -366,7 +366,7 @@ export default function StudentsPage() {
       { key: 'parentPhone', label: 'هاتف ولي الأمر' },
       { key: 'status', label: 'الحالة' },
       { key: 'totalPaid', label: 'إجمالي المدفوع' },
-      { key: 'totalOwed', label: 'إجمالي المستحق' },
+      { key: 'totalOwed', label: 'المطلوب' },
       { key: 'notes', label: 'ملاحظات' },
       { key: 'createdAt', label: 'تاريخ التسجيل' },
     ]);
@@ -777,77 +777,38 @@ export default function StudentsPage() {
                   </label>
                   {form.enrolledGroups.includes(g.id) && (!editingStudent || !editingStudent.enrolledGroups?.includes(g.id)) && (() => {
                     const course = courses.find(c => c.id === g.courseId);
-                    const sess = startSessions[g.id] || 1;
-                    const remainingSessions = SESSIONS_PER_MONTH - sess + 1;
-                    const firstPeriod = sess > 1 && course ? proratedFirstPeriod(course.price, sess) : (course?.price || 0);
+                    const pr = enrollPricing[g.id] || {};
+                    const monthly = course ? effectiveMonthlyPrice({ coursePrice: course.price, priceOverride: pr.priceOverride }) : 0;
+                    const paid = initialPayments[g.id] || 0;
+                    const left = Math.max(0, monthly - paid);
                     return (
-                      <div className="pl-6 space-y-1">
-                        <div className="flex flex-wrap gap-2">
-                          <input type="number" placeholder="المبلغ المدفوع (اختياري)" min="0"
+                      <div className="pr-6 space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="text-xs text-gray-500">دفع دلوقتي</label>
+                          <input type="number" placeholder="0" min="0"
                             value={initialPayments[g.id] || ''}
                             onChange={e => setInitialPayments({...initialPayments, [g.id]: +e.target.value})}
-                            className="flex-1 min-w-[140px] px-3 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500" />
-                          <select value={sess}
-                            onChange={e => setStartSessions({...startSessions, [g.id]: +e.target.value})}
-                            title="من الحصة رقم كام؟ (للالتحاق في نص الكورس)"
-                            className="px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none bg-white">
-                            {Array.from({ length: SESSIONS_PER_MONTH }, (_, i) => i + 1).map(n => (
-                              <option key={n} value={n}>{n === 1 ? 'من أول حصة' : `من الحصة ${n}`}</option>
-                            ))}
-                          </select>
-                        </div>
-                        {/* تسعير خاص / خصم للتسجيل ده */}
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
-                          <span className="text-[11px] text-gray-500 flex items-center gap-1">
-                            <Percent size={11} /> سعر/خصم خاص:
-                          </span>
-                          <input type="number" min={0} placeholder="سعر شهري خاص"
-                            value={enrollPricing[g.id]?.priceOverride ?? ''}
+                            className="w-28 px-3 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500" />
+                          {course && (
+                            <button type="button" onClick={() => setInitialPayments({...initialPayments, [g.id]: monthly})}
+                              className="px-2 py-1 text-[11px] rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">الشهر كامل</button>
+                          )}
+                          <label className="text-xs text-gray-500 mr-2">سعر خاص</label>
+                          <input type="number" min={0} placeholder={course ? String(course.price) : ''}
+                            value={pr.priceOverride ?? ''}
                             onChange={e => setEnrollPricing(p => ({ ...p, [g.id]: { ...p[g.id], priceOverride: e.target.value === '' ? undefined : +e.target.value } }))}
-                            className="w-28 px-2 py-1 border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-indigo-500" />
-                          <input type="number" min={0} placeholder="خصم مبلغ"
-                            value={enrollPricing[g.id]?.discountAmount ?? ''}
-                            onChange={e => setEnrollPricing(p => ({ ...p, [g.id]: { ...p[g.id], discountAmount: e.target.value === '' ? undefined : +e.target.value } }))}
-                            className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-indigo-500" />
-                          <input type="number" min={0} max={100} placeholder="خصم %"
-                            value={enrollPricing[g.id]?.discountPercent ?? ''}
-                            onChange={e => setEnrollPricing(p => ({ ...p, [g.id]: { ...p[g.id], discountPercent: e.target.value === '' ? undefined : +e.target.value } }))}
-                            className="w-20 px-2 py-1 border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-indigo-500" />
-                          <input type="text" placeholder="سبب الخصم (إخوة/منحة)"
-                            value={enrollPricing[g.id]?.discountReason ?? ''}
-                            onChange={e => setEnrollPricing(p => ({ ...p, [g.id]: { ...p[g.id], discountReason: e.target.value } }))}
-                            className="flex-1 min-w-32 px-2 py-1 border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-indigo-500" />
-                          {course && (() => {
-                            const pr = enrollPricing[g.id] || {};
-                            const eff = effectiveMonthlyPrice({
-                              coursePrice: course.price,
-                              priceOverride: pr.priceOverride,
-                              discountAmount: pr.discountAmount,
-                              discountPercent: pr.discountPercent,
-                            });
-                            if (eff === course.price) return null;
-                            return (
-                              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg">
-                                السعر الفعلي: {formatCurrency(eff, settings?.currency)}/شهر
-                                <span className="text-gray-400 font-normal line-through mr-1">
-                                  {formatCurrency(course.price, settings?.currency)}
-                                </span>
-                              </span>
-                            );
-                          })()}
+                            className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500" />
                         </div>
-
                         {course && (
-                          <p className="text-xs text-gray-400">
-                            {sess > 1 ? (
-                              <>
-                                الشهر الأول: <strong className="text-indigo-600">{formatCurrency(firstPeriod, settings?.currency)}</strong>
-                                {' '}({remainingSessions} حصة × {formatCurrency(sessionPrice(course.price), settings?.currency)})
+                          <p className="text-xs text-gray-500">
+                            الشهر ده: <strong className="text-gray-800">{formatCurrency(monthly, settings?.currency)}</strong>
+                            {paid > 0 && (
+                              <> — يدفع {formatCurrency(paid, settings?.currency)} و
+                                {left > 0
+                                  ? <strong className="text-red-600"> باقي {formatCurrency(left, settings?.currency)}</strong>
+                                  : <strong className="text-green-600"> خالص</strong>}
                               </>
-                            ) : (
-                              <>الشهر الأول كامل: <strong>{formatCurrency(course.price, settings?.currency)}</strong></>
                             )}
-                            {course.durationMonths > 1 && ` • بعده ${course.durationMonths - 1} شهر × ${formatCurrency(course.price, settings?.currency)}`}
                           </p>
                         )}
                       </div>

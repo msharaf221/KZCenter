@@ -291,34 +291,11 @@ export default function SettingsPage() {
         {/* سياسة التحصيل والإيصالات */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
           <h2 className="text-lg font-bold text-gray-900 mb-1 flex items-center gap-2">
-            <Receipt size={20} /> سياسة التحصيل والإيصالات
+            <Receipt size={20} /> الإيصالات والتنبيهات
           </h2>
-          <p className="text-xs text-gray-400 mb-5">الإعدادات دي بتتحكم في مواعيد الاستحقاق وأرقام الإيصالات والمطبوعات</p>
+          <p className="text-xs text-gray-400 mb-5">أرقام الإيصالات والمطبوعات وتنبيهات الشهر</p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">يوم الاستحقاق الموحد</label>
-              <input type="number" min={1} max={28}
-                value={form.dueDayOfMonth ?? ''}
-                onChange={e => setForm({ ...form, dueDayOfMonth: e.target.value === '' ? undefined : Number(e.target.value) })}
-                placeholder="مثال: 5 (فاضي = يوم التسجيل)"
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-              <p className="text-[11px] text-gray-400 mt-1">كل الأقساط تستحق في اليوم ده من كل شهر (1-28)</p>
-            </div>
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">أيام السماح</label>
-              <input type="number" min={0} max={30} value={form.graceDays}
-                onChange={e => setForm({ ...form, graceDays: Number(e.target.value) })}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-              <p className="text-[11px] text-gray-400 mt-1">بعد كام يوم من الاستحقاق يتحول القسط لـ«متأخر»</p>
-            </div>
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">عدد الحصص في الشهر</label>
-              <input type="number" min={1} max={40} value={form.sessionsPerMonth}
-                onChange={e => setForm({ ...form, sessionsPerMonth: Number(e.target.value) })}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-              <p className="text-[11px] text-gray-400 mt-1">الافتراضي لو الكورس/المجموعة مش محددة — كان ثابت على 8 قبل كده</p>
-            </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">بادئة رقم الإيصال</label>
               <input type="text" value={form.receiptPrefix} maxLength={8}
@@ -366,8 +343,8 @@ export default function SettingsPage() {
             <div className="sm:col-span-2 border-t border-gray-100 pt-4 space-y-3">
               <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                 <div>
-                  <span className="text-sm font-medium text-gray-700">🔔 تنبيه بالأقساط اللي استحقاقها قريب</span>
-                  <p className="text-[11px] text-gray-400 mt-0.5">يظهر في لوحة التحكم قبل ما القسط يتأخر</p>
+                  <span className="text-sm font-medium text-gray-700">🔔 تنبيه قبل ما شهر الطالب يخلص</span>
+                  <p className="text-[11px] text-gray-400 mt-0.5">يظهر في لوحة التحكم عشان تفتح له شهر جديد</p>
                 </div>
                 <button onClick={() => setForm(f => ({ ...f, notifyUpcomingDue: !f.notifyUpcomingDue }))}
                   className={`relative w-12 h-6 rounded-full transition-colors ${form.notifyUpcomingDue ? '' : 'bg-gray-300'}`}
@@ -377,7 +354,7 @@ export default function SettingsPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1">التنبيه قبل الاستحقاق بـ (يوم)</label>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">التنبيه قبل نهاية الشهر بـ (يوم)</label>
                   <input type="number" min={1} max={15} value={form.upcomingDueDays}
                     onChange={e => setForm({ ...form, upcomingDueDays: Number(e.target.value) })}
                     className="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
@@ -395,7 +372,7 @@ export default function SettingsPage() {
           <button onClick={handleSaveGeneral}
             className="mt-5 flex items-center gap-2 px-5 py-2.5 text-white rounded-xl text-sm font-medium"
             style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
-            <Save size={16} /> حفظ سياسة التحصيل
+            <Save size={16} /> حفظ
           </button>
         </div>
 

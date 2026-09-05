@@ -73,8 +73,8 @@ export default function DashboardPage() {
       if (alert.overdueCount > 0 && settings?.notifyLatePayment !== false && !localStorage.getItem(key)) {
         localStorage.setItem(key, 'true');
         showBrowserNotification(
-          'أقساط متأخرة 💰',
-          `${alert.overdueCount} قسط متأخر على ${alert.debtorsCount} طالب بقيمة ${alert.overdueAmount}`
+          'متأخرات 💰',
+          `${alert.debtorsCount} طالب عليهم متأخرات بقيمة ${alert.overdueAmount}`
         );
       }
     })();
@@ -305,7 +305,7 @@ export default function DashboardPage() {
               color="#ef4444"
               subtitle={
                 debtAlert && debtAlert.debtorsCount > 0
-                  ? `${formatCurrency(debtAlert.totalRemaining, settings?.currency)}${debtAlert.overdueCount > 0 ? ` • ${debtAlert.overdueCount} قسط متأخر` : ''}`
+                  ? `${formatCurrency(debtAlert.totalRemaining, settings?.currency)}${debtAlert.overdueCount > 0 ? ` • فيها متأخرات` : ''}`
                   : 'كل الطلاب مسددين'
               }
               onClick={() => navigate('/debtors')}
@@ -384,10 +384,10 @@ export default function DashboardPage() {
           <div className="bg-white rounded-2xl border border-amber-100 shadow-sm overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex items-center gap-2">
               <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
-                <Clock size={18} className="text-amber-500" /> استحقاقات خلال {settings?.upcomingDueDays ?? 3} يوم
+                <Clock size={18} className="text-amber-500" /> مطلوب دفعه خلال {settings?.upcomingDueDays ?? 3} يوم
               </h3>
               <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full font-medium">
-                {upcoming.count} قسط • {formatCurrency(upcoming.amount, settings?.currency)}
+                {upcoming.count} طالب • {formatCurrency(upcoming.amount, settings?.currency)}
               </span>
               <button onClick={() => navigate('/payments')}
                 className="mr-auto text-xs font-semibold text-indigo-600 hover:text-indigo-800">
@@ -428,9 +428,9 @@ export default function DashboardPage() {
               <span className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded-full font-medium">
                 {conflicts.length} تعارض
               </span>
-              <button onClick={() => navigate('/timetable')}
+              <button onClick={() => navigate('/groups')}
                 className="mr-auto text-xs font-semibold text-indigo-600 hover:text-indigo-800">
-                الجدول الأسبوعي ←
+                المجموعات ←
               </button>
             </div>
             <div className="p-3 space-y-2">
@@ -446,7 +446,7 @@ export default function DashboardPage() {
                 </div>
               ))}
               {conflicts.length > 5 && (
-                <p className="text-xs text-gray-400 text-center pt-1">و{conflicts.length - 5} تعارضات أخرى في صفحة الجدول</p>
+                <p className="text-xs text-gray-400 text-center pt-1">و{conflicts.length - 5} تعارضات أخرى — راجع مواعيد المجموعات</p>
               )}
             </div>
           </div>
@@ -457,10 +457,10 @@ export default function DashboardPage() {
           <div className="bg-white rounded-2xl border border-yellow-100 shadow-sm overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex items-center gap-2 flex-wrap">
               <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
-                <RefreshCw size={18} className="text-yellow-500" /> اشتراكات محتاجة تجديد
+                <RefreshCw size={18} className="text-yellow-500" /> طلاب شهرهم خلص أو بيخلص
               </h3>
               <span className="text-xs bg-yellow-50 text-yellow-700 px-2 py-0.5 rounded-full font-medium">
-                {renewals.filter(r => r.info.state === 'expired').length} منتهي • {renewals.filter(r => r.info.state === 'expiring').length} قرب ينتهي
+                {renewals.filter(r => r.info.state === 'expired').length} خلص • {renewals.filter(r => r.info.state === 'expiring').length} بيخلص
               </span>
             </div>
             <div className="p-3 space-y-2">
@@ -471,7 +471,7 @@ export default function DashboardPage() {
                     <p className="text-sm font-semibold text-gray-900 truncate">{r.studentName}</p>
                     <p className="text-xs text-gray-500 truncate">
                       {r.groupName} • {r.courseName} • {r.teacherName}
-                      {r.remaining > 0 && <span className="text-red-500"> • متبقي {formatCurrency(r.remaining, settings?.currency)}</span>}
+                      {r.remaining > 0 && <span className="text-red-500"> • باقي عليه {formatCurrency(r.remaining, settings?.currency)}</span>}
                     </p>
                   </button>
                   <div className="text-left flex-shrink-0">
@@ -485,7 +485,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {r.parentPhone && (
-                      <a href={getWhatsAppLink(r.parentPhone, `السلام عليكم، معكم ${settings?.centerName || 'المركز'}.\nاشتراك ${r.studentName} في ${r.groupName} ${r.info.state === 'expired' ? 'انتهى' : 'قرب ينتهي'}${r.info.endDate ? ` (${formatDate(r.info.endDate)})` : ''}. يسعدنا استمراركم معنا — برجاء التواصل للتجديد.`)}
+                      <a href={getWhatsAppLink(r.parentPhone, `السلام عليكم، معكم ${settings?.centerName || 'المركز'}.\nشهر ${r.studentName} في ${r.groupName} ${r.info.state === 'expired' ? 'خلص' : 'بيخلص'}${r.info.endDate ? ` (${formatDate(r.info.endDate)})` : ''}. يسعدنا استمراركم معنا — برجاء التواصل لتجديد الشهر.`)}
                         target="_blank" rel="noopener noreferrer"
                         className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title={`واتساب ولي الأمر ${r.parentPhone}`}>
                         <MessageCircle size={15} />
@@ -494,14 +494,14 @@ export default function DashboardPage() {
                     {isAdmin() && (
                       <button onClick={() => setRenewTarget(r)}
                         className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 transition-colors">
-                        تجديد
+                        شهر جديد
                       </button>
                     )}
                   </div>
                 </div>
               ))}
               {renewals.length > 8 && (
-                <p className="text-xs text-gray-400 text-center pt-1">و{renewals.length - 8} اشتراك آخر — افتح ملف الطالب للتجديد</p>
+                <p className="text-xs text-gray-400 text-center pt-1">و{renewals.length - 8} طالب آخر — افتح ملف الطالب</p>
               )}
             </div>
           </div>
@@ -530,7 +530,7 @@ export default function DashboardPage() {
                     <p className="text-sm font-semibold text-gray-900 truncate">{d.name}</p>
                     <p className="text-xs text-gray-500 truncate">
                       {d.groups.map(g => g.groupName).join('، ') || '—'}
-                      {d.overdueCount > 0 && <span className="text-red-500"> • {d.overdueCount} قسط متأخر</span>}
+                      {d.overdueCount > 0 && <span className="text-red-500"> • متأخر</span>}
                     </p>
                   </div>
                   <div className="text-left flex-shrink-0">

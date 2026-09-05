@@ -5,13 +5,12 @@ import {
   Users2, CreditCard, ClipboardCheck, BarChart3,
   Settings, LogOut, ChevronRight, ChevronLeft,
   Wallet, FileText, UserCog, CalendarDays, Archive, Shield, AlertTriangle,
-  Landmark, Receipt, CalendarClock, Trash2, MessageCircle
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useApp } from '../../contexts/AppContext';
 import { getContrastColor } from '../../lib/utils';
 import { subscribeDebtAlert, refreshDebtAlert, DebtAlert } from '../../lib/debtAlerts';
-import { visiblePages } from '../../lib/permissions';
+import { visiblePages, ROLE_LABEL } from '../../lib/permissions';
 import type { PageKey } from '../../lib/permissions';
 
 interface NavItem {
@@ -34,18 +33,13 @@ const navItems: NavItem[] = [
   { path: '/groups', label: 'المجموعات', icon: <Users2 size={20} />, adminOnly: true },
   { path: '/payments', label: 'المدفوعات', icon: <CreditCard size={20} />, adminOnly: true },
   { path: '/debtors', label: 'المديونيات', icon: <AlertTriangle size={20} />, adminOnly: true, debtBadge: true },
-  { path: '/treasury', label: 'الخزينة', icon: <Landmark size={20} />, page: 'treasury' },
-  { path: '/payroll', label: 'مرتبات المدرسين', icon: <Receipt size={20} />, page: 'payroll' },
   { path: '/expenses', label: 'المصروفات', icon: <Wallet size={20} />, adminOnly: true },
-  { path: '/timetable', label: 'الجدول الأسبوعي', icon: <CalendarClock size={20} />, page: 'timetable' },
-  { path: '/messages', label: 'تواصل أولياء الأمور', icon: <MessageCircle size={20} />, page: 'messages' },
   { path: '/attendance', label: 'الحضور', icon: <ClipboardCheck size={20} /> },
   { path: '/exams', label: 'الاختبارات', icon: <FileText size={20} /> },
   { path: '/daily-reports', label: 'التقرير اليومي', icon: <CalendarDays size={20} />, adminOnly: true },
   { path: '/reports', label: 'التقارير', icon: <BarChart3 size={20} /> },
   { path: '/users', label: 'المستخدمون', icon: <UserCog size={20} />, adminOnly: true },
   { path: '/audit-log', label: 'سجل المراجعة', icon: <Shield size={20} />, adminOnly: true },
-  { path: '/trash', label: 'سلة المحذوفات', icon: <Trash2 size={20} />, adminOnly: true },
   { path: '/settings', label: 'الإعدادات', icon: <Settings size={20} />, adminOnly: true },
 ];
 
@@ -165,7 +159,7 @@ export default function Sidebar() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-gray-900 truncate">{user?.username}</p>
-              <p className="text-xs text-gray-500">{user?.role === 'admin' ? 'مسؤول' : 'مدرس'}</p>
+              <p className="text-xs text-gray-500">{user?.role ? ROLE_LABEL[user.role] : ''}</p>
             </div>
             <button
               onClick={logout}

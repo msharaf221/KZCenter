@@ -143,49 +143,62 @@ beforeEach(async () => {
 });
 
 describe('renewEnrollment — تجديد على نفس التسجيل', () => {
-  it('يضيف دورة أقساط جديدة تكمّل الترقيم من غير ما يمس القديم', async () => {
+  it('يفتح شهر جديد يكمّل الترقيم من غير ما يمس القديم', async () => {
     const { groupId, studentId } = await seed(500, 2);
-    await enrollStudent(studentId, groupId, 1000); // مسدد بالكامل
+    await enrollStudent(studentId, groupId, 500); // الشهر الأول مسدد بالكامل
     await ageInstallments(studentId, '2025-11-01'); // انتهى من زمان
 
     const r = await renewEnrollment({ studentId, groupId });
     expect(r.success).toBe(true);
     expect(r.cycle).toBe(1);
-    expect(r.installmentsCreated).toBe(2);
+    expect(r.installmentsCreated).toBe(1);     // شهر واحد افتراضياً
     expect(r.monthlyPrice).toBe(500);
 
     const all = await getStudentInstallments(studentId);
-    expect(all).toHaveLength(4);
-    expect(all.map(i => i.periodIndex).sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
-    expect(all.filter(i => i.periodLabel.startsWith('تجديد 1'))).toHaveLength(2);
+    expect(all).toHaveLength(2);
+    expect(all.map(i => i.periodIndex).sort((a, b) => a - b)).toEqual([1, 2]);
+    const renewed = all.find(i => i.periodIndex === 2)!;
+    expect(renewed.periodLabel.startsWith('تجديد 1 — شهر ')).toBe(true);
     // القديم مسدد زي ما هو
-    expect(all.filter(i => i.periodIndex <= 2).every(i => i.status === 'paid')).toBe(true);
+    expect(all.find(i => i.periodIndex === 1)?.status).toBe('paid');
 
     const balance = await getStudentBalance(studentId);
-    expect(balance?.owed).toBe(2000);
-    expect(balance?.paid).toBe(1000);
-    expect(balance?.remaining).toBe(1000);
+    expect(balance?.owed).toBe(1000);
+    expect(balance?.paid).toBe(500);
+    expect(balance?.remaining).toBe(500);
 
     // لسه تسجيل واحد بس (مفيش تسجيل جديد)
     const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentId', studentId);
     expect(enrollments).toHaveLength(1);
     expect(enrollments[0].status).toBe('active');
     expect(enrollments[0].renewalCount).toBe(1);
-    expect(enrollments[0].renewals?.[0].months).toBe(2);
+    expect(enrollments[0].renewals?.[0].months).toBe(1);
+  });
+
+  it('ممكن يفتح أكتر من شهر مرة واحدة', async () => {
+    const { groupId, studentId } = await seed(500, 2);
+    await enrollStudent(studentId, groupId, 500);
+    await ageInstallments(studentId, '2025-11-01');
+
+    const r = await renewEnrollment({ studentId, groupId, months: 3 });
+    expect(r.installmentsCreated).toBe(3);
+    const all = await getStudentInstallments(studentId);
+    expect(all.map(i => i.periodIndex).sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+    expect(all.filter(i => i.periodLabel.startsWith('تجديد 1 — الشهر'))).toHaveLength(3);
   });
 
   it('المتبقي من الدورة القديمة بيفضل، ودفعة التجديد بتروح للأقدم الأول', async () => {
     const { groupId, studentId } = await seed(500, 2);
-    await enrollStudent(studentId, groupId, 700); // باقي 300 على القسط 2
+    await enrollStudent(studentId, groupId, 200); // باقي 300 على الشهر الأول
     await ageInstallments(studentId, '2025-11-01');
 
     const r = await renewEnrollment({ studentId, groupId, months: 1, initialPayment: 500 });
     expect(r.success).toBe(true);
 
     const all = (await getStudentInstallments(studentId)).sort((a, b) => a.periodIndex - b.periodIndex);
-    expect(all).toHaveLength(3);
-    expect(all[1].paidAmount).toBe(500);  // القديم اتقفل من دفعة التجديد
-    expect(all[2].paidAmount).toBe(200);  // والباقي راح للجديد
+    expect(all).toHaveLength(2);
+    expect(all[0].paidAmount).toBe(500);  // القديم اتقفل من دفعة التجديد
+    expect(all[1].paidAmount).toBe(200);  // والباقي راح للجديد
     expect(r.remainingAfter).toBe(300);
 
     const payments = await dbGetByIndex<Payment>('payments', 'by-studentId', studentId);

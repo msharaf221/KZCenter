@@ -6,6 +6,9 @@
  * الربط بقاعدة البيانات موجود في src/lib/db.ts.
  */
 import dayjs from 'dayjs';
+import 'dayjs/locale/ar';
+
+dayjs.locale('ar');
 
 /** عدد الحصص في الشهر — الافتراضي لو مفيش تحديد من الكورس/المجموعة/الإعدادات */
 export const SESSIONS_PER_MONTH = 8;
@@ -205,9 +208,10 @@ export interface MonthlyPlanOptions extends PricingInput {
 }
 
 /**
- * بناء خطة تقسيط شهرية.
- * سعر الكورس شهري، إذن عدد الأقساط = مدة الكورس بالشهور، وقيمة كل قسط = السعر الفعلي
- * (بعد السعر الخاص والخصومات).
+ * بناء خطة شهرية.
+ * النظام بيحاسب **شهر بشهر**: التسجيل بيفتح شهر واحد (durationMonths = 1)،
+ * والتجديد بيضيف شهر (أو أكتر لو الطالب دفع مقدم). كل شهر = سطر واحد
+ * باسم الشهر («شهر مارس 2026») وقيمته السعر الشهري الفعلي.
  */
 export function buildMonthlyPlan(opts: MonthlyPlanOptions): InstallmentDraft[] {
   const { durationMonths, startDate, firstPeriodAmount } = opts;
@@ -221,16 +225,21 @@ export function buildMonthlyPlan(opts: MonthlyPlanOptions): InstallmentDraft[] {
     const amount = i === 0 && firstPeriodAmount !== undefined
       ? Math.max(0, round2(firstPeriodAmount))
       : price;
+    const dueDate = computeDueDate({
+      startDate,
+      periodOffset: i,
+      dueDayOfMonth: opts.dueDayOfMonth,
+      graceDays: opts.graceDays,
+    });
+    // شهر واحد → اسم الشهر نفسه؛ أكتر من شهر → «الشهر 2 من 3»
+    const label = periods === 1
+      ? `شهر ${dayjs(dueDate).format('MMMM YYYY')}`
+      : `الشهر ${i + 1} من ${periods}`;
     plan.push({
       periodIndex: firstIndex + i,
-      periodLabel: `${prefix ? `${prefix} — ` : ''}الشهر ${i + 1} من ${periods}`,
+      periodLabel: `${prefix ? `${prefix} — ` : ''}${label}`,
       amount,
-      dueDate: computeDueDate({
-        startDate,
-        periodOffset: i,
-        dueDayOfMonth: opts.dueDayOfMonth,
-        graceDays: opts.graceDays,
-      }),
+      dueDate,
     });
   }
   return plan;
@@ -574,9 +583,9 @@ export interface RenewalInfo {
 }
 
 export const RENEWAL_STATE_LABEL: Record<RenewalState, string> = {
-  active: 'ساري',
-  expiring: 'قرب ينتهي',
-  expired: 'منتهي',
+  active: 'مدفوع الشهر',
+  expiring: 'الشهر بيخلص',
+  expired: 'الشهر خلص',
 };
 
 /**

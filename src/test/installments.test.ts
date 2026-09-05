@@ -1,6 +1,7 @@
 /**
  * اختبارات مسار المستحقات الكامل على قاعدة البيانات الفعلية (IndexedDB):
- * تسجيل طالب → توليد الأقساط → دفع جزئي → دفع المتبقي → حذف دفعة → خروج من المجموعة
+ * تسجيل طالب → فتح شهر واحد → دفع جزئي → دفع المتبقي → حذف دفعة → خروج من المجموعة
+ * (النظام شهر بشهر: التسجيل بيفتح شهر واحد بس مهما كانت مدة الكورس، والشهور التالية عن طريق التجديد)
  */
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -60,58 +61,57 @@ beforeEach(async () => {
   }
 });
 
-describe('توليد الأقساط عند التسجيل', () => {
-  it('يسجّل قسط شهري لكل شهر من مدة الكورس', async () => {
+describe('فتح الشهر الأول عند التسجيل', () => {
+  it('التسجيل بيفتح شهر واحد بس حتى لو الكورس مدته أطول', async () => {
     const { groupId, studentId } = await seed(800, 3);
     const result = await enrollStudent(studentId, groupId);
     expect(result.success).toBe(true);
 
     const installments = await getStudentInstallments(studentId);
-    expect(installments).toHaveLength(3);
-    expect(installments.map(i => i.amount)).toEqual([800, 800, 800]);
-    expect(installments.every(i => i.paidAmount === 0)).toBe(true);
+    expect(installments).toHaveLength(1);
+    expect(installments[0].amount).toBe(800);
+    expect(installments[0].paidAmount).toBe(0);
+    expect(installments[0].periodLabel).toMatch(/^شهر /);
 
     const balance = await getStudentBalance(studentId);
-    expect(balance?.owed).toBe(2400);
+    expect(balance?.owed).toBe(800);
     expect(balance?.paid).toBe(0);
-    expect(balance?.remaining).toBe(2400);
+    expect(balance?.remaining).toBe(800);
     expect(balance?.groups[0].groupName).toBe('مجموعة أ');
 
     const student = await dbGetById<Student>('students', studentId);
-    expect(student?.totalOwed).toBe(2400);
+    expect(student?.totalOwed).toBe(800);
     expect(student?.totalPaid).toBe(0);
   });
 
-  it('الدفعة الأولى عند التسجيل تتوزع على الأقساط الأقدم', async () => {
+  it('دفعة جزئية عند التسجيل → الباقي يظهر كمتبقي بسيط', async () => {
     const { groupId, studentId } = await seed(800, 3);
-    await enrollStudent(studentId, groupId, 1000);
+    await enrollStudent(studentId, groupId, 500);
 
     const installments = await getStudentInstallments(studentId);
-    expect(installments[0].paidAmount).toBe(800);
-    expect(installments[0].status).toBe('paid');
-    expect(installments[1].paidAmount).toBe(200);
-    expect(installments[1].status).toBe('partial');
-    expect(installments[2].paidAmount).toBe(0);
+    expect(installments).toHaveLength(1);
+    expect(installments[0].paidAmount).toBe(500);
+    expect(installments[0].status).toBe('partial');
 
     const balance = await getStudentBalance(studentId);
-    expect(balance?.paid).toBe(1000);
-    expect(balance?.remaining).toBe(1400);
+    expect(balance?.paid).toBe(500);
+    expect(balance?.remaining).toBe(300);
   });
 });
 
 describe('الدفع الجزئي ودفع المتبقي', () => {
-  it('دفعة جزئية تقلل المتبقي من غير ما تقفل كل الأقساط', async () => {
+  it('دفعة تانية بعد كام يوم تقلل المتبقي', async () => {
     const { groupId, studentId } = await seed(800, 3);
     await enrollStudent(studentId, groupId, 500);
 
-    const result = await recordInstallmentPayment({ studentId, amount: 300 });
+    const result = await recordInstallmentPayment({ studentId, amount: 200 });
     expect(result.success).toBe(true);
-    expect(result.remainingAfter).toBe(1600);
+    expect(result.remainingAfter).toBe(100);
 
     const balance = await getStudentBalance(studentId);
-    expect(balance?.paid).toBe(800);
-    expect(balance?.remaining).toBe(1600);
-    expect(balance?.unpaidCount).toBe(2);   // القسط الأول اتقفل، باقي 2
+    expect(balance?.paid).toBe(700);
+    expect(balance?.remaining).toBe(100);
+    expect(balance?.unpaidCount).toBe(1);   // الشهر لسه مش خالص
   });
 
   it('payStudentRemaining يسدد الباقي كله ويصفّر المتبقي', async () => {
@@ -120,7 +120,7 @@ describe('الدفع الجزئي ودفع المتبقي', () => {
 
     const result = await payStudentRemaining(studentId);
     expect(result.success).toBe(true);
-    expect(result.payment?.amount).toBe(1900);
+    expect(result.payment?.amount).toBe(300);
     expect(result.remainingAfter).toBe(0);
 
     const balance = await getStudentBalance(studentId);
@@ -156,21 +156,21 @@ describe('الدفع الجزئي ودفع المتبقي', () => {
     });
     await enrollStudent(studentId, groupId2);
 
-    await recordInstallmentPayment({ studentId, groupId, amount: 800 });
+    await recordInstallmentPayment({ studentId, groupId, amount: 300 });
 
     const balance = await getStudentBalance(studentId);
     const g1 = balance?.groups.find(g => g.groupId === groupId);
     const g2 = balance?.groups.find(g => g.groupId === groupId2);
-    expect(g1?.remaining).toBe(800);   // من 1600 → 800
-    expect(g2?.remaining).toBe(1600);  // ما اتلمستش
+    expect(g1?.remaining).toBe(500);   // من 800 → 500
+    expect(g2?.remaining).toBe(800);   // ما اتلمستش
   });
 });
 
 describe('حذف وتعديل الدفعات', () => {
-  it('حذف دفعة مسددة يرجّع المتبقي على الأقساط', async () => {
+  it('حذف دفعة مسددة يرجّع المتبقي على الشهر', async () => {
     const { groupId, studentId } = await seed(800, 2);
-    await enrollStudent(studentId, groupId, 1000);
-    expect((await getStudentBalance(studentId))?.remaining).toBe(600);
+    await enrollStudent(studentId, groupId, 500);
+    expect((await getStudentBalance(studentId))?.remaining).toBe(300);
 
     const payments = await dbGetByIndex<Payment>('payments', 'by-studentId', studentId);
     expect(payments).toHaveLength(1);
@@ -180,25 +180,28 @@ describe('حذف وتعديل الدفعات', () => {
 
     const balance = await getStudentBalance(studentId);
     expect(balance?.paid).toBe(0);
-    expect(balance?.remaining).toBe(1600);
+    expect(balance?.remaining).toBe(800);
     const installments = await getStudentInstallments(studentId);
     expect(installments.every(i => i.paidAmount === 0)).toBe(true);
   });
 });
 
 describe('الخروج من المجموعة', () => {
-  it('يلغي الأقساط غير المسددة ويسقط الدين', async () => {
+  it('يلغي الشهور غير المسددة ويسقط الدين', async () => {
     const { groupId, studentId } = await seed(800, 3);
     await enrollStudent(studentId, groupId, 800);
-    expect((await getStudentBalance(studentId))?.remaining).toBe(1600);
+    // شهر تاني متفتح ومش مدفوع
+    const { renewEnrollment } = await import('../lib/db');
+    await renewEnrollment({ studentId, groupId, months: 1 });
+    expect((await getStudentBalance(studentId))?.remaining).toBe(800);
 
     await unenrollStudent(studentId, groupId, 'سفر');
 
     const balance = await getStudentBalance(studentId);
-    expect(balance?.owed).toBe(800);        // القسط المدفوع بس
+    expect(balance?.owed).toBe(800);        // الشهر المدفوع بس
     expect(balance?.remaining).toBe(0);
     const cancelled = (await getStudentInstallments(studentId)).filter(i => i.status === 'cancelled');
-    expect(cancelled).toHaveLength(2);
+    expect(cancelled).toHaveLength(1);
   });
 });
 
@@ -253,18 +256,18 @@ describe('ترحيل البيانات القديمة', () => {
 
     const report = await migrateInstallments();
     expect(report.enrollmentsProcessed).toBe(1);
-    expect(report.installmentsCreated).toBe(2);
+    expect(report.installmentsCreated).toBe(1);   // شهر واحد بس
     expect(report.studentsRecalculated).toBe(1);
 
     const balance = await getStudentBalance(studentId);
-    expect(balance?.owed).toBe(1000);
+    expect(balance?.owed).toBe(500);
     expect(balance?.paid).toBe(500);
-    expect(balance?.remaining).toBe(500);
+    expect(balance?.remaining).toBe(0);
 
-    // التشغيل التاني ما يكررش الأقساط
+    // التشغيل التاني ما يكررش
     const second = await migrateInstallments();
     expect(second.installmentsCreated).toBe(0);
-    expect((await getStudentInstallments(studentId))).toHaveLength(2);
+    expect((await getStudentInstallments(studentId))).toHaveLength(1);
   });
 });
 
@@ -274,8 +277,8 @@ describe('الالتحاق في نص الكورس (التسعير بالحصص)'
     await enrollStudent(studentId, groupId, 0, { startSession: 3 });
 
     const installments = await getStudentInstallments(studentId);
-    expect(installments.map(i => i.amount)).toEqual([600, 800, 800]);
-    expect((await getStudentBalance(studentId))?.owed).toBe(2200);
+    expect(installments.map(i => i.amount)).toEqual([600]);
+    expect((await getStudentBalance(studentId))?.owed).toBe(600);
   });
 
   it('الالتحاق من آخر حصة بيحاسب على حصة واحدة', async () => {
@@ -303,24 +306,24 @@ describe('التحويل بين المجموعات/المدرسين', () => {
     return { ...base, groupId2 };
   }
 
-  it('بيحوّل التعليم ويلغي أقساط المجموعة القديمة ويرحّل المدفوع', async () => {
+  it('بيحوّل الطالب ويلغي شهر المجموعة القديمة ويرحّل المدفوع', async () => {
     const { groupId, groupId2, studentId } = await seedSecondGroup(800, 3);
-    await enrollStudent(studentId, groupId, 1000);
-    expect((await getStudentBalance(studentId))?.remaining).toBe(1400);
+    await enrollStudent(studentId, groupId, 500);
+    expect((await getStudentBalance(studentId))?.remaining).toBe(300);
 
     const result = await transferStudent({
       studentId, fromGroupId: groupId, toGroupId: groupId2, reason: 'تغيير المدرس',
     });
     expect(result.success).toBe(true);
-    expect(result.credit).toBe(1000);
-    expect(result.remainingBefore).toBe(1400);
-    expect(result.remainingAfter).toBe(1400);   // نفس السعر → نفس المتبقي
+    expect(result.credit).toBe(500);
+    expect(result.remainingBefore).toBe(300);
+    expect(result.remainingAfter).toBe(300);   // نفس السعر → نفس المتبقي
 
     const balance = await getStudentBalance(studentId);
     expect(balance?.groups).toHaveLength(1);
     expect(balance?.groups[0].groupId).toBe(groupId2);
-    expect(balance?.owed).toBe(2400);
-    expect(balance?.paid).toBe(1000);
+    expect(balance?.owed).toBe(800);
+    expect(balance?.paid).toBe(500);
 
     // القوائم المتطبيعة اتحدثت في الاتجاهين
     const student = await dbGetById<Student>('students', studentId);

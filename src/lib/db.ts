@@ -1116,9 +1116,10 @@ export async function enrollStudent(
       settingSessionsPerMonth: policy.sessionsPerMonth,
     });
 
+    // النظام شهر بشهر: التسجيل بيفتح شهر واحد بس، والشهر اللي بعده بالتجديد
     const plan = buildMonthlyPlan({
       ...pricing,
-      durationMonths: course?.durationMonths || 1,
+      durationMonths: 1,
       startDate: now,
       dueDayOfMonth: policy.dueDayOfMonth,
       graceDays: policy.graceDays,
@@ -1274,7 +1275,7 @@ export async function unenrollStudent(
 export interface RenewOptions {
   studentId: string;
   groupId: string;
-  /** عدد الشهور الجديدة (افتراضي: مدة الكورس) */
+  /** عدد الشهور الجديدة (افتراضي: شهر واحد) */
   months?: number;
   /** بداية الأقساط الجديدة YYYY-MM-DD (افتراضي: بعد آخر قسط، أو النهاردة لو الاشتراك منتهي) */
   startDate?: string;
@@ -1328,7 +1329,7 @@ export async function renewEnrollment(opts: RenewOptions): Promise<RenewResult> 
     if (group.status === 'ended') return { success: false, error: 'المجموعة منتهية — حوّل الطالب لمجموعة تانية بدل التجديد' };
 
     const course = await dbGetById<Course>('courses', group.courseId);
-    const months = Math.max(1, Math.floor(opts.months || course?.durationMonths || 1));
+    const months = Math.max(1, Math.floor(opts.months || 1));
 
     // التسجيل: النشط، وإلا آخر تسجيل (مكتمل/خارج) نعيد تفعيله
     const enrollments = (await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, groupId]))
@@ -1640,9 +1641,10 @@ export async function transferStudent(opts: {
   await dbAdd('enrollments', newEnrollment);
 
   const course = await dbGetById<Course>('courses', toGroup.courseId);
+  // شهر واحد في المجموعة الجديدة (نفس قاعدة التسجيل)
   const plan = buildMonthlyPlan({
     coursePrice: course?.price || 0,
-    durationMonths: course?.durationMonths || 1,
+    durationMonths: 1,
     startDate: now,
     firstPeriodAmount: startSession && course ? proratedFirstPeriod(course.price, startSession) : undefined,
   });
@@ -2270,9 +2272,10 @@ export async function migrateInstallments(): Promise<InstallmentMigrationReport>
       const course = courses.find(c => c.id === group.courseId);
       if (!course) continue;
 
+      // شهر بشهر: البيانات القديمة بتتحوّل لشهر واحد مفتوح
       const plan = buildMonthlyPlan({
         coursePrice: course.price,
-        durationMonths: course.durationMonths,
+        durationMonths: 1,
         startDate: pair.startDate,
       });
 
@@ -2370,8 +2373,8 @@ async function computeLegacyBalance(
       if (group && !group.deleted) {
         const course = courses.find(c => c.id === group.courseId);
         if (course) {
-          // Course price is a monthly rate; total owed covers the full duration
-          totalOwed += course.price * Math.max(1, course.durationMonths);
+          // شهر بشهر: المطلوب = سعر شهر واحد
+          totalOwed += course.price;
         }
       }
     }

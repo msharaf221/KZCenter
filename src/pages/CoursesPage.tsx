@@ -167,12 +167,12 @@ export default function CoursesPage() {
                       <p className="text-xs text-gray-500">طالب</p>
                     </div>
                     <div className="text-center p-2 bg-gray-50 rounded-lg">
-                      <p className="text-base font-bold text-gray-900">{course.durationMonths}</p>
-                      <p className="text-xs text-gray-500">شهر</p>
+                      <p className="text-base font-bold text-green-600">{formatCurrency(course.price, settings?.currency)}</p>
+                      <p className="text-xs text-gray-500">شهرياً</p>
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-green-600 text-sm">{formatCurrency(course.price, settings?.currency)}</span>
+                    <span className="text-xs text-gray-400">{course.category}</span>
                     <span className="text-xs text-gray-500">{course.levels.length} مستويات</span>
                   </div>
                   {course.levels.length > 0 && (
@@ -192,7 +192,7 @@ export default function CoursesPage() {
 
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editing ? 'تعديل الكورس' : 'إضافة كورس جديد'} size="lg">
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="col-span-2">
               <label className="block text-sm font-semibold text-gray-700 mb-1">اسم الكورس *</label>
               <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
@@ -205,15 +205,11 @@ export default function CoursesPage() {
                 {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">السعر</label>
-              <input type="number" value={form.price} onChange={e => setForm({...form, price: +e.target.value})}
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-semibold text-gray-700 mb-1">السعر الشهري</label>
+              <input type="number" min={0} value={form.price} onChange={e => setForm({...form, price: +e.target.value})}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-            </div>
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">المدة (أشهر)</label>
-              <input type="number" value={form.durationMonths} onChange={e => setForm({...form, durationMonths: +e.target.value})}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+              <p className="text-[11px] text-gray-400 mt-1">الطالب بيتحاسب شهر بشهر — ده المبلغ المطلوب منه كل شهر</p>
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">الأيقونة</label>

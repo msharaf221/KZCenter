@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall, ClipboardCheck, GraduationCap, Receipt, AlertTriangle, ArrowLeftRight, MessageCircle, RefreshCw, User, School, Megaphone, CalendarDays, StickyNote, Users } from 'lucide-react';
+import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall, ClipboardCheck, GraduationCap, Receipt, ArrowLeftRight, MessageCircle, RefreshCw, User, School, Megaphone, CalendarDays, StickyNote, Users } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import {
   dbGetById, dbGetAll, dbGetByIndex, getStudentBalance, recordInstallmentPayment, getTransferHistory,
-  Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher, StudentBalance, Installment, TransferRecord, Enrollment, RenewalInfo,
+  Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher, StudentBalance, TransferRecord, Enrollment, RenewalInfo,
 } from '../lib/db';
-import { INSTALLMENT_STATUS_LABEL, RENEWAL_STATE_LABEL, renewalInfo } from '../lib/billing';
+import { RENEWAL_STATE_LABEL, renewalInfo } from '../lib/billing';
 import TransferDialog from '../components/TransferDialog';
 import RenewDialog from '../components/RenewDialog';
 import Badge from '../components/ui/Badge';
@@ -16,14 +16,6 @@ import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
 import dayjs from 'dayjs';
-
-const STATUS_STYLE: Record<string, string> = {
-  paid: 'bg-green-50 text-green-700',
-  partial: 'bg-blue-50 text-blue-700',
-  pending: 'bg-gray-100 text-gray-700',
-  late: 'bg-red-50 text-red-700',
-  cancelled: 'bg-gray-100 text-gray-400 line-through',
-};
 
 const RENEWAL_STYLE: Record<RenewalInfo['state'], string> = {
   active: 'bg-green-50 text-green-700',
@@ -103,7 +95,7 @@ export default function StudentProfilePage() {
       const studentPayments = await dbGetByIndex<Payment>('payments', 'by-studentId', id);
       setPayments(studentPayments.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
 
-      // المستحقات والأقساط
+      // الحساب (شهر بشهر)
       const b = await getStudentBalance(id);
       setBalance(b);
 
@@ -191,9 +183,6 @@ export default function StudentProfilePage() {
   if (!student) return null;
 
   const remaining = balance ? balance.remaining : (student.totalOwed || 0) - student.totalPaid;
-  const allInstallments = (balance?.groups || [])
-    .flatMap(g => g.installments.map(i => ({ ...i, groupName: g.groupName } as Installment & { groupName: string })))
-    .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.periodIndex - b.periodIndex);
 
   // إحصائيات الحضور
   const attStats = {
@@ -269,7 +258,7 @@ export default function StudentProfilePage() {
           <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4 flex flex-wrap items-center gap-3">
             <RefreshCw size={18} className="text-yellow-600" />
             <div className="flex-1 min-w-[200px] text-sm">
-              <p className="font-bold text-yellow-800">الطالب محتاج تجديد اشتراك</p>
+              <p className="font-bold text-yellow-800">الشهر خلص — محتاج يفتح شهر جديد</p>
               <p className="text-yellow-700 text-xs">
                 {groups
                   .filter(g => renewalByGroup[g.id]?.state !== 'active' && balance?.groups.some(b => b.groupId === g.id))
@@ -287,7 +276,7 @@ export default function StudentProfilePage() {
                   if (g) setRenewTarget({ groupId: g.id });
                 }}
                 className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-yellow-600 hover:bg-yellow-700 transition-colors">
-                جدّد الآن
+                افتح شهر جديد
               </button>
             )}
           </div>
@@ -298,7 +287,7 @@ export default function StudentProfilePage() {
             <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><BookOpen className="text-indigo-500" /> المجموعات والمدرسين</h2>
             <div className="overflow-auto flex-1 max-h-[300px]">
               <table className="w-full text-right">
-                <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المجموعة</th><th className="pb-3 font-semibold">الكورس</th><th className="pb-3 font-semibold text-center">المدرس</th><th className="pb-3 font-semibold text-center">الاشتراك</th>{canCollect && <th className="pb-3 font-semibold text-center">إجراءات</th>}</tr></thead>
+                <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المجموعة</th><th className="pb-3 font-semibold">الكورس</th><th className="pb-3 font-semibold text-center">المدرس</th><th className="pb-3 font-semibold text-center">الشهر الحالي</th>{canCollect && <th className="pb-3 font-semibold text-center">إجراءات</th>}</tr></thead>
                 <tbody className="divide-y divide-gray-50 text-sm">
                   {groups.length === 0 ? <tr><td colSpan={canCollect ? 5 : 4} className="py-4 text-center text-gray-400">لا توجد مجموعات</td></tr> :
                    groups.map(g => {
@@ -327,8 +316,8 @@ export default function StudentProfilePage() {
                           <div className="flex items-center justify-center gap-1 flex-wrap">
                             <button onClick={() => setRenewTarget({ groupId: g.id })}
                               className={`text-xs px-2 py-1 rounded-lg transition-colors flex items-center gap-1 ${r?.state === 'expired' ? 'text-white bg-red-500 hover:bg-red-600' : r?.state === 'expiring' ? 'text-yellow-800 bg-yellow-100 hover:bg-yellow-200' : 'text-green-700 bg-green-50 hover:bg-green-100'}`}
-                              title="تجديد / استكمال الاشتراك في نفس المجموعة">
-                              <RefreshCw size={12} /> تجديد
+                              title="فتح شهر جديد في نفس المجموعة">
+                              <RefreshCw size={12} /> شهر جديد
                             </button>
                             <button onClick={() => setTransferFrom({ groupId: g.id, groupName: g.name })}
                               className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
@@ -365,111 +354,101 @@ export default function StudentProfilePage() {
           </div>
         </div>
 
-        {/* المستحقات والأقساط */}
+        {/* الحساب — شهر بشهر */}
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
           <div className="flex flex-wrap items-center gap-2 mb-4">
             <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-              <Receipt className="text-indigo-500" /> المستحقات والأقساط
+              <Receipt className="text-indigo-500" /> الحساب
             </h2>
             {balance && (
               <span className={`mr-auto text-sm font-bold px-3 py-1 rounded-full ${
                 balance.remaining > 0 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'
               }`}>
                 {balance.remaining > 0
-                  ? `المتبقي: ${formatCurrency(balance.remaining, settings?.currency)}`
-                  : 'مسدد بالكامل'}
+                  ? `باقي عليه: ${formatCurrency(balance.remaining, settings?.currency)}`
+                  : 'خالص'}
               </span>
             )}
           </div>
 
           {!balance || balance.groups.length === 0 ? (
-            <p className="py-4 text-center text-gray-400 text-sm">لا توجد مستحقات مسجلة على هذا الطالب</p>
+            <p className="py-4 text-center text-gray-400 text-sm">الطالب مش مسجل في أي مجموعة لسه</p>
           ) : (
-            <>
-              {/* ملخص لكل مجموعة */}
-              <div className="space-y-2 mb-5">
-                {balance.groups.map(g => (
-                  <div key={g.groupId} className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-gray-50 border border-gray-100">
-                    <div className="flex-1 min-w-[150px]">
-                      <p className="text-sm font-semibold text-gray-900">{g.groupName}</p>
-                      <p className="text-xs text-gray-500">{g.courseName} • {g.installments.length} قسط</p>
+            <div className="space-y-4">
+              {balance.groups.map(g => {
+                const r = renewalByGroup[g.groupId];
+                const months = g.installments
+                  .slice()
+                  .sort((a, b) => b.dueDate.localeCompare(a.dueDate) || b.periodIndex - a.periodIndex);
+                return (
+                  <div key={g.groupId} className="rounded-2xl border border-gray-100 overflow-hidden">
+                    {/* رأس المجموعة */}
+                    <div className="flex flex-wrap items-center gap-3 p-3 bg-gray-50">
+                      <div className="flex-1 min-w-[150px]">
+                        <p className="text-sm font-bold text-gray-900">{g.groupName}</p>
+                        <p className="text-xs text-gray-500">
+                          {g.courseName}
+                          {r && r.periods > 0 && r.endDate && (
+                            <> • <span className={r.state === 'expired' ? 'text-red-600 font-semibold' : r.state === 'expiring' ? 'text-yellow-700 font-semibold' : ''}>
+                              {r.state === 'expired' ? `انتهى ${formatDate(r.endDate)}` : `مدفوع حتى ${formatDate(r.endDate)}`}
+                            </span></>
+                          )}
+                        </p>
+                      </div>
+                      <div className="text-xs text-center">
+                        <p className="text-gray-400">مدفوع</p>
+                        <p className="font-bold text-green-600">{formatCurrency(g.paid, settings?.currency)}</p>
+                      </div>
+                      <div className="text-xs text-center">
+                        <p className="text-gray-400">باقي</p>
+                        <p className={`font-bold ${g.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {g.remaining > 0 ? formatCurrency(g.remaining, settings?.currency) : 'خالص'}
+                        </p>
+                      </div>
+                      {canCollect && g.remaining > 0 && (
+                        <button onClick={() => openPay(g.groupId, g.groupName, g.remaining)}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+                          style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
+                          تحصيل
+                        </button>
+                      )}
+                      {canCollect && groups.some(x => x.id === g.groupId) && (
+                        <button onClick={() => setRenewTarget({ groupId: g.groupId })}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 flex items-center gap-1"
+                          title="فتح شهر جديد">
+                          <RefreshCw size={12} /> شهر جديد
+                        </button>
+                      )}
                     </div>
-                    <div className="text-xs text-center">
-                      <p className="text-gray-400">المستحق</p>
-                      <p className="font-bold text-gray-800">{formatCurrency(g.owed, settings?.currency)}</p>
-                    </div>
-                    <div className="text-xs text-center">
-                      <p className="text-gray-400">المدفوع</p>
-                      <p className="font-bold text-green-600">{formatCurrency(g.paid, settings?.currency)}</p>
-                    </div>
-                    <div className="text-xs text-center">
-                      <p className="text-gray-400">المتبقي</p>
-                      <p className={`font-bold ${g.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {g.remaining > 0 ? formatCurrency(g.remaining, settings?.currency) : 'مسدد'}
-                      </p>
-                    </div>
-                    {g.overdueCount > 0 && (
-                      <span className="text-xs font-medium px-2 py-1 rounded-full bg-red-50 text-red-600 flex items-center gap-1">
-                        <AlertTriangle size={12} /> {g.overdueCount} قسط متأخر
-                      </span>
-                    )}
-                    {canCollect && g.remaining > 0 && (
-                      <button onClick={() => openPay(g.groupId, g.groupName, g.remaining)}
-                        className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
-                        style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
-                        دفع المتبقي
-                      </button>
-                    )}
-                    {canCollect && groups.some(x => x.id === g.groupId) && (
-                      <button onClick={() => setRenewTarget({ groupId: g.groupId })}
-                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 flex items-center gap-1"
-                        title="إضافة شهور جديدة على نفس المجموعة">
-                        <RefreshCw size={12} /> تجديد
-                      </button>
-                    )}
+                    {/* الشهور */}
+                    <table className="w-full text-right text-sm">
+                      <tbody className="divide-y divide-gray-50">
+                        {months.map(i => {
+                          const left = Math.max(0, i.amount - i.paidAmount);
+                          const label = i.status === 'paid' ? 'مدفوع'
+                            : i.paidAmount > 0 ? `باقي ${formatCurrency(left, settings?.currency)}`
+                            : 'لم يدفع';
+                          const cls = i.status === 'paid' ? 'bg-green-50 text-green-700'
+                            : i.paidAmount > 0 ? 'bg-yellow-50 text-yellow-700'
+                            : 'bg-red-50 text-red-600';
+                          return (
+                            <tr key={i.id} className="hover:bg-gray-50">
+                              <td className="py-2.5 px-3 font-medium text-gray-800">{i.periodLabel}</td>
+                              <td className="py-2.5 px-3 text-gray-500 text-xs">{formatDate(i.dueDate)}</td>
+                              <td className="py-2.5 px-3 text-center text-gray-700">{formatCurrency(i.amount, settings?.currency)}</td>
+                              <td className="py-2.5 px-3 text-center text-green-600">{formatCurrency(i.paidAmount, settings?.currency)}</td>
+                              <td className="py-2.5 px-3 text-left">
+                                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${cls}`}>{label}</span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
-                ))}
-              </div>
-
-              {/* جدول الأقساط */}
-              <div className="overflow-auto max-h-[320px]">
-                <table className="w-full text-right">
-                  <thead>
-                    <tr className="border-b border-gray-100 text-xs text-gray-500">
-                      <th className="pb-3 font-semibold">القسط</th>
-                      <th className="pb-3 font-semibold">المجموعة</th>
-                      <th className="pb-3 font-semibold text-center">المستحق</th>
-                      <th className="pb-3 font-semibold text-center">المدفوع</th>
-                      <th className="pb-3 font-semibold text-center">المتبقي</th>
-                      <th className="pb-3 font-semibold text-center">الاستحقاق</th>
-                      <th className="pb-3 font-semibold text-center">الحالة</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50 text-sm">
-                    {allInstallments.map(i => {
-                      const left = Math.max(0, i.amount - i.paidAmount);
-                      return (
-                        <tr key={i.id} className="hover:bg-gray-50">
-                          <td className="py-2.5 font-medium text-gray-800">{i.periodLabel}</td>
-                          <td className="py-2.5 text-gray-600 text-xs">{i.groupName}</td>
-                          <td className="py-2.5 text-center text-gray-700">{formatCurrency(i.amount, settings?.currency)}</td>
-                          <td className="py-2.5 text-center text-green-600">{formatCurrency(i.paidAmount, settings?.currency)}</td>
-                          <td className={`py-2.5 text-center font-bold ${left > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                            {formatCurrency(left, settings?.currency)}
-                          </td>
-                          <td className="py-2.5 text-center text-gray-500 text-xs">{formatDate(i.dueDate)}</td>
-                          <td className="py-2.5 text-center">
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_STYLE[i.status] || STATUS_STYLE.pending}`}>
-                              {INSTALLMENT_STATUS_LABEL[i.status] || i.status}
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </>
+                );
+              })}
+            </div>
           )}
         </div>
 
@@ -615,7 +594,7 @@ export default function StudentProfilePage() {
                 <span className="text-gray-500">المتبقي على {payTarget.groupId ? 'المجموعة' : 'الطالب'}</span>
                 <span className="font-bold text-red-600">{formatCurrency(payTarget.remaining, settings?.currency)}</span>
               </div>
-              <p className="text-xs text-gray-400">تقدر تحصّل المتبقي كله أو جزء منه — هيتوزّع على الأقساط الأقدم استحقاقاً.</p>
+              <p className="text-xs text-gray-400">تقدر تحصّل الباقي كله أو جزء منه — والباقي يفضل ظاهر لحد ما يجيبه.</p>
             </div>
 
             <div>

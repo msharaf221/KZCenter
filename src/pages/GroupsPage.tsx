@@ -7,7 +7,6 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import TransferDialog from '../components/TransferDialog';
 import RenewDialog from '../components/RenewDialog';
-import { SESSIONS_PER_MONTH } from '../lib/billing';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, enrollStudent, unenrollStudent, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
 import { getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
@@ -41,7 +40,6 @@ export default function GroupsPage() {
   const [viewGroup, setViewGroup] = useState<Group | null>(null);
   const [selectedStudentToAdd, setSelectedStudentToAdd] = useState('');
   const [paymentAmountToAdd, setPaymentAmountToAdd] = useState<number | ''>('');
-  const [startSessionToAdd, setStartSessionToAdd] = useState(1);
   const [transferTarget, setTransferTarget] = useState<{ studentId: string; studentName: string; fromGroupId: string } | null>(null);
   const [renewTarget, setRenewTarget] = useState<{ studentId: string; studentName: string; groupId: string } | null>(null);
   const [form, setForm] = useState({
@@ -160,28 +158,23 @@ export default function GroupsPage() {
         studentId,
         groupId,
         paymentAmountToAdd ? Number(paymentAmountToAdd) : undefined,
-        { startSession: startSessionToAdd }
+        undefined
       );
       if (!result.success) {
         notify.error(result.error || 'حدث خطأ');
         return;
       }
-      notify.success(
-        startSessionToAdd > 1
-          ? `تم إضافة الطالب إلى المجموعة (من الحصة ${startSessionToAdd})`
-          : 'تم إضافة الطالب إلى المجموعة'
-      );
+      notify.success('تم إضافة الطالب إلى المجموعة');
       addAuditEntry({
         userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
         action: 'update', entity: 'group', entityId: groupId,
-        details: `إضافة طالب إلى المجموعة${startSessionToAdd > 1 ? ` من الحصة ${startSessionToAdd}` : ''}${paymentAmountToAdd ? ` — دفعة ${paymentAmountToAdd}` : ''}`,
+        details: `إضافة طالب إلى المجموعة${paymentAmountToAdd ? ` — دفعة ${paymentAmountToAdd}` : ''}`,
       });
       load();
       const updatedGroup = await dbGetAll<Group>('groups').then(gs => gs.find(g => g.id === groupId));
       if (viewGroup && updatedGroup) setViewGroup(updatedGroup);
       setSelectedStudentToAdd('');
       setPaymentAmountToAdd('');
-      setStartSessionToAdd(1);
     } catch (e) {
       console.error('addStudentToGroup error:', e);
       notify.error('حدث خطأ');
@@ -377,22 +370,12 @@ export default function GroupsPage() {
             <input type="number" placeholder="المبلغ المدفوع (اختياري)" min="0"
               value={paymentAmountToAdd} onChange={e => setPaymentAmountToAdd(e.target.value === '' ? '' : +e.target.value)}
               className="w-full sm:w-1/3 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-            <select value={startSessionToAdd} onChange={e => setStartSessionToAdd(+e.target.value)}
-              title="من الحصة رقم كام؟ (للالتحاق في نص الكورس)"
-              className="w-full sm:w-32 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
-              {Array.from({ length: SESSIONS_PER_MONTH }, (_, i) => i + 1).map(n => (
-                <option key={n} value={n}>{n === 1 ? 'من أول حصة' : `من الحصة ${n}`}</option>
-              ))}
-            </select>
             <button onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
               className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors"
               style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
               إضافة
             </button>
           </div>
-          <p className="text-xs text-gray-400 -mt-2 mb-3">
-            الالتحاق في نص الكورس: الشهر الأول بيتحسب على الحصص الباقية بس ({SESSIONS_PER_MONTH} حصص/شهر)
-          </p>
           <div className="space-y-2">
             {viewGroup.studentIds.length === 0 ? (
               <p className="text-center text-gray-400 py-6">لا يوجد طلاب في هذه المجموعة</p>

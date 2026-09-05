@@ -552,7 +552,7 @@ export default function PaymentsPage() {
             <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
               <div className="grid grid-cols-3 gap-2 text-center text-xs mb-2">
                 <div>
-                  <p className="text-gray-400">المستحق</p>
+                  <p className="text-gray-400">المطلوب</p>
                   <p className="font-bold text-gray-800">{formatCurrency(studentBalance.owed, settings?.currency)}</p>
                 </div>
                 <div>
@@ -679,7 +679,7 @@ export default function PaymentsPage() {
           </div>
           <p className="text-xs text-gray-500 leading-relaxed">
             الإلغاء مش حذف: الدفعة بتفضل في السجل برقمها وسبب الإلغاء، لكنها ما بتتحسبش في أي مجموع
-            والأقساط اللي غطتها هترجع مستحقة تاني.
+            والمبلغ هيرجع يظهر «باقي» على الطالب تاني.
           </p>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">سبب الإلغاء *</label>

@@ -291,7 +291,7 @@ export default function ReportsPage() {
                 <div key={range.key} className="p-3 rounded-xl border border-gray-100" style={{ backgroundColor: styles.bg }}>
                   <p className="text-[11px] font-bold mb-1" style={{ color: styles.color }}>{range.label}</p>
                   <p className="text-lg font-bold text-gray-900">{formatCurrency(b?.amount || 0, settings?.currency)}</p>
-                  <p className="text-[11px] text-gray-500">{b?.count || 0} قسط</p>
+                  <p className="text-[11px] text-gray-500">{b?.count || 0} شهر</p>
                 </div>
               );
             })}
@@ -305,7 +305,7 @@ export default function ReportsPage() {
               <Clock size={17} className="text-indigo-500" /> استحقاقات قريبة
             </h3>
             <p className="text-xs text-gray-400 mb-4">
-              {upcoming.count} قسط بإجمالي {formatCurrency(upcoming.amount, settings?.currency)} مستحقين خلال {settings?.upcomingDueDays ?? 3} يوم — التنبيه قبل التأخر بيرفع التحصيل
+              {upcoming.count} شهر بإجمالي {formatCurrency(upcoming.amount, settings?.currency)} مطلوب دفعهم خلال {settings?.upcomingDueDays ?? 3} يوم
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
