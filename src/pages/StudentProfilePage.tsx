@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall, ClipboardCheck, GraduationCap, Receipt, AlertTriangle, ArrowLeftRight } from 'lucide-react';
+import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall, ClipboardCheck, GraduationCap, Receipt, AlertTriangle, ArrowLeftRight, MessageCircle, RefreshCw, User, School, Megaphone, CalendarDays, StickyNote, Users } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import {
   dbGetById, dbGetAll, dbGetByIndex, getStudentBalance, recordInstallmentPayment, getTransferHistory,
-  Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher, StudentBalance, Installment, TransferRecord,
+  Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher, StudentBalance, Installment, TransferRecord, Enrollment, RenewalInfo,
 } from '../lib/db';
-import { INSTALLMENT_STATUS_LABEL } from '../lib/billing';
+import { INSTALLMENT_STATUS_LABEL, RENEWAL_STATE_LABEL, renewalInfo } from '../lib/billing';
 import TransferDialog from '../components/TransferDialog';
+import RenewDialog from '../components/RenewDialog';
+import Badge from '../components/ui/Badge';
 import { formatDate, formatCurrency, getWhatsAppLink, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -22,6 +24,28 @@ const STATUS_STYLE: Record<string, string> = {
   late: 'bg-red-50 text-red-700',
   cancelled: 'bg-gray-100 text-gray-400 line-through',
 };
+
+const RENEWAL_STYLE: Record<RenewalInfo['state'], string> = {
+  active: 'bg-green-50 text-green-700',
+  expiring: 'bg-yellow-50 text-yellow-700',
+  expired: 'bg-red-50 text-red-700',
+};
+
+/** عنصر بيانات مكتوب (اسم الحقل + القيمة) — القيمة الفاضية بتتعرض «—» */
+function InfoItem({ icon, label, value, dir }: { icon: React.ReactNode; label: string; value?: string | number | null; dir?: 'ltr' | 'rtl' }) {
+  const empty = value === undefined || value === null || value === '';
+  return (
+    <div className="flex items-start gap-2 text-sm">
+      <span className="text-gray-400 mt-0.5 flex-shrink-0">{icon}</span>
+      <div className="min-w-0">
+        <p className="text-[11px] text-gray-400 leading-tight">{label}</p>
+        <p className={`font-medium leading-snug break-words ${empty ? 'text-gray-300' : 'text-gray-900'}`} dir={dir}>
+          {empty ? '—' : value}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export default function StudentProfilePage() {
   const { id } = useParams<{ id: string }>();
@@ -42,6 +66,9 @@ export default function StudentProfilePage() {
   const [allCourses, setAllCourses] = useState<Course[]>([]);
   const [allTeachers, setAllTeachers] = useState<Teacher[]>([]);
   const [transferFrom, setTransferFrom] = useState<{ groupId: string; groupName: string } | null>(null);
+  const [renewTarget, setRenewTarget] = useState<{ groupId: string } | null>(null);
+  const [renewalByGroup, setRenewalByGroup] = useState<Record<string, RenewalInfo>>({});
+  const [enrollmentByGroup, setEnrollmentByGroup] = useState<Record<string, Enrollment>>({});
   const [loading, setLoading] = useState(true);
 
   // نافذة تحصيل دفعة (كاملة أو جزئية)
@@ -77,7 +104,23 @@ export default function StudentProfilePage() {
       setPayments(studentPayments.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
 
       // المستحقات والأقساط
-      setBalance(await getStudentBalance(id));
+      const b = await getStudentBalance(id);
+      setBalance(b);
+
+      // حالة الاشتراك (ساري/قرب ينتهي/منتهي) لكل مجموعة
+      const today = dayjs().format('YYYY-MM-DD');
+      const ahead = settings?.upcomingDueDays ?? 7;
+      const rmap: Record<string, RenewalInfo> = {};
+      for (const g of studentGroups) {
+        const gb = b?.groups.find(x => x.groupId === g.id);
+        rmap[g.id] = renewalInfo(gb?.installments || [], today, ahead);
+      }
+      setRenewalByGroup(rmap);
+
+      const ens = await dbGetByIndex<Enrollment>('enrollments', 'by-studentId', id);
+      const emap: Record<string, Enrollment> = {};
+      for (const e of ens) if (e.status === 'active') emap[e.groupId] = e;
+      setEnrollmentByGroup(emap);
 
       // سجل التحويلات
       setTransfers(await getTransferHistory(id));
@@ -103,7 +146,7 @@ export default function StudentProfilePage() {
     } finally {
       setLoading(false);
     }
-  }, [id, navigate]);
+  }, [id, navigate, settings?.upcomingDueDays]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -174,49 +217,129 @@ export default function StudentProfilePage() {
           <div className="w-24 h-24 rounded-2xl bg-indigo-50 text-indigo-600 flex flex-shrink-0 items-center justify-center text-4xl font-bold shadow-inner" style={{ backgroundColor: `${primaryColor}15`, color: primaryColor }}>
             {student.gender === 'male' ? '👦' : '👧'}
           </div>
-          <div className="flex-1">
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">{student.name}</h1>
-            <p className="text-gray-500 mb-4">{student.age} سنة</p>
-            <div className="flex flex-wrap gap-4 text-sm font-medium">
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-2 mb-1">
+              <h1 className="text-2xl font-bold text-gray-900">{student.name}</h1>
+              <Badge status={student.status} />
+            </div>
+            <p className="text-gray-500 mb-4">
+              {student.age} سنة • {student.gender === 'male' ? 'ولد' : 'بنت'}
+              {student.gradeLevel ? ` • ${student.gradeLevel}` : ''}
+            </p>
+
+            {/* البيانات مكتوبة (مش زراير بس) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3 mb-4">
+              <InfoItem icon={<Phone size={15} />} label="هاتف الطالب" value={student.phone} dir="ltr" />
+              <InfoItem icon={<PhoneCall size={15} />} label="هاتف ولي الأمر" value={student.parentPhone} dir="ltr" />
+              <InfoItem icon={<User size={15} />} label="اسم ولي الأمر" value={student.parentName} />
+              <InfoItem icon={<School size={15} />} label="المدرسة" value={student.school} />
+              <InfoItem icon={<Megaphone size={15} />} label="عرف المركز عن طريق" value={student.source} />
+              <InfoItem icon={<CalendarDays size={15} />} label="تاريخ التسجيل" value={formatDate(student.createdAt)} />
+              {student.notes && (
+                <div className="sm:col-span-2 lg:col-span-3">
+                  <InfoItem icon={<StickyNote size={15} />} label="ملاحظات" value={student.notes} />
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-2 text-sm font-medium">
               {student.phone && (
-                <a href={getWhatsAppLink(student.phone)} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-xl border border-gray-100 hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
-                  <Phone size={16} /> هاتف الطالب
+                <a href={getWhatsAppLink(student.phone)} target="_blank" rel="noreferrer" title={`واتساب الطالب ${student.phone}`}
+                  className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100 hover:bg-green-50 hover:text-green-600 transition-colors text-xs">
+                  <MessageCircle size={14} /> واتساب الطالب
                 </a>
               )}
-              <a href={getWhatsAppLink(student.parentPhone)} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-gray-50 px-4 py-2 rounded-xl border border-gray-100 hover:bg-green-50 hover:text-green-600 transition-colors">
-                <PhoneCall size={16} /> ولي الأمر
+              <a href={getWhatsAppLink(student.parentPhone)} target="_blank" rel="noreferrer" title={`واتساب ولي الأمر ${student.parentPhone}`}
+                className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100 hover:bg-green-50 hover:text-green-600 transition-colors text-xs">
+                <MessageCircle size={14} /> واتساب ولي الأمر
               </a>
-              <div className="bg-gray-50 px-4 py-2 rounded-xl border border-gray-100">{groups.length} مجموعة</div>
-              <div className={`px-4 py-2 rounded-xl font-bold border ${remaining > 0 ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-600 border-green-100'}`}>
+              <a href={`tel:${student.parentPhone}`} className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100 hover:bg-indigo-50 hover:text-indigo-600 transition-colors text-xs">
+                <PhoneCall size={14} /> اتصال بولي الأمر
+              </a>
+              <div className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100 text-xs"><Users size={14} /> {groups.length} مجموعة</div>
+              <div className={`px-3 py-1.5 rounded-xl font-bold border text-xs ${remaining > 0 ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-600 border-green-100'}`}>
                 {remaining > 0 ? `المتبقي: ${formatCurrency(remaining, settings?.currency)}` : 'خالص الديون'}
               </div>
             </div>
           </div>
         </div>
 
+        {/* تنبيه تجديد: اشتراك منتهي أو قرب ينتهي */}
+        {groups.some(g => renewalByGroup[g.id]?.state !== 'active' && (balance?.groups.some(b => b.groupId === g.id) ?? false)) && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4 flex flex-wrap items-center gap-3">
+            <RefreshCw size={18} className="text-yellow-600" />
+            <div className="flex-1 min-w-[200px] text-sm">
+              <p className="font-bold text-yellow-800">الطالب محتاج تجديد اشتراك</p>
+              <p className="text-yellow-700 text-xs">
+                {groups
+                  .filter(g => renewalByGroup[g.id]?.state !== 'active' && balance?.groups.some(b => b.groupId === g.id))
+                  .map(g => {
+                    const r = renewalByGroup[g.id];
+                    return `${g.name}: ${RENEWAL_STATE_LABEL[r.state]}${r.endDate ? ` (${formatDate(r.endDate)})` : ''}`;
+                  })
+                  .join(' • ')}
+              </p>
+            </div>
+            {canCollect && (
+              <button
+                onClick={() => {
+                  const g = groups.find(x => renewalByGroup[x.id]?.state !== 'active');
+                  if (g) setRenewTarget({ groupId: g.id });
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-yellow-600 hover:bg-yellow-700 transition-colors">
+                جدّد الآن
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden flex flex-col">
             <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><BookOpen className="text-indigo-500" /> المجموعات والمدرسين</h2>
             <div className="overflow-auto flex-1 max-h-[300px]">
               <table className="w-full text-right">
-                <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المجموعة</th><th className="pb-3 font-semibold">الكورس</th><th className="pb-3 font-semibold text-center">المدرس</th>{canCollect && <th className="pb-3 font-semibold text-center">إجراءات</th>}</tr></thead>
+                <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المجموعة</th><th className="pb-3 font-semibold">الكورس</th><th className="pb-3 font-semibold text-center">المدرس</th><th className="pb-3 font-semibold text-center">الاشتراك</th>{canCollect && <th className="pb-3 font-semibold text-center">إجراءات</th>}</tr></thead>
                 <tbody className="divide-y divide-gray-50 text-sm">
-                  {groups.length === 0 ? <tr><td colSpan={canCollect ? 4 : 3} className="py-4 text-center text-gray-400">لا توجد مجموعات</td></tr> :
-                   groups.map(g => (
+                  {groups.length === 0 ? <tr><td colSpan={canCollect ? 5 : 4} className="py-4 text-center text-gray-400">لا توجد مجموعات</td></tr> :
+                   groups.map(g => {
+                    const r = renewalByGroup[g.id];
+                    const en = enrollmentByGroup[g.id];
+                    const hasPlan = !!r && r.periods > 0;
+                    return (
                     <tr key={g.id} className="hover:bg-gray-50">
-                      <td className="py-3 font-medium">{g.name}</td>
+                      <td className="py-3 font-medium">
+                        {g.name}
+                        {en?.renewalCount ? <span className="block text-[10px] text-gray-400">اتجدد {en.renewalCount} مرة</span> : null}
+                      </td>
                       <td className="py-3 text-gray-600">{g.courseName}</td>
                       <td className="py-3 text-center text-indigo-600 font-medium hover:underline cursor-pointer" onClick={() => navigate(`/teachers/${g.teacherId}`)}>{g.teacherName}</td>
+                      <td className="py-3 text-center">
+                        {hasPlan ? (
+                          <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${RENEWAL_STYLE[r.state]}`}
+                            title={r.endDate ? `ينتهي ${formatDate(r.endDate)}` : ''}>
+                            {RENEWAL_STATE_LABEL[r.state]}
+                            {r.endDate && <span className="block font-normal text-[10px] opacity-80">حتى {formatDate(r.endDate)}</span>}
+                          </span>
+                        ) : <span className="text-xs text-gray-300">—</span>}
+                      </td>
                       {canCollect && (
                         <td className="py-3 text-center">
-                          <button onClick={() => setTransferFrom({ groupId: g.id, groupName: g.name })}
-                            className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
-                            تحويل
-                          </button>
+                          <div className="flex items-center justify-center gap-1 flex-wrap">
+                            <button onClick={() => setRenewTarget({ groupId: g.id })}
+                              className={`text-xs px-2 py-1 rounded-lg transition-colors flex items-center gap-1 ${r?.state === 'expired' ? 'text-white bg-red-500 hover:bg-red-600' : r?.state === 'expiring' ? 'text-yellow-800 bg-yellow-100 hover:bg-yellow-200' : 'text-green-700 bg-green-50 hover:bg-green-100'}`}
+                              title="تجديد / استكمال الاشتراك في نفس المجموعة">
+                              <RefreshCw size={12} /> تجديد
+                            </button>
+                            <button onClick={() => setTransferFrom({ groupId: g.id, groupName: g.name })}
+                              className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
+                              تحويل
+                            </button>
+                          </div>
                         </td>
                       )}
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -295,6 +418,13 @@ export default function StudentProfilePage() {
                         className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
                         style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
                         دفع المتبقي
+                      </button>
+                    )}
+                    {canCollect && groups.some(x => x.id === g.groupId) && (
+                      <button onClick={() => setRenewTarget({ groupId: g.groupId })}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 flex items-center gap-1"
+                        title="إضافة شهور جديدة على نفس المجموعة">
+                        <RefreshCw size={12} /> تجديد
                       </button>
                     )}
                   </div>
@@ -460,6 +590,18 @@ export default function StudentProfilePage() {
           courses={allCourses}
           teachers={allTeachers}
           onClose={() => setTransferFrom(null)}
+          onDone={() => loadData()}
+        />
+      )}
+
+      {/* تجديد / استكمال الاشتراك */}
+      {renewTarget && (
+        <RenewDialog
+          open={!!renewTarget}
+          studentId={student.id}
+          studentName={student.name}
+          groupId={renewTarget.groupId}
+          onClose={() => setRenewTarget(null)}
           onDone={() => loadData()}
         />
       )}

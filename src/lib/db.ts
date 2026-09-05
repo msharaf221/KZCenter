@@ -15,8 +15,10 @@ import {
   installmentState,
   isCountedPayment,
   proratedFirstPeriod,
+  renewalInfo,
   resolveSessionsPerMonth,
   summarize,
+  RenewalInfo,
 } from './billing';
 import { getBillingPolicy } from './settings';
 import { nextReceiptNo } from './receipts';
@@ -303,9 +305,9 @@ export interface CashSession {
 }
 
 // الأقساط/المستحقات — التعريف في src/lib/billing.ts (منطق نقي قابل للاختبار)
-export type { Installment, InstallmentStatus, BalanceSummary, PricingInput, AgingBucket, UpcomingDues } from './billing';
+export type { Installment, InstallmentStatus, BalanceSummary, PricingInput, AgingBucket, UpcomingDues, RenewalInfo, RenewalState } from './billing';
 export {
-  installmentRemaining, installmentState, summarize, SESSIONS_PER_MONTH,
+  installmentRemaining, installmentState, summarize, SESSIONS_PER_MONTH, renewalInfo, RENEWAL_STATE_LABEL,
   isCountedPayment, effectiveMonthlyPrice, discountBreakdown, resolveSessionsPerMonth,
   computeDueDate, sessionPrice, creditOf, debtAging, upcomingDues, daysOverdue, AGING_RANGES,
 } from './billing';
@@ -539,10 +541,33 @@ export interface Enrollment {
   /** حصة/شهر تجريبي مجاني أو بسعر رمزي */
   isTrial?: boolean;
 
+  // ==================== v8: التجديد ====================
+  /** عدد مرات تجديد الاشتراك على نفس التسجيل */
+  renewalCount?: number;
+  /** آخر تجديد */
+  renewedAt?: string;
+  /** سجل التجديدات (للمتابعة وكشف الحساب) */
+  renewals?: EnrollmentRenewal[];
+
   notes?: string;
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
+}
+
+/** تجديد اشتراك على تسجيل قائم (دورة جديدة من الأقساط) */
+export interface EnrollmentRenewal {
+  /** رقم الدورة (1 = أول تجديد) */
+  cycle: number;
+  at: string;
+  /** بداية خطة الأقساط الجديدة */
+  startDate: string;
+  months: number;
+  monthlyPrice: number;
+  initialPayment?: number;
+  byUserId?: string;
+  byUsername?: string;
+  notes?: string;
 }
 
 // ==================== DB INIT ====================
@@ -1242,6 +1267,273 @@ export async function unenrollStudent(
     console.error('unenrollStudent error:', error);
     return { success: false, error: String(error) };
   }
+}
+
+// ==================== RENEWAL (تجديد / استكمال الاشتراك) ====================
+
+export interface RenewOptions {
+  studentId: string;
+  groupId: string;
+  /** عدد الشهور الجديدة (افتراضي: مدة الكورس) */
+  months?: number;
+  /** بداية الأقساط الجديدة YYYY-MM-DD (افتراضي: بعد آخر قسط، أو النهاردة لو الاشتراك منتهي) */
+  startDate?: string;
+  /** دفعة عند التجديد (اختياري) */
+  initialPayment?: number;
+  paymentMethod?: PaymentMethod;
+  collectedBy?: string;
+  collectedByName?: string;
+  /** تسعير مختلف عن التسجيل الأصلي (لو فاضي بيستخدم نفس السعر/الخصم المتفق عليه) */
+  priceOverride?: number;
+  discountAmount?: number;
+  discountPercent?: number;
+  discountReason?: string;
+  notes?: string;
+  userId?: string;
+  username?: string;
+}
+
+export interface RenewResult {
+  success: boolean;
+  error?: string;
+  /** عدد الأقساط اللي اتضافت */
+  installmentsCreated?: number;
+  /** رقم الدورة (1 = أول تجديد) */
+  cycle?: number;
+  monthlyPrice?: number;
+  /** أول وآخر استحقاق في الخطة الجديدة */
+  firstDueDate?: string;
+  lastDueDate?: string;
+  remainingAfter?: number;
+}
+
+/**
+ * تجديد/استكمال اشتراك طالب في مجموعة **من غير ما يخرج ويدخل تاني**.
+ *
+ * الفرق عن `enrollStudent`: التسجيل نفسه بيفضل موجود (بتاريخه وخصوماته وسجل حضوره)،
+ * وبنضيف بس دورة جديدة من الأقساط تكمّل الترقيم بعد الخطة القديمة.
+ * - لو عليه متبقي من الدورة القديمة بيفضل زي ما هو (ما بيتلغيش ولا بيتنقل).
+ * - لو الطالب كان `ended` أو `suspended` بيرجع `active` تلقائياً.
+ * - لو التسجيل كان `completed`/`dropped` (خرج قبل كده) بيتعاد تفعيله.
+ */
+export async function renewEnrollment(opts: RenewOptions): Promise<RenewResult> {
+  try {
+    const { studentId, groupId } = opts;
+    const [student, group] = await Promise.all([
+      dbGetById<Student>('students', studentId),
+      dbGetById<Group>('groups', groupId),
+    ]);
+    if (!student) return { success: false, error: 'الطالب غير موجود' };
+    if (!group) return { success: false, error: 'المجموعة غير موجودة' };
+    if (group.status === 'ended') return { success: false, error: 'المجموعة منتهية — حوّل الطالب لمجموعة تانية بدل التجديد' };
+
+    const course = await dbGetById<Course>('courses', group.courseId);
+    const months = Math.max(1, Math.floor(opts.months || course?.durationMonths || 1));
+
+    // التسجيل: النشط، وإلا آخر تسجيل (مكتمل/خارج) نعيد تفعيله
+    const enrollments = (await dbGetByIndex<Enrollment>('enrollments', 'by-studentGroup', [studentId, groupId]))
+      .filter(e => !e.deleted)
+      .sort((a, b) => (b.enrolledAt || '').localeCompare(a.enrolledAt || ''));
+    let enrollment = enrollments.find(e => e.status === 'active');
+    let reactivated = false;
+    if (!enrollment) {
+      const previous = enrollments.find(e => e.status === 'completed' || e.status === 'dropped');
+      if (!previous) return { success: false, error: 'الطالب غير مسجل في هذه المجموعة — سجّله الأول' };
+      // إعادة تفعيل تسجيل قديم بتحتاج مكان في المجموعة
+      if (!group.studentIds.includes(studentId) && group.studentIds.length >= group.maxStudents) {
+        return { success: false, error: `المجموعة مكتملة (${group.studentIds.length}/${group.maxStudents})` };
+      }
+      enrollment = previous;
+      reactivated = true;
+    }
+
+    const now = new Date().toISOString();
+    const today = dayjs().format('YYYY-MM-DD');
+    const policy = await getBillingPolicy();
+
+    // الأقساط الحالية → نحدد آخر رقم وآخر استحقاق
+    const existing = (await dbGetByIndex<Installment>('installments', 'by-studentGroup', [studentId, groupId]))
+      .filter(i => !i.deleted);
+    const info = renewalInfo(existing, today, 0);
+    const startDate = (opts.startDate && dayjs(opts.startDate).isValid())
+      ? dayjs(opts.startDate).format('YYYY-MM-DD')
+      : info.nextStartDate;
+
+    // التسعير: لو المستخدم حدد سعر/خصم جديد نستخدمه، وإلا نكمّل بنفس اتفاق التسجيل الأصلي
+    const pricing: PricingInput = {
+      coursePrice: course?.price || 0,
+      priceOverride: opts.priceOverride ?? enrollment.priceOverride,
+      discountAmount: opts.discountAmount ?? enrollment.discountAmount,
+      discountPercent: opts.discountPercent ?? enrollment.discountPercent,
+    };
+    const monthlyPrice = effectiveMonthlyPrice(pricing);
+    const cycle = (enrollment.renewalCount || 0) + 1;
+
+    const plan = buildMonthlyPlan({
+      ...pricing,
+      durationMonths: months,
+      startDate,
+      dueDayOfMonth: policy.dueDayOfMonth,
+      graceDays: policy.graceDays,
+      startPeriodIndex: info.lastPeriodIndex + 1,
+      labelPrefix: `تجديد ${cycle}`,
+    });
+    const created: Installment[] = plan.map(p => ({
+      id: generateId(),
+      studentId,
+      groupId,
+      enrollmentId: enrollment!.id,
+      periodIndex: p.periodIndex,
+      periodLabel: p.periodLabel,
+      amount: p.amount,
+      paidAmount: 0,
+      dueDate: p.dueDate,
+      status: 'pending' as InstallmentStatus,
+      notes: opts.notes?.trim() || undefined,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    await dbBulkAdd('installments', created);
+
+    // تحديث التسجيل (سجل التجديد + إعادة التفعيل لو لزم)
+    const renewal: EnrollmentRenewal = {
+      cycle,
+      at: now,
+      startDate,
+      months,
+      monthlyPrice,
+      initialPayment: opts.initialPayment || 0,
+      byUserId: opts.userId,
+      byUsername: opts.username,
+      notes: opts.notes?.trim() || undefined,
+    };
+    await dbPut('enrollments', {
+      ...enrollment,
+      status: 'active',
+      droppedAt: reactivated ? undefined : enrollment.droppedAt,
+      dropReason: reactivated ? undefined : enrollment.dropReason,
+      renewalCount: cycle,
+      renewedAt: now,
+      renewals: [...(enrollment.renewals || []), renewal],
+      priceOverride: pricing.priceOverride ?? undefined,
+      discountAmount: pricing.discountAmount ?? undefined,
+      discountPercent: pricing.discountPercent ?? undefined,
+      discountReason: opts.discountReason ?? enrollment.discountReason,
+      updatedAt: now,
+    } satisfies Enrollment);
+
+    // المصفوفات المكررة + حالة الطالب
+    if (!group.studentIds.includes(studentId)) {
+      await dbPut('groups', { ...group, studentIds: [...group.studentIds, studentId], updatedAt: now });
+      await syncGroupStatus(groupId);
+    }
+    const enrolledGroups = [...new Set([...(student.enrolledGroups || []), groupId])];
+    if (student.status !== 'active' || enrolledGroups.length !== (student.enrolledGroups || []).length) {
+      await dbPut('students', { ...student, status: 'active', enrolledGroups, updatedAt: now });
+    }
+
+    // دفعة التجديد (لو فيه)
+    if (opts.initialPayment && opts.initialPayment > 0) {
+      const receiptNo = await nextReceiptNo(today, policy.receiptPrefix);
+      await dbAdd('payments', {
+        id: generateId(),
+        studentId,
+        courseId: group.courseId,
+        groupId,
+        amount: opts.initialPayment,
+        date: today,
+        type: 'subscription',
+        status: 'paid',
+        installmentIds: [],
+        method: opts.paymentMethod || 'cash',
+        collectedBy: opts.collectedBy,
+        collectedByName: opts.collectedByName,
+        receiptNo,
+        notes: `تجديد اشتراك — ${group.name}`,
+        createdAt: now,
+        updatedAt: now,
+      } satisfies Payment);
+    }
+
+    await rebuildInstallmentsFromPayments(studentId);
+    const after = await getStudentBalance(studentId);
+
+    return {
+      success: true,
+      installmentsCreated: created.length,
+      cycle,
+      monthlyPrice,
+      firstDueDate: created[0]?.dueDate,
+      lastDueDate: created[created.length - 1]?.dueDate,
+      remainingAfter: Math.max(0, after?.remaining ?? 0),
+    };
+  } catch (error) {
+    console.error('renewEnrollment error:', error);
+    return { success: false, error: String(error) };
+  }
+}
+
+export interface RenewalCandidate {
+  studentId: string;
+  studentName: string;
+  parentPhone: string;
+  phone?: string;
+  groupId: string;
+  groupName: string;
+  courseName: string;
+  teacherName: string;
+  info: RenewalInfo;
+  /** المتبقي على المجموعة دي */
+  remaining: number;
+}
+
+/**
+ * الاشتراكات اللي قربت تنتهي أو انتهت (لكل تسجيل نشط) — عشان السكرتارية تكلم أولياء الأمور قبل ما الطالب يقطع.
+ */
+export async function getRenewalCandidates(daysAhead: number = 7): Promise<RenewalCandidate[]> {
+  const [enrollments, students, groups, courses, teachers, installments] = await Promise.all([
+    dbGetAll<Enrollment>('enrollments'),
+    dbGetAll<Student>('students'),
+    dbGetAll<Group>('groups'),
+    dbGetAll<Course>('courses'),
+    dbGetAll<Teacher>('teachers'),
+    dbGetAll<Installment>('installments'),
+  ]);
+  const today = dayjs().format('YYYY-MM-DD');
+  const byPair = new Map<string, Installment[]>();
+  for (const i of installments) {
+    const k = `${i.studentId}|${i.groupId}`;
+    const l = byPair.get(k);
+    if (l) l.push(i); else byPair.set(k, [i]);
+  }
+
+  const out: RenewalCandidate[] = [];
+  for (const e of enrollments) {
+    if (e.status !== 'active') continue;
+    const student = students.find(s => s.id === e.studentId);
+    const group = groups.find(g => g.id === e.groupId);
+    if (!student || !group || group.status === 'ended') continue;
+    if (student.status === 'ended') continue;
+    const list = byPair.get(`${e.studentId}|${e.groupId}`) || [];
+    if (list.length === 0) continue; // من غير أقساط ما نقدرش نحكم
+    const info = renewalInfo(list, today, daysAhead);
+    if (info.state === 'active') continue;
+    const s = summarize(list, today);
+    out.push({
+      studentId: student.id,
+      studentName: student.name,
+      parentPhone: student.parentPhone,
+      phone: student.phone,
+      groupId: group.id,
+      groupName: group.name,
+      courseName: courses.find(c => c.id === group.courseId)?.name || '—',
+      teacherName: teachers.find(t => t.id === group.teacherId)?.name || '—',
+      info,
+      remaining: s.remaining,
+    });
+  }
+  // المنتهي الأقدم الأول، وبعده اللي قرب ينتهي
+  return out.sort((a, b) => (a.info.daysLeft ?? 0) - (b.info.daysLeft ?? 0));
 }
 
 // ==================== TRANSFER (تحويل بين المجموعات/المدرسين) ====================

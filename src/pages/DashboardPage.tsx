@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   GraduationCap, Users, BookOpen, Users2,
-  DollarSign, Clock, TrendingUp, AlertCircle, AlertTriangle, CalendarX,
+  DollarSign, Clock, TrendingUp, AlertCircle, AlertTriangle, CalendarX, RefreshCw, MessageCircle,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -9,10 +9,12 @@ import {
 } from 'recharts';
 import Layout from '../components/layout/Layout';
 import { StatCard } from '../components/ui/Card';
-import { dbGetAll, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, getDebtors, Student, Teacher, Group, Course, Payment, Installment, Enrollment, DebtorRow } from '../lib/db';
+import { dbGetAll, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, getDebtors, getRenewalCandidates, Student, Teacher, Group, Course, Payment, Installment, Enrollment, DebtorRow, RenewalCandidate } from '../lib/db';
+import RenewDialog from '../components/RenewDialog';
+import { RENEWAL_STATE_LABEL } from '../lib/billing';
 import { upcomingDues, installmentRemaining } from '../lib/billing';
 import { findScheduleConflicts, type ScheduleConflict } from '../lib/schedule';
-import { formatDate, formatCurrency, getStatusLabel, getArabicDay } from '../lib/utils';
+import { formatDate, formatCurrency, getStatusLabel, getArabicDay, getWhatsAppLink } from '../lib/utils';
 import { requestNotificationPermission, showBrowserNotification } from '../lib/notifications';
 import { subscribeDebtAlert, refreshDebtAlert, DebtAlert } from '../lib/debtAlerts';
 import { useApp } from '../contexts/AppContext';
@@ -47,6 +49,8 @@ export default function DashboardPage() {
   const [topDebtors, setTopDebtors] = useState<DebtorRow[]>([]);
   const [upcoming, setUpcoming] = useState<ReturnType<typeof upcomingDues> | null>(null);
   const [conflicts, setConflicts] = useState<ScheduleConflict[]>([]);
+  const [renewals, setRenewals] = useState<RenewalCandidate[]>([]);
+  const [renewTarget, setRenewTarget] = useState<RenewalCandidate | null>(null);
   const [loading, setLoading] = useState(true);
 
   // تنبيهات المديونيات + إشعار المتأخرات (مرة واحدة في اليوم)
@@ -175,6 +179,13 @@ export default function DashboardPage() {
 
       // الأقساط اللي استحقاقها قريب — التنبيه قبل التأخر بيرفع التحصيل
       setUpcoming(upcomingDues(installments, settings?.upcomingDueDays ?? 3));
+
+      // اشتراكات قربت تنتهي / انتهت — عشان نجدد قبل ما الطالب يقطع
+      try {
+        setRenewals(await getRenewalCandidates(settings?.upcomingDueDays ?? 7));
+      } catch (e) {
+        console.error('renewal candidates error:', e);
+      }
 
       // تعارضات الجدول (مدرس/قاعة في مكانين، أو طالب في مجموعتين متعارضتين)
       const teacherNames: Record<string, string> = {};
@@ -441,6 +452,61 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* اشتراكات محتاجة تجديد */}
+        {renewals.length > 0 && (
+          <div className="bg-white rounded-2xl border border-yellow-100 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-gray-100 flex items-center gap-2 flex-wrap">
+              <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                <RefreshCw size={18} className="text-yellow-500" /> اشتراكات محتاجة تجديد
+              </h3>
+              <span className="text-xs bg-yellow-50 text-yellow-700 px-2 py-0.5 rounded-full font-medium">
+                {renewals.filter(r => r.info.state === 'expired').length} منتهي • {renewals.filter(r => r.info.state === 'expiring').length} قرب ينتهي
+              </span>
+            </div>
+            <div className="p-3 space-y-2">
+              {renewals.slice(0, 8).map(r => (
+                <div key={`${r.studentId}-${r.groupId}`}
+                  className="flex items-center gap-3 p-3 rounded-xl hover:bg-yellow-50/60 transition-colors">
+                  <button onClick={() => navigate(`/students/${r.studentId}`)} className="flex-1 min-w-0 text-right">
+                    <p className="text-sm font-semibold text-gray-900 truncate">{r.studentName}</p>
+                    <p className="text-xs text-gray-500 truncate">
+                      {r.groupName} • {r.courseName} • {r.teacherName}
+                      {r.remaining > 0 && <span className="text-red-500"> • متبقي {formatCurrency(r.remaining, settings?.currency)}</span>}
+                    </p>
+                  </button>
+                  <div className="text-left flex-shrink-0">
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${r.info.state === 'expired' ? 'bg-red-50 text-red-600' : 'bg-yellow-50 text-yellow-700'}`}>
+                      {RENEWAL_STATE_LABEL[r.info.state]}
+                    </span>
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      {r.info.endDate ? formatDate(r.info.endDate) : ''}
+                      {typeof r.info.daysLeft === 'number' && (r.info.daysLeft > 0 ? ` · باقي ${r.info.daysLeft} يوم` : ` · من ${Math.abs(r.info.daysLeft)} يوم`)}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    {r.parentPhone && (
+                      <a href={getWhatsAppLink(r.parentPhone, `السلام عليكم، معكم ${settings?.centerName || 'المركز'}.\nاشتراك ${r.studentName} في ${r.groupName} ${r.info.state === 'expired' ? 'انتهى' : 'قرب ينتهي'}${r.info.endDate ? ` (${formatDate(r.info.endDate)})` : ''}. يسعدنا استمراركم معنا — برجاء التواصل للتجديد.`)}
+                        target="_blank" rel="noopener noreferrer"
+                        className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title={`واتساب ولي الأمر ${r.parentPhone}`}>
+                        <MessageCircle size={15} />
+                      </a>
+                    )}
+                    {isAdmin() && (
+                      <button onClick={() => setRenewTarget(r)}
+                        className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 transition-colors">
+                        تجديد
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {renewals.length > 8 && (
+                <p className="text-xs text-gray-400 text-center pt-1">و{renewals.length - 8} اشتراك آخر — افتح ملف الطالب للتجديد</p>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* تنبيهات المديونيات */}
         {isAdmin() && topDebtors.length > 0 && (
           <div className="bg-white rounded-2xl border border-red-100 shadow-sm overflow-hidden">
@@ -548,6 +614,17 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {renewTarget && (
+        <RenewDialog
+          open={!!renewTarget}
+          studentId={renewTarget.studentId}
+          studentName={renewTarget.studentName}
+          groupId={renewTarget.groupId}
+          onClose={() => setRenewTarget(null)}
+          onDone={() => loadDashboard()}
+        />
+      )}
     </Layout>
   );
 }

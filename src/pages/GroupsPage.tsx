@@ -6,6 +6,7 @@ import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import TransferDialog from '../components/TransferDialog';
+import RenewDialog from '../components/RenewDialog';
 import { SESSIONS_PER_MONTH } from '../lib/billing';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, enrollStudent, unenrollStudent, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
 import { getContrastColor } from '../lib/utils';
@@ -42,6 +43,7 @@ export default function GroupsPage() {
   const [paymentAmountToAdd, setPaymentAmountToAdd] = useState<number | ''>('');
   const [startSessionToAdd, setStartSessionToAdd] = useState(1);
   const [transferTarget, setTransferTarget] = useState<{ studentId: string; studentName: string; fromGroupId: string } | null>(null);
+  const [renewTarget, setRenewTarget] = useState<{ studentId: string; studentName: string; groupId: string } | null>(null);
   const [form, setForm] = useState({
     name: '', courseId: '', levelId: '', teacherId: '',
     maxStudents: 20, status: 'open' as GroupStatus,
@@ -407,6 +409,10 @@ export default function GroupsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
+                    <button onClick={() => setRenewTarget({ studentId: sid, studentName: student.name, groupId: viewGroup.id })}
+                      className="text-xs text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded-lg transition-colors" title="تجديد / استكمال الاشتراك">
+                      تجديد
+                    </button>
                     <button onClick={() => setTransferTarget({ studentId: sid, studentName: student.name, fromGroupId: viewGroup.id })}
                       className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
                       تحويل
@@ -421,6 +427,18 @@ export default function GroupsPage() {
             })}
           </div>
         </Modal>
+      )}
+
+      {/* تجديد / استكمال اشتراك طالب في نفس المجموعة */}
+      {renewTarget && (
+        <RenewDialog
+          open={!!renewTarget}
+          studentId={renewTarget.studentId}
+          studentName={renewTarget.studentName}
+          groupId={renewTarget.groupId}
+          onClose={() => setRenewTarget(null)}
+          onDone={() => load()}
+        />
       )}
 
       {/* تحويل طالب لمجموعة/مدرس آخر */}

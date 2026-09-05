@@ -194,6 +194,14 @@ export interface MonthlyPlanOptions extends PricingInput {
   firstPeriodAmount?: number;
   dueDayOfMonth?: number | null;
   graceDays?: number | null;
+  /**
+   * رقم أول قسط في الخطة (افتراضي 1).
+   * بيستخدم في **التجديد** عشان ترقيم الأقساط يكمّل بعد الخطة القديمة
+   * (لو الخطة الأولى كانت 3 أقساط، التجديد يبدأ من القسط 4).
+   */
+  startPeriodIndex?: number;
+  /** بادئة اسم القسط (مثال: «تجديد 1») عشان يبان في كشف الحساب إنه دورة جديدة */
+  labelPrefix?: string;
 }
 
 /**
@@ -205,6 +213,8 @@ export function buildMonthlyPlan(opts: MonthlyPlanOptions): InstallmentDraft[] {
   const { durationMonths, startDate, firstPeriodAmount } = opts;
   const periods = Math.max(1, Math.floor(durationMonths || 1));
   const price = effectiveMonthlyPrice(opts);
+  const firstIndex = Math.max(1, Math.floor(opts.startPeriodIndex || 1));
+  const prefix = (opts.labelPrefix || '').trim();
 
   const plan: InstallmentDraft[] = [];
   for (let i = 0; i < periods; i++) {
@@ -212,8 +222,8 @@ export function buildMonthlyPlan(opts: MonthlyPlanOptions): InstallmentDraft[] {
       ? Math.max(0, round2(firstPeriodAmount))
       : price;
     plan.push({
-      periodIndex: i + 1,
-      periodLabel: `الشهر ${i + 1} من ${periods}`,
+      periodIndex: firstIndex + i,
+      periodLabel: `${prefix ? `${prefix} — ` : ''}الشهر ${i + 1} من ${periods}`,
       amount,
       dueDate: computeDueDate({
         startDate,
@@ -540,6 +550,71 @@ export function upcomingDues(
     count: items.length,
     amount: round2(items.reduce((s, i) => s + installmentRemaining(i), 0)),
     items,
+  };
+}
+
+// ==================== RENEWAL (تجديد الاشتراك) ====================
+
+export type RenewalState = 'active' | 'expiring' | 'expired';
+
+export interface RenewalInfo {
+  state: RenewalState;
+  /** عدد الأقساط (الشهور) في الخطة الحالية غير الملغاة */
+  periods: number;
+  /** أكبر رقم قسط موجود (التجديد يبدأ من اللي بعده) */
+  lastPeriodIndex: number;
+  /** استحقاق آخر قسط (بداية آخر شهر مدفوع/مستحق) */
+  lastDueDate?: string;
+  /** اليوم اللي الاشتراك بينتهي فيه (آخر استحقاق + شهر) */
+  endDate?: string;
+  /** أيام متبقية على الانتهاء (سالب = منتهي من كام يوم) */
+  daysLeft?: number;
+  /** التاريخ المقترح لبداية خطة التجديد */
+  nextStartDate: string;
+}
+
+export const RENEWAL_STATE_LABEL: Record<RenewalState, string> = {
+  active: 'ساري',
+  expiring: 'قرب ينتهي',
+  expired: 'منتهي',
+};
+
+/**
+ * حالة اشتراك طالب في مجموعة من أقساطه:
+ * الاشتراك بيغطي من أول استحقاق لحد (آخر استحقاق + شهر). لو التاريخ ده عدّى → منتهي،
+ * ولو باقي عليه `daysAhead` يوم أو أقل → قرب ينتهي.
+ *
+ * بداية خطة التجديد المقترحة = يوم انتهاء الاشتراك الحالي لو لسه جاي (استمرارية من غير فجوة)،
+ * أو النهاردة لو الطالب انقطع فترة (ما نحاسبوش على شهور ما حضرهاش).
+ */
+export function renewalInfo(
+  installments: Installment[],
+  today: string = dayjs().format('YYYY-MM-DD'),
+  daysAhead: number = 7,
+): RenewalInfo {
+  const active = installments.filter(i => !i.deleted && i.status !== 'cancelled');
+  const lastPeriodIndex = active.reduce((m, i) => Math.max(m, i.periodIndex || 0), 0);
+  if (active.length === 0) {
+    return { state: 'expired', periods: 0, lastPeriodIndex, nextStartDate: today };
+  }
+
+  const lastDueDate = active.map(i => i.dueDate).sort().pop() as string;
+  const end = dayjs(lastDueDate).add(1, 'month').startOf('day');
+  const t = dayjs(today).startOf('day');
+  const daysLeft = end.diff(t, 'day');
+
+  let state: RenewalState = 'active';
+  if (daysLeft <= 0) state = 'expired';
+  else if (daysLeft <= Math.max(0, daysAhead)) state = 'expiring';
+
+  return {
+    state,
+    periods: active.length,
+    lastPeriodIndex,
+    lastDueDate,
+    endDate: end.format('YYYY-MM-DD'),
+    daysLeft,
+    nextStartDate: (daysLeft > 0 ? end : t).format('YYYY-MM-DD'),
   };
 }
 
