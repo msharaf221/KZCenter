@@ -9,10 +9,10 @@ import {
 } from 'recharts';
 import Layout from '../components/layout/Layout';
 import { StatCard } from '../components/ui/Card';
-import { dbGetAll, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, getDebtors, getRenewalCandidates, Student, Teacher, Group, Course, Payment, Installment, Enrollment, DebtorRow, RenewalCandidate } from '../lib/db';
+import { dbGetAll, getRefunds, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, getDebtors, getRenewalCandidates, Student, Teacher, Group, Course, Payment, Installment, Enrollment, DebtorRow, RenewalCandidate } from '../lib/db';
 import RenewDialog from '../components/RenewDialog';
 import { RENEWAL_STATE_LABEL } from '../lib/billing';
-import { upcomingDues, installmentRemaining } from '../lib/billing';
+import { upcomingDues, installmentRemaining, isCountedPayment } from '../lib/billing';
 import { findScheduleConflicts, type ScheduleConflict } from '../lib/schedule';
 import { formatDate, formatCurrency, getStatusLabel, getArabicDay, getWhatsAppLink } from '../lib/utils';
 import { requestNotificationPermission, showBrowserNotification } from '../lib/notifications';
@@ -94,7 +94,7 @@ export default function DashboardPage() {
   async function loadDashboard() {
     setLoading(true);
     try {
-      const [students, teachers, courses, groups, payments, installments, enrollments] = await Promise.all([
+      const [students, teachers, courses, groups, payments, installments, enrollments, refunds] = await Promise.all([
         dbGetAll<Student>('students'),
         dbGetAll<Teacher>('teachers'),
         dbGetAll<Course>('courses'),
@@ -102,24 +102,40 @@ export default function DashboardPage() {
         dbGetAll<Payment>('payments'),
         dbGetAll<Installment>('installments'),
         dbGetAll<Enrollment>('enrollments'),
+        getRefunds(),
       ]);
+
+      // الإيراد الفعلي = الدفعات المحسوبة (غير ملغاة/محذوفة) − الاستردادات
+      const validPayments = payments.filter(isCountedPayment);
+      const refundsByMonth = new Map<string, number>();
+      refunds.forEach(r => {
+        const k = (r.date || '').substring(0, 7);
+        refundsByMonth.set(k, (refundsByMonth.get(k) || 0) + (r.amount || 0));
+      });
+      const totalRefunds = refunds.filter(r => !r.deleted).reduce((s, r) => s + (r.amount || 0), 0);
 
       // Stats
       const activeStudents = students.filter(s => s.status === 'active').length;
-      const totalRevenue = payments.filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
+      const totalRevenue = Math.max(0, validPayments.reduce((s, p) => s + p.amount, 0) - totalRefunds);
       const pendingPayments = payments.filter(p => p.status === 'pending' || p.status === 'late').length;
       const pendingAmount = payments.filter(p => p.status === 'pending' || p.status === 'late').reduce((s, p) => s + p.amount, 0);
 
-      // Revenue last 6 months
+      // Revenue last 6 months (net of refunds)
       const monthlyRevenue: Record<string, number> = {};
       for (let i = 5; i >= 0; i--) {
         const m = dayjs().subtract(i, 'month');
         monthlyRevenue[m.format('YYYY-MM')] = 0;
       }
-      payments.filter(p => p.status === 'paid').forEach(p => {
+      validPayments.forEach(p => {
         const key = p.date.substring(0, 7);
         if (key in monthlyRevenue) {
           monthlyRevenue[key] = (monthlyRevenue[key] || 0) + p.amount;
+        }
+      });
+      // خصم الاستردادات من إيراد شهرها
+      refundsByMonth.forEach((amt, key) => {
+        if (key in monthlyRevenue) {
+          monthlyRevenue[key] = Math.max(0, monthlyRevenue[key] - amt);
         }
       });
 

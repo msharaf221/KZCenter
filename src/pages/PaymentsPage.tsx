@@ -308,7 +308,7 @@ export default function PaymentsPage() {
       course: getCourseName(p.courseId),
       amount: p.amount,
       type: p.type === 'subscription' ? 'اشتراك' : p.type === 'books' ? 'كتب' : 'أخرى',
-      status: p.status === 'paid' ? 'مدفوع' : p.status === 'pending' ? 'معلق' : 'متأخر',
+      status: p.voided ? 'ملغاة' : p.status === 'paid' ? 'مدفوع' : p.status === 'pending' ? 'معلق' : 'متأخر',
       date: p.date,
       notes: p.notes || '',
     }));
@@ -326,11 +326,12 @@ export default function PaymentsPage() {
   }
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
-  const totalPaid = payments.filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
-  const totalPending = payments.filter(p => p.status !== 'paid').reduce((s, p) => s + p.amount, 0);
+  // الملغي (voided) مش محسوب لا في المدفوع ولا في المعلق
+  const totalPaid = payments.filter(p => !p.deleted && !p.voided && p.status === 'paid').reduce((s, p) => s + p.amount, 0);
+  const totalPending = payments.filter(p => !p.deleted && !p.voided && p.status !== 'paid').reduce((s, p) => s + p.amount, 0);
   // المتبقي الحقيقي على كل الطلاب (مبني على المستحقات/الأقساط المخزّنة على الطالب)
-  const remainingOnStudents = students.reduce((s, st) => s + Math.max(0, (st.totalOwed || 0) - st.totalPaid), 0);
-  const debtorsCount = students.filter(st => (st.totalOwed || 0) - st.totalPaid > 0).length;
+  const remainingOnStudents = students.filter(st => !st.deleted).reduce((s, st) => s + Math.max(0, (st.totalOwed || 0) - st.totalPaid), 0);
+  const debtorsCount = students.filter(st => !st.deleted && (st.totalOwed || 0) - st.totalPaid > 0).length;
 
   return (
     <Layout title="إدارة المدفوعات">

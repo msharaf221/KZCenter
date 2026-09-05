@@ -5,8 +5,9 @@ import {
   PieChart, Pie, Cell, Legend, LineChart, Line,
 } from 'recharts';
 import Layout from '../components/layout/Layout';
-import { dbGetAll, dbGetByIndex } from '../lib/db';
+import { dbGetAll, dbGetByIndex, getRefunds } from '../lib/db';
 import type { Payment, Expense, Student, Course } from '../lib/db';
+import { isCountedPayment } from '../lib/billing';
 import { formatCurrency, formatDate, toCSV, downloadCSV, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
@@ -27,6 +28,7 @@ export default function DailyReportsPage() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [allPayments, setAllPayments] = useState<Payment[]>([]);
   const [allExpenses, setAllExpenses] = useState<Expense[]>([]);
+  const [allRefunds, setAllRefunds] = useState<{ date: string; amount: number; deleted?: boolean }[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -38,8 +40,10 @@ export default function DailyReportsPage() {
         dbGetAll<Course>('courses'),
       ]);
       
+      const allR = await getRefunds();
       setAllPayments(allP);
       setAllExpenses(allE);
+      setAllRefunds(allR);
       setStudents(s);
       setCourses(c);
       
@@ -75,36 +79,43 @@ export default function DailyReportsPage() {
     setSelectedDate(dayjs().format('YYYY-MM-DD'));
   }
 
-  // Calculate stats
-  const todayRevenue = payments.filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
-  const todayPending = payments.filter(p => p.status === 'pending').reduce((s, p) => s + p.amount, 0);
-  const todayLate = payments.filter(p => p.status === 'late').reduce((s, p) => s + p.amount, 0);
-  const todayExpenses = expenses.reduce((s, e) => s + e.amount, 0);
+  // Calculate stats — الدفعات المحسوبة فقط (غير ملغاة/محذوفة)
+  const dayValidPayments = payments.filter(isCountedPayment);
+  const dayRefunds = allRefunds.filter(r => !r.deleted && r.date === selectedDate).reduce((s, r) => s + (r.amount || 0), 0);
+  const dayGrossRevenue = dayValidPayments.reduce((s, p) => s + p.amount, 0);
+  // صافي الإيراد = المحصّل − الاستردادات
+  const todayRevenue = Math.max(0, dayGrossRevenue - dayRefunds);
+  const todayPending = payments.filter(p => !p.deleted && p.status === 'pending').reduce((s, p) => s + p.amount, 0);
+  const todayLate = payments.filter(p => !p.deleted && p.status === 'late').reduce((s, p) => s + p.amount, 0);
+  const todayExpenses = expenses.filter(e => !e.deleted).reduce((s, e) => s + e.amount, 0);
   const todayProfit = todayRevenue - todayExpenses;
-  const totalPaymentsCount = payments.length;
-  const paidPaymentsCount = payments.filter(p => p.status === 'paid').length;
+  const totalPaymentsCount = payments.filter(p => !p.deleted).length;
+  const paidPaymentsCount = dayValidPayments.length;
 
-  // Yesterday comparison
+  // Yesterday comparison (net of refunds)
   const yesterday = dayjs(selectedDate).subtract(1, 'day').format('YYYY-MM-DD');
-  const yesterdayRevenue = allPayments
-    .filter(p => p.date === yesterday && p.status === 'paid')
-    .reduce((s, p) => s + p.amount, 0);
-  const revenueChange = yesterdayRevenue > 0 
+  const netFor = (dateStr: string) => {
+    const gross = allPayments.filter(p => p.date === dateStr && isCountedPayment(p)).reduce((s, p) => s + p.amount, 0);
+    const ref = allRefunds.filter(r => !r.deleted && r.date === dateStr).reduce((s, r) => s + (r.amount || 0), 0);
+    return Math.max(0, gross - ref);
+  };
+  const yesterdayRevenue = netFor(yesterday);
+  const revenueChange = yesterdayRevenue > 0
     ? Math.round(((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100)
     : todayRevenue > 0 ? 100 : 0;
 
   // Payment status distribution
   const statusData = [
-    { name: 'مدفوع', value: payments.filter(p => p.status === 'paid').length, amount: todayRevenue },
-    { name: 'معلق', value: payments.filter(p => p.status === 'pending').length, amount: todayPending },
-    { name: 'متأخر', value: payments.filter(p => p.status === 'late').length, amount: todayLate },
+    { name: 'مدفوع', value: dayValidPayments.length, amount: todayRevenue },
+    { name: 'معلق', value: payments.filter(p => !p.deleted && p.status === 'pending').length, amount: todayPending },
+    { name: 'متأخر', value: payments.filter(p => !p.deleted && p.status === 'late').length, amount: todayLate },
   ].filter(d => d.value > 0);
 
   // Payment type distribution
   const typeData = [
-    { name: 'اشتراكات', value: payments.filter(p => p.type === 'subscription' && p.status === 'paid').reduce((s, p) => s + p.amount, 0) },
-    { name: 'كتب', value: payments.filter(p => p.type === 'books' && p.status === 'paid').reduce((s, p) => s + p.amount, 0) },
-    { name: 'أخرى', value: payments.filter(p => p.type === 'other' && p.status === 'paid').reduce((s, p) => s + p.amount, 0) },
+    { name: 'اشتراكات', value: dayValidPayments.filter(p => p.type === 'subscription').reduce((s, p) => s + p.amount, 0) },
+    { name: 'كتب', value: dayValidPayments.filter(p => p.type === 'books').reduce((s, p) => s + p.amount, 0) },
+    { name: 'أخرى', value: dayValidPayments.filter(p => p.type === 'other').reduce((s, p) => s + p.amount, 0) },
   ].filter(d => d.value > 0);
 
   // Last 7 days trend
@@ -112,11 +123,9 @@ export default function DailyReportsPage() {
   for (let i = 6; i >= 0; i--) {
     const date = dayjs(selectedDate).subtract(i, 'day');
     const dateStr = date.format('YYYY-MM-DD');
-    const revenue = allPayments
-      .filter(p => p.date === dateStr && p.status === 'paid')
-      .reduce((s, p) => s + p.amount, 0);
+    const revenue = netFor(dateStr);
     const expense = allExpenses
-      .filter(e => e.date === dateStr)
+      .filter(e => e.date === dateStr && !e.deleted)
       .reduce((s, e) => s + e.amount, 0);
     last7Days.push({
       date: date.format('MM/DD'),
@@ -138,11 +147,13 @@ export default function DailyReportsPage() {
   function getPaymentType(type: string) {
     return type === 'subscription' ? 'اشتراك' : type === 'books' ? 'كتب' : 'أخرى';
   }
-  function getPaymentStatus(status: string) {
-    return status === 'paid' ? 'مدفوع' : status === 'pending' ? 'معلق' : 'متأخر';
+  function getPaymentStatus(p: Payment) {
+    if (p.voided) return 'ملغاة';
+    return p.status === 'paid' ? 'مدفوع' : p.status === 'pending' ? 'معلق' : 'متأخر';
   }
-  function getStatusColor(status: string) {
-    return status === 'paid' ? 'bg-green-100 text-green-700' : status === 'pending' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
+  function getStatusColor(p: Payment) {
+    if (p.voided) return 'bg-gray-200 text-gray-600 line-through';
+    return p.status === 'paid' ? 'bg-green-100 text-green-700' : p.status === 'pending' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
   }
 
   // Export functions
@@ -152,7 +163,7 @@ export default function DailyReportsPage() {
       course: getCourseName(p.courseId),
       amount: p.amount,
       type: getPaymentType(p.type),
-      status: getPaymentStatus(p.status),
+      status: getPaymentStatus(p),
       notes: p.notes || '',
     }));
     const csv = toCSV(data as unknown as Record<string, unknown>[], [
@@ -276,7 +287,7 @@ export default function DailyReportsPage() {
               </div>
             </div>
             <p className="text-xl font-bold text-yellow-600">{formatCurrency(todayPending, settings?.currency)}</p>
-            <p className="text-xs text-gray-400 mt-1">{payments.filter(p => p.status === 'pending').length} دفعة</p>
+            <p className="text-xs text-gray-400 mt-1">{payments.filter(p => !p.deleted && p.status === 'pending').length} دفعة</p>
           </div>
 
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
@@ -287,7 +298,7 @@ export default function DailyReportsPage() {
               </div>
             </div>
             <p className="text-xl font-bold text-red-600">{formatCurrency(todayLate, settings?.currency)}</p>
-            <p className="text-xs text-gray-400 mt-1">{payments.filter(p => p.status === 'late').length} دفعة</p>
+            <p className="text-xs text-gray-400 mt-1">{payments.filter(p => !p.deleted && p.status === 'late').length} دفعة</p>
           </div>
 
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
@@ -470,8 +481,8 @@ export default function DailyReportsPage() {
                         </span>
                       </td>
                       <td className="p-4">
-                        <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(payment.status)}`}>
-                          {getPaymentStatus(payment.status)}
+                        <span className={`text-xs px-2 py-1 rounded-full ${getStatusColor(payment)}`}>
+                          {getPaymentStatus(payment)}
                         </span>
                       </td>
                       <td className="p-4 text-sm text-gray-500">{payment.notes || '—'}</td>

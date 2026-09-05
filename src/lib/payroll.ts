@@ -171,11 +171,15 @@ export function calcTeacherPayroll(
   }
 
   const deductions = Math.max(0, opts?.deductions ?? 0);
-  const advances = (opts?.countAdvances === false)
+  // السلف المتاحة قبل الحد
+  const advancesAvailable = (opts?.countAdvances === false)
     ? 0
     : round2(ctx.advances
         .filter(a => !a.deleted && a.teacherId === teacher.id && !a.settledInPeriod && (a.date || '').slice(0, 7) <= period)
         .reduce((s, a) => s + (a.amount || 0), 0));
+  // السلف لا تُنزل الصافي تحت الصفر: يُخصم منها بقدر الراتب المتاح بعد الخصومات،
+  // والباقي يفضل على المدرس ويترحّل للشهر التالي
+  const advances = round2(Math.min(advancesAvailable, Math.max(0, gross - deductions)));
 
   return {
     teacherId: teacher.id,
@@ -244,7 +248,10 @@ export async function savePayrollRecord(opts: {
     advances: opts.calc.advances,
     net,
     paidAmount,
-    status: paidAmount <= 0 ? 'pending' : paidAmount >= net ? 'paid' : 'partial',
+    // صافي صفر مع خصم سلف = الراتب استُهلك بالسلف بالكامل → مدفوع تلقائياً
+    status: (paidAmount >= net && (net > 0 || opts.calc.advances > 0))
+      ? 'paid'
+      : paidAmount <= 0 ? 'pending' : paidAmount >= net ? 'paid' : 'partial',
     lines: opts.calc.lines,
     notes: opts.notes ?? existing?.notes,
     createdAt: existing?.createdAt || now,
@@ -252,6 +259,13 @@ export async function savePayrollRecord(opts: {
   };
 
   await dbPut('payroll', record);
+
+  // لو الراتب اتغطى بالكامل بالسلف (صافي صفر)، السلف بتتسوّى عند الاستحقاق
+  // (مفيش صرف نقدي يحرّك payPayroll فنسوّي هنا)
+  if (net <= 0 && opts.calc.advances > 0) {
+    await settleAdvancesAgainst(opts.teacherId, opts.period, round2(opts.calc.advances));
+  }
+
   return record;
 }
 
@@ -320,18 +334,72 @@ export async function payPayroll(opts: {
     await dbAdd('expenses', expense);
   }
 
-  // تعليم السلف إنها اتخصمت من الشهر ده
-  const advances = await dbGetAll<TeacherAdvance>('teacher_advances');
-  for (const a of advances) {
-    if (a.teacherId === record.teacherId && !a.deleted && !a.settledInPeriod) {
-      await dbPut('teacher_advances', { ...a, settledInPeriod: record.period, updatedAt: now });
-    }
+  // تسوية سلف المدرس مقابل راتب الشهر — تتم عند تأكيد استحقاق الراتب
+  // (السلفة اتخصمت من الراتب المستحق، سواء صُرف الصافي نقداً أو كان صفراً).
+  if (updated.status === 'paid') {
+    await settleAdvancesAgainst(record.teacherId, record.period, round2(record.advances));
   }
 
   return { success: true, record: updated, expenseId };
 }
 
 // ==================== ADVANCES ====================
+
+/**
+ * تسوية سلف المدرس مقابل راتب شهر، بقدر المبلغ المخصوم فعلاً (cappedAmount).
+ *
+ * - السلفة بتُستهلك باستحقاق الراتب (أقدمها أولاً) — مش بالصرف النقدي،
+ *   لأن السلفة نفسها اتدفعت نقدية سلفاً وبتقلل المستحق.
+ * - السلفة الأكبر من المغطى: نخفّض قيمتها بالمغطى ونسيب الباقي مفتوحاً للترحيل.
+ * - لو مجموع السلف أكبر من الراتب، الراتب كان متحدّاً عند صفر وبيتهلّك
+ *   بقيمة الراتب فقط، والباقي يفضل على المدرس للشهر الجاي.
+ *
+ * الدالة آمنة للتكرار: بتعالج السلف المفتوحة فقط (ليها settledInPeriod = لا شيء)
+ * والمتبقي بعد خصم سابق يفضل بنفس السجل المفتوح.
+ */
+export async function settleAdvancesAgainst(
+  teacherId: string,
+  period: string,
+  cappedAmount: number,
+): Promise<{ settled: number; carried: number }> {
+  const now = new Date().toISOString();
+  // حماية ضد التسوية المكررة لنفس الفترة (الحفظ المتكرر للرابط)
+  const allAdvances = await dbGetAll<TeacherAdvance>('teacher_advances');
+  if (allAdvances.some(a => a.teacherId === teacherId && a.settledInPeriod === period)) {
+    const open = allAdvances.filter(a => a.teacherId === teacherId && !a.deleted && !a.settledInPeriod);
+    return { settled: 0, carried: round2(open.reduce((s, a) => s + (a.amount || 0), 0)) };
+  }
+
+  const advances = allAdvances
+    .filter(a => a.teacherId === teacherId && !a.deleted && !a.settledInPeriod
+      && (a.date || '').slice(0, 7) <= period)
+    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+  let left = round2(Math.max(0, cappedAmount));
+  for (const a of advances) {
+    if (left <= 0.001) break;
+    const aAmount = round2(a.amount || 0);
+    if (aAmount <= left + 0.001) {
+      await dbPut('teacher_advances', { ...a, settledInPeriod: period, updatedAt: now });
+      left = round2(left - aAmount);
+    } else {
+      await dbPut('teacher_advances', {
+        ...a,
+        amount: round2(aAmount - left),
+        notes: a.notes
+          ? `${a.notes} — خُصم ${left} من راتب ${period}`
+          : `خصم جزئي ${left} من راتب ${period}`,
+        updatedAt: now,
+      });
+      left = 0;
+    }
+  }
+
+  const carried = round2(advances
+    .filter(a => !a.settledInPeriod)
+    .reduce((s, a) => s + (a.amount || 0), 0));
+  return { settled: round2(Math.max(0, cappedAmount - left)), carried };
+}
 
 export async function addTeacherAdvance(opts: {
   teacherId: string;
