@@ -213,14 +213,14 @@ export default function CoursesPage() {
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">عدد الحصص في الشهر</label>
-              <input type="number" min={1} max={40} placeholder="من جدول المجموعة"
+              <input type="number" min={1} max={40} placeholder="8"
                 value={form.sessionsPerMonth ?? ''}
                 onChange={e => setForm({...form, sessionsPerMonth: e.target.value === '' ? undefined : Math.max(1, +e.target.value)})}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
               <p className="text-[11px] text-gray-400 mt-1">
                 {form.price > 0 && form.sessionsPerMonth
                   ? <>الحصة = <strong>{formatCurrency(Math.round((form.price / form.sessionsPerMonth) * 100) / 100, settings?.currency)}</strong> — للي بييجي في نص الشهر</>
-                  : 'سيبها فاضية يتحسب من أيام المجموعة (يوم واحد أسبوعياً = 4 حصص)'}
+                  : 'سيبها فاضية = 8 حصص في الشهر (أو الافتراضي من الإعدادات)'}
               </p>
             </div>
             <div>

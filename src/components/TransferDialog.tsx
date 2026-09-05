@@ -5,6 +5,7 @@ import { formatCurrency, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
 import { proratedFirstPeriod, resolveSessionsPerMonth } from '../lib/billing';
+import SessionPicker from './SessionPicker';
 
 interface Props {
   open: boolean;
@@ -73,7 +74,6 @@ export default function TransferDialog({
   const targetPrice = target?.course?.price || 0;
   const targetSessions = resolveSessionsPerMonth({
     courseSessionsPerMonth: target?.course?.sessionsPerMonth,
-    scheduleDays: target?.group.schedule?.map(x => x.days),
     settingSessionsPerMonth: settings?.sessionsPerMonth,
   });
   const firstMonth = startSession > 1 ? proratedFirstPeriod(targetPrice, startSession, targetSessions) : targetPrice;
@@ -152,15 +152,12 @@ export default function TransferDialog({
 
         {target && (
           <>
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">هيبدأ في المجموعة الجديدة من الحصة</label>
-              <select value={startSession} onChange={e => setStartSession(+e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
-                {Array.from({ length: targetSessions }, (_, i) => i + 1).map(n => (
-                  <option key={n} value={n}>{n === 1 ? 'الأولى (شهر كامل)' : `رقم ${n} من ${targetSessions}`}</option>
-                ))}
-              </select>
-            </div>
+            <SessionPicker
+              label="هيبدأ في المجموعة الجديدة من الحصة رقم"
+              sessions={targetSessions}
+              value={startSession}
+              onChange={setStartSession}
+            />
 
             <div className="p-3 rounded-xl bg-indigo-50/60 border border-indigo-100 text-xs text-gray-600 space-y-0.5">
               <p>

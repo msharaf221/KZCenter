@@ -10,6 +10,7 @@ import SheetImportDialog from '../components/SheetImportDialog';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
 import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone, getContrastColor } from '../lib/utils';
 import { effectiveMonthlyPrice, proratedFirstPeriod, resolveSessionsPerMonth } from '../lib/billing';
+import SessionPicker from '../components/SessionPicker';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyNewStudent } from '../lib/notifications';
@@ -781,7 +782,6 @@ export default function StudentsPage() {
                     const monthly = course ? effectiveMonthlyPrice({ coursePrice: course.price, priceOverride: pr.priceOverride }) : 0;
                     const sessions = resolveSessionsPerMonth({
                       courseSessionsPerMonth: course?.sessionsPerMonth,
-                      scheduleDays: g.schedule?.map(x => x.days),
                       settingSessionsPerMonth: settings?.sessionsPerMonth,
                     });
                     const fromSession = startSessions[g.id] || 1;
@@ -790,16 +790,14 @@ export default function StudentsPage() {
                     const left = Math.max(0, firstMonth - paid);
                     return (
                       <div className="pr-6 space-y-1.5">
+                        <SessionPicker
+                          size="sm"
+                          sessions={sessions}
+                          value={fromSession}
+                          onChange={n => setStartSessions({ ...startSessions, [g.id]: n })}
+                        />
                         <div className="flex flex-wrap items-center gap-2">
-                          <label className="text-xs text-gray-500">بدأ من الحصة</label>
-                          <select value={fromSession}
-                            onChange={e => setStartSessions({ ...startSessions, [g.id]: +e.target.value })}
-                            className="px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500 bg-white">
-                            {Array.from({ length: sessions }, (_, i) => i + 1).map(n => (
-                              <option key={n} value={n}>{n === 1 ? 'الأولى (شهر كامل)' : `رقم ${n} من ${sessions}`}</option>
-                            ))}
-                          </select>
-                          <label className="text-xs text-gray-500 mr-2">سعر خاص</label>
+                          <label className="text-xs text-gray-500">سعر خاص</label>
                           <input type="number" min={0} placeholder={course ? String(course.price) : ''}
                             value={pr.priceOverride ?? ''}
                             onChange={e => setEnrollPricing(p => ({ ...p, [g.id]: { ...p[g.id], priceOverride: e.target.value === '' ? undefined : +e.target.value } }))}

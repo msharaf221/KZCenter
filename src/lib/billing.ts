@@ -13,38 +13,27 @@ dayjs.locale('ar');
 /** عدد الحصص في الشهر — الافتراضي لو مفيش تحديد من الكورس/المجموعة/الإعدادات */
 export const SESSIONS_PER_MONTH = 8;
 
-/** أسابيع في الشهر (لتحويل «أيام في الأسبوع» → «حصص في الشهر») */
-export const WEEKS_PER_MONTH = 4;
-
 /**
  * عدد الحصص الفعلي في الشهر، بالترتيب ده:
  *  1) تحديد صريح على الكورس (`course.sessionsPerMonth`)
- *  2) محسوب من جدول المجموعة: عدد الأيام في الأسبوع × 4
- *  3) الإعداد العام (`settings.sessionsPerMonth`)
- *  4) الافتراضي 8
+ *  2) الإعداد العام (`settings.sessionsPerMonth`)
+ *  3) الافتراضي 8 (`SESSIONS_PER_MONTH`)
  *
- * ده بيحل مشكلة إن كل الكورسات كانت بتتحاسب على 8 حصص حتى لو المجموعة
- * بتقابل مرة واحدة في الأسبوع (4 حصص) — فالقسط والتناسب كانوا بيظلموا الطالب.
+ * ملاحظة: الاستنتاج من جدول المجموعة (عدد الأيام في الأسبوع × 4) اتشال نهائياً،
+ * لأنه كان بيخلي مجموعة بتقابل يوم واحد في الأسبوع تطلع 4 حصص بس — فاختيار
+ * «بدأ من الحصة» كان بيعرض 4 اختيارات بدل 8. البارامتر `scheduleDays` لسه
+ * موجود في التوقيع عشان الاستدعاءات القديمة ما تتكسرش، بس بيتم تجاهله.
  */
 export function resolveSessionsPerMonth(opts: {
   courseSessionsPerMonth?: number | null;
+  /** @deprecated بيتم تجاهله — متسيب في التوقيع للتوافق مع الاستدعاءات الحالية */
   scheduleDays?: string[][] | null;
   settingSessionsPerMonth?: number | null;
 }): number {
-  const { courseSessionsPerMonth, scheduleDays, settingSessionsPerMonth } = opts;
+  const { courseSessionsPerMonth, settingSessionsPerMonth } = opts;
 
   if (courseSessionsPerMonth && courseSessionsPerMonth > 0) {
     return Math.round(courseSessionsPerMonth);
-  }
-
-  // عدد الأيام المختلفة في الأسبوع من جدول المجموعة
-  const days = new Set<string>();
-  (scheduleDays || []).forEach(list => (list || []).forEach(d => {
-    const key = String(d || '').trim().toLowerCase();
-    if (key) days.add(key);
-  }));
-  if (days.size > 0) {
-    return Math.max(1, days.size * WEEKS_PER_MONTH);
   }
 
   if (settingSessionsPerMonth && settingSessionsPerMonth > 0) {
