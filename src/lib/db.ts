@@ -1112,7 +1112,6 @@ export async function enrollStudent(
     // عدد الحصص الفعلي في الشهر بيحدد تناسب الالتحاق في نص الكورس
     const sessionsPerMonth = resolveSessionsPerMonth({
       courseSessionsPerMonth: course?.sessionsPerMonth,
-      scheduleDays: group.schedule?.map(s => s.days),
       settingSessionsPerMonth: policy.sessionsPerMonth,
     });
 
@@ -1644,7 +1643,6 @@ export async function transferStudent(opts: {
   const transferPolicy = await getBillingPolicy();
   const toSessionsPerMonth = resolveSessionsPerMonth({
     courseSessionsPerMonth: course?.sessionsPerMonth,
-    scheduleDays: toGroup.schedule?.map(s => s.days),
     settingSessionsPerMonth: transferPolicy.sessionsPerMonth,
   });
   // شهر واحد في المجموعة الجديدة (نفس قاعدة التسجيل) — ولو دخل من نص الشهر يتحاسب على الحصص الباقية

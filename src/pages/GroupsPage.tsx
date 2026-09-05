@@ -11,6 +11,7 @@ import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, enrollStudent, unenro
 import { getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { resolveSessionsPerMonth } from '../lib/billing';
+import SessionPicker from '../components/SessionPicker';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
@@ -362,39 +363,39 @@ export default function GroupsPage() {
       {/* View Students Modal */}
       {viewGroup && (
         <Modal isOpen={!!viewGroup} onClose={() => { setViewGroup(null); setSelectedStudentToAdd(''); setPaymentAmountToAdd(''); setStartSessionToAdd(1); }} title={`طلاب مجموعة: ${viewGroup.name}`} size="md">
-          <div className="mb-4 flex flex-col sm:flex-row gap-2">
-            <select value={selectedStudentToAdd} onChange={e => setSelectedStudentToAdd(e.target.value)}
-              className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
-              <option value="">اختر طالباً للإضافة...</option>
-              {students.filter(s => !viewGroup.studentIds.includes(s.id)).map(s => (
-                <option key={s.id} value={s.id}>{s.name} - {s.parentPhone}</option>
-              ))}
-            </select>
-            {(() => {
+          <div className="mb-4 space-y-2">
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select value={selectedStudentToAdd} onChange={e => setSelectedStudentToAdd(e.target.value)}
+                className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
+                <option value="">اختر طالباً للإضافة...</option>
+                {students.filter(s => !viewGroup.studentIds.includes(s.id)).map(s => (
+                  <option key={s.id} value={s.id}>{s.name} - {s.parentPhone}</option>
+                ))}
+              </select>
+              <input type="number" placeholder="دفع دلوقتي" min="0"
+                value={paymentAmountToAdd} onChange={e => setPaymentAmountToAdd(e.target.value === '' ? '' : +e.target.value)}
+                className="w-full sm:w-28 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+              <button onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
+                className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors"
+                style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
+                إضافة
+              </button>
+            </div>
+            {selectedStudentToAdd && (() => {
               const vc = courses.find(c => c.id === viewGroup.courseId);
               const n = resolveSessionsPerMonth({
                 courseSessionsPerMonth: vc?.sessionsPerMonth,
-                scheduleDays: viewGroup.schedule?.map(x => x.days),
                 settingSessionsPerMonth: settings?.sessionsPerMonth,
               });
               return (
-                <select value={startSessionToAdd} onChange={e => setStartSessionToAdd(+e.target.value)}
-                  title="بدأ من الحصة"
-                  className="w-full sm:w-auto px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
-                  {Array.from({ length: n }, (_, i) => i + 1).map(k => (
-                    <option key={k} value={k}>{k === 1 ? 'من أول حصة' : `من الحصة ${k}/${n}`}</option>
-                  ))}
-                </select>
+                <SessionPicker
+                  size="sm"
+                  sessions={n}
+                  value={startSessionToAdd}
+                  onChange={setStartSessionToAdd}
+                />
               );
             })()}
-            <input type="number" placeholder="دفع دلوقتي" min="0"
-              value={paymentAmountToAdd} onChange={e => setPaymentAmountToAdd(e.target.value === '' ? '' : +e.target.value)}
-              className="w-full sm:w-28 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-            <button onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
-              className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-              إضافة
-            </button>
           </div>
           <div className="space-y-2">
             {viewGroup.studentIds.length === 0 ? (

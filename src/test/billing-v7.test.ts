@@ -80,7 +80,7 @@ describe('computeDueDate — يوم الاستحقاق الموحّد', () => {
   });
 });
 
-describe('resolveSessionsPerMonth — عدد الحصص مش ثابت', () => {
+describe('resolveSessionsPerMonth — 8 حصص افتراضياً', () => {
   it('الافتراضي 8 لما مفيش أي مصدر', () => {
     expect(resolveSessionsPerMonth({})).toBe(8);
   });
@@ -89,29 +89,21 @@ describe('resolveSessionsPerMonth — عدد الحصص مش ثابت', () => {
     expect(resolveSessionsPerMonth({ courseSessionsPerMonth: 12, scheduleDays: [['saturday']] })).toBe(12);
   });
 
-  it('من جدول المجموعة: يومين في الأسبوع × 4 أسابيع = 8', () => {
+  it('جدول المجموعة بيتجاهل تماماً — أي جدول بيرجع 8', () => {
+    expect(resolveSessionsPerMonth({ scheduleDays: [['monday']] })).toBe(8);
     expect(resolveSessionsPerMonth({ scheduleDays: [['saturday', 'tuesday']] })).toBe(8);
+    expect(resolveSessionsPerMonth({ scheduleDays: [['saturday'], ['monday'], ['wednesday']] })).toBe(8);
+    expect(resolveSessionsPerMonth({ scheduleDays: [['saturday', 'saturday']] })).toBe(8);
+    expect(resolveSessionsPerMonth({ scheduleDays: [[]] })).toBe(8);
   });
 
-  it('يوم واحد في الأسبوع = 4 حصص (مش 8)', () => {
-    expect(resolveSessionsPerMonth({ scheduleDays: [['monday']] })).toBe(4);
-  });
-
-  it('ثلاث أيام = 12 حصة', () => {
-    expect(resolveSessionsPerMonth({ scheduleDays: [['saturday'], ['monday'], ['wednesday']] })).toBe(12);
-  });
-
-  it('التكرار في الجدول ما بيضاعفش العدد', () => {
-    expect(resolveSessionsPerMonth({ scheduleDays: [['saturday', 'saturday']] })).toBe(4);
-  });
-
-  it('الإعداد العام بيستخدم لما مفيش كورس ولا جدول', () => {
+  it('الإعداد العام بيستخدم لما الكورس مش محدد له عدد', () => {
     expect(resolveSessionsPerMonth({ settingSessionsPerMonth: 6 })).toBe(6);
+    expect(resolveSessionsPerMonth({ scheduleDays: [['monday']], settingSessionsPerMonth: 6 })).toBe(6);
   });
 
   it('قيم فاسدة بتتجاهل', () => {
     expect(resolveSessionsPerMonth({ courseSessionsPerMonth: 0, settingSessionsPerMonth: -2 })).toBe(8);
-    expect(resolveSessionsPerMonth({ scheduleDays: [[]] })).toBe(8);
   });
 });
 
