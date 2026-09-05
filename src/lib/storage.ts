@@ -64,9 +64,20 @@ export const INTERNAL_CLOUD_FIELDS = ['tenant_id'];
  * جداول singleton (مفتاحها ثابت مثل 'main' لكل مركز) تحتاج عمود المستأجر في
  * المفتاح المركّب لأن id لوحده لا يعود فريداً عبر المستأجرين.
  */
+// الجداول اللي مفتاحها الأساسي مركّب (id, tenant_id) في السحابة (المعزولة
+// بعمود مستأجِر والمُنشأة حديثاً) تحتاج عمود المستأجِر في هدف التعارض، لأن
+// id لوحده يتكرر عبر المستأجرين/المراكز. الجداول القديمة مفتاحها id (UUID) فريد.
 const CONFLICT_TARGET: Record<string, string> = {
   settings: 'id,tenant_id',
   counters: 'id,tenant_id',
+  payroll: 'id,tenant_id',
+  teacher_advances: 'id,tenant_id',
+  refunds: 'id,tenant_id',
+  cashbox_sessions: 'id,tenant_id',
+  message_templates: 'id,tenant_id',
+  message_logs: 'id,tenant_id',
+  waitlist: 'id,tenant_id',
+  audit_logs: 'id,tenant_id',
 };
 
 /** حجم الدفعة في الـ upsert (تجنّب طلبات ضخمة) */
