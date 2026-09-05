@@ -696,3 +696,136 @@ END $$;
 
 -- users: يظل مقفولاً بالكامل (RLS مفعّل، لا سياسات = رفض الكل). كلمات السر
 -- الخاصة بالنظام محلية (IndexedDB) ولا تُزامَن.
+
+-- =====================================================
+-- 🧩 استكمال الجداول المزامَنة الناقصة — نسخة 2026-09
+-- =====================================================
+-- الجداول دي مستخدمة في التطبيق (شوف CLOUD_TABLES في src/lib/storage.ts) لكنها
+-- كانت ناقصة من ملف الـ schema، فالمزامنة كانت بتفشل في رفعها والنسخة السحابية
+-- ناقصة. بنضيفها هنا **معزولة من أول يوم**: tenant_id + RLS + trigger + سياسة
+-- tenant_iso مباشرةً، بلا قيود FK/CHECK (مرنة) حتى لا تفشل بترتيب الجداول أو
+-- ببيانات محلية. الأعمدة بصيغة snake_case المطابقة لما يرسله العميل.
+-- ملاحظة: المعرّفات TEXT (العميل يولّد nanoid/string) وليست UUID.
+-- =====================================================
+
+-- المرتّبات الشهرية للمدرسين
+CREATE TABLE IF NOT EXISTS payroll (
+  id TEXT,
+  teacher_id TEXT, teacher_name TEXT, period TEXT, model TEXT,
+  base DECIMAL(12,2) DEFAULT 0, base_label TEXT,
+  gross DECIMAL(12,2) DEFAULT 0, deductions DECIMAL(12,2) DEFAULT 0,
+  advances DECIMAL(12,2) DEFAULT 0, net DECIMAL(12,2) DEFAULT 0,
+  paid_amount DECIMAL(12,2) DEFAULT 0, status TEXT,
+  lines JSONB DEFAULT '[]', expense_id TEXT, notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  tenant_id UUID NOT NULL
+);
+
+-- سلف/عهد المدرسين
+CREATE TABLE IF NOT EXISTS teacher_advances (
+  id TEXT,
+  teacher_id TEXT, amount DECIMAL(12,2) DEFAULT 0, date TEXT, reason TEXT,
+  notes TEXT, settled_in_period TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  tenant_id UUID NOT NULL
+);
+
+-- المرتجعات
+CREATE TABLE IF NOT EXISTS refunds (
+  id TEXT,
+  student_id TEXT, payment_id TEXT, group_id TEXT,
+  amount DECIMAL(12,2) DEFAULT 0, reason TEXT, method TEXT, date TEXT,
+  user_id TEXT, username TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  tenant_id UUID NOT NULL
+);
+
+-- ورديات تقفيل الخزينة
+CREATE TABLE IF NOT EXISTS cashbox_sessions (
+  id TEXT,
+  date TEXT, status TEXT, opened_at TEXT, opened_by TEXT, opened_by_name TEXT,
+  opening_balance DECIMAL(12,2) DEFAULT 0, closed_at TEXT, closed_by TEXT,
+  closed_by_name TEXT, expected_cash DECIMAL(12,2), counted_cash DECIMAL(12,2),
+  difference DECIMAL(12,2), by_method JSONB DEFAULT '{}', notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  tenant_id UUID NOT NULL
+);
+
+-- قوالب الرسائل الجاهزة
+CREATE TABLE IF NOT EXISTS message_templates (
+  id TEXT,
+  name TEXT, kind TEXT, body TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  tenant_id UUID NOT NULL
+);
+
+-- سجل الرسائل (واتساب/إلخ)
+CREATE TABLE IF NOT EXISTS message_logs (
+  id TEXT,
+  student_id TEXT, student_name TEXT, phone TEXT, kind TEXT, channel TEXT,
+  text TEXT, sent BOOLEAN DEFAULT FALSE, date TEXT,
+  user_id TEXT, username TEXT, notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  tenant_id UUID NOT NULL
+);
+
+-- قائمة انتظار المجموعات المكتملة
+CREATE TABLE IF NOT EXISTS waitlist (
+  id TEXT,
+  group_id TEXT, student_id TEXT, added_at TEXT, priority INTEGER DEFAULT 0,
+  notes TEXT, status TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  tenant_id UUID NOT NULL
+);
+
+-- سجل التدقيق/المراجعة
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id TEXT,
+  user_id TEXT, username TEXT, action TEXT, entity TEXT, entity_id TEXT,
+  details TEXT, timestamp TEXT, ip TEXT,
+  tenant_id UUID NOT NULL
+);
+
+-- عدّادات تسلسلية (ترقيم الإيصالات) — مفتاحه 'receipts' لكل مركز
+CREATE TABLE IF NOT EXISTS counters (
+  id TEXT,
+  value INTEGER DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT NOW(),
+  tenant_id UUID NOT NULL
+);
+
+-- RLS + trigger + سياسة عزل لكل الجداول الجديدة (idempotent)
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOR t IN SELECT unnest(ARRAY[
+    'payroll','teacher_advances','refunds','cashbox_sessions',
+    'message_templates','message_logs','waitlist','audit_logs','counters'
+  ])
+  LOOP
+    -- مفتاح مركّب (id, tenant_id) فريد عبر المستأجرين (id لوحده يتكرر عبر المراكز)
+    EXECUTE format('ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I', t, t||'_pkey');
+    EXECUTE format('ALTER TABLE %I ADD CONSTRAINT %I PRIMARY KEY (id, tenant_id)',
+                   t, t||'_pkey');
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('DROP TRIGGER IF EXISTS trg_set_tenant_%I ON %I', t, t);
+    EXECUTE format(
+      'CREATE TRIGGER trg_set_tenant_%I BEFORE INSERT OR UPDATE ON %I
+         FOR EACH ROW EXECUTE FUNCTION enforce_tenant_id()', t, t);
+    EXECUTE format('DROP POLICY IF EXISTS %I ON %I', 'tenant_iso_'||t, t);
+    EXECUTE format(
+      'CREATE POLICY %I ON %I FOR ALL TO authenticated
+         USING (tenant_id = auth.uid())
+         WITH CHECK (tenant_id = auth.uid())',
+      'tenant_iso_'||t, t);
+  END LOOP;
+END $$;
+
+-- صلاحيات الدور (Supabase يمنحها تلقائياً للجداول القديمة؛ نضيفها للجديدة)
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT USAGE ON SCHEMA public TO authenticated, anon;
