@@ -169,6 +169,8 @@ export interface TeacherAdvance {
   amount: number;
   date: string;
   reason?: string;
+  /** ملاحظات (مثل تتبّع الخصم الجزئي عند ترحيل باقي السلفة) */
+  notes?: string;
   /** اتخصمت من أنهي شهر (YYYY-MM) */
   settledInPeriod?: string;
   createdAt: string;
@@ -1689,7 +1691,33 @@ export async function transferStudent(opts: {
   await syncGroupStatus(fromGroupId);
   await syncGroupStatus(toGroupId);
 
-  // 6) إعادة توزيع المدفوع على الأقساط الجديدة + تحديث أرصدة الطالب
+  // 6) ترحيل الدفعة غير المُستهلكة من المجموعة القديمة إلى الجديدة.
+  //    أقساط القديمة ملغاة؛ أي مبلغ دُفع ولم يُستهلك (الرصيد المرحّل credit)
+  //    يجب أن يغطّي شهر المجموعة الجديدة، وإلا الطالب يظهر مديناً رغم دفعه.
+  //    ننقل الدفعة الاشتراكية الأقدم فالأحدث حتى نُغطّي مبلغ الترحيل،
+  //    ونربطها بالمجموعة الجديدة مع مذكرة تتبّع للمراجعة.
+  const allPayments = await dbGetByIndex<Payment>('payments', 'by-studentId', studentId);
+  const oldSubPayments = allPayments
+    .filter(p => isCountedPayment(p) && p.type === 'subscription' && p.groupId === fromGroupId)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
+
+  let toRelocate = Math.round(credit * 100) / 100;
+  for (const p of oldSubPayments) {
+    if (toRelocate <= 0) break;
+    await dbPut('payments', {
+      ...p,
+      groupId: toGroupId,
+      courseId: toGroup.courseId,
+      notes: p.notes
+        ? `${p.notes} — مُرحّلة من ${fromGroup.name} إلى ${toGroup.name}`
+        : `مرحّلة من ${fromGroup.name} إلى ${toGroup.name}`,
+      installmentIds: [],
+      updatedAt: now,
+    });
+    toRelocate = Math.round((toRelocate - (p.amount || 0)) * 100) / 100;
+  }
+
+  // 7) إعادة توزيع المدفوع على الأقساط الجديدة + تحديث أرصدة الطالب
   await rebuildInstallmentsFromPayments(studentId);
 
   const after = await getStudentBalance(studentId);
@@ -2331,7 +2359,7 @@ export async function recalculateStudentTotalPaid(studentId: string): Promise<vo
   // نرجع للحساب التقريبي القديم عشان الأرقام ما تتغيرش فجأة على المستخدم.
   const balance = installments.length > 0
     ? computeBalance({ installments, payments, refunds })
-    : await computeLegacyBalance(student, payments);
+    : await computeLegacyBalance(student, payments, refunds);
 
   await dbPut('students', {
     ...student,
@@ -2357,7 +2385,8 @@ export async function getStudentRefunds(studentId: string): Promise<Refund[]> {
  */
 async function computeLegacyBalance(
   student: Student,
-  payments: Payment[]
+  payments: Payment[],
+  refunds: Refund[] = []
 ): Promise<BalanceSummary> {
   let totalOwed = 0;
   const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-studentId', student.id);
@@ -2389,7 +2418,10 @@ async function computeLegacyBalance(
     .reduce((sum, p) => sum + p.amount, 0);
   totalOwed += extraOwed;
 
-  const totalPaid = payments.filter(isCountedPayment).reduce((sum, p) => sum + p.amount, 0);
+  const grossPaid = payments.filter(isCountedPayment).reduce((sum, p) => sum + p.amount, 0);
+  // الاستردادات تقلّل المدفوع الفعلي (نفس منطق computeBalance)
+  const refunded = refunds.filter(r => !r.deleted).reduce((sum, r) => sum + (r.amount || 0), 0);
+  const totalPaid = Math.max(0, grossPaid - refunded);
 
   return {
     owed: Math.round(totalOwed * 100) / 100,

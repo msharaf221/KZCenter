@@ -8,7 +8,7 @@ import { dbGetAll, getRefunds, installmentRemaining } from '../lib/db';
 import type { Student, Teacher, Course, Group, Payment, Expense, Refund, Installment } from '../lib/db';
 import { formatCurrency, formatDate, toCSV, downloadCSV } from '../lib/utils';
 import { calcGroupProfitability, type GroupProfit } from '../lib/payroll';
-import { debtAging, upcomingDues, AGING_RANGES } from '../lib/billing';
+import { debtAging, upcomingDues, AGING_RANGES, isCountedPayment } from '../lib/billing';
 import { useApp } from '../contexts/AppContext';
 import { Download, Printer, Calendar, TrendingUp, Clock, AlertTriangle } from 'lucide-react';
 import { notify } from '../lib/notifications';
@@ -116,8 +116,10 @@ export default function ReportsPage() {
   for (let i = 5; i >= 0; i--) {
     const m = dayjs().subtract(i, 'month');
     const key = m.format('YYYY-MM');
-    const revenue = payments.filter(p => p.status === 'paid' && p.date.startsWith(key)).reduce((s, p) => s + p.amount, 0);
-    const expense = expenses.filter(e => e.date.startsWith(key)).reduce((s, e) => s + e.amount, 0);
+    const gross = payments.filter(p => isCountedPayment(p) && p.date.startsWith(key)).reduce((s, p) => s + p.amount, 0);
+    const monthRefunds = refunds.filter(r => !r.deleted && (r.date || '').startsWith(key)).reduce((s, r) => s + (r.amount || 0), 0);
+    const revenue = Math.max(0, gross - monthRefunds);
+    const expense = expenses.filter(e => !e.deleted && e.date.startsWith(key)).reduce((s, e) => s + e.amount, 0);
     monthlyData.push({ month: m.format('MMM'), revenue, expense, profit: revenue - expense });
   }
 
@@ -130,7 +132,7 @@ export default function ReportsPage() {
 
   // Expense categories
   const expenseCategories: Record<string, number> = {};
-  expenses.forEach(e => { expenseCategories[e.category] = (expenseCategories[e.category] || 0) + e.amount; });
+  expenses.filter(e => !e.deleted).forEach(e => { expenseCategories[e.category] = (expenseCategories[e.category] || 0) + e.amount; });
   const expensePieData = Object.entries(expenseCategories).map(([cat, amount]) => ({
     name: { salaries: 'رواتب', bills: 'فواتير', maintenance: 'صيانة', purchases: 'مشتريات', rent: 'إيجار', other: 'أخرى' }[cat] || cat,
     value: amount,
@@ -140,9 +142,9 @@ export default function ReportsPage() {
   // ===== أرقام الفترة المختارة =====
   const inRange = (date: string) => date >= from && date <= to;
   /** الإيراد المحسوب = المدفوع غير الملغي − الاستردادات (مش مجرد sum للدفعات) */
-  const rangePayments = payments.filter(p => p.status === 'paid' && !p.voided && inRange(p.date));
-  const rangeRefunds = refunds.filter(r => inRange(r.date));
-  const rangeExpenses = expenses.filter(e => inRange(e.date));
+  const rangePayments = payments.filter(p => isCountedPayment(p) && inRange(p.date));
+  const rangeRefunds = refunds.filter(r => !r.deleted && inRange(r.date));
+  const rangeExpenses = expenses.filter(e => !e.deleted && inRange(e.date));
 
   const totalRevenue = rangePayments.reduce((s, p) => s + p.amount, 0);
   const totalRefunds = rangeRefunds.reduce((s, r) => s + r.amount, 0);

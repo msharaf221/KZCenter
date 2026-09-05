@@ -68,7 +68,7 @@ export default function SheetImportDialog({ open, onClose, onDone }: Props) {
     setFileName(file.name);
     try {
       const buf = await file.arrayBuffer();
-      const result = parseSheetBuffer(buf);
+      const result = await parseSheetBuffer(buf);
       if (result.teachers.length === 0) {
         notify.error('مفيش مدرسين أو طلاب في الشيت — اتأكد إنه نفس شكل شيت المركز');
         setParsed(null);

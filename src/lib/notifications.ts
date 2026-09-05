@@ -226,3 +226,18 @@ export function notifyPaymentReceived(studentName: string, amount: number) {
 export function notifyAttendanceSaved(groupName: string, count: number) {
   notify.success(`تم حفظ حضور ${count} طالب في ${groupName}`);
 }
+
+/** تنبيه غياب متكرر (3+ متتالية) — مؤشر انسحاب محتمل */
+export function notifyRepeatedAbsence(studentName: string, groupName: string, streak: number) {
+  if (!appSettings.notifyAbsence) return;
+
+  notify.error(`⚠️ غياب متكرر: ${studentName} غاب ${streak} مرات متتالية في ${groupName}`);
+  showBrowserNotification(
+    'غياب متكرر 🚨',
+    `${studentName} غاب ${streak} مرات متتالية في ${groupName} — يُرجى التواصل مع ولي الأمر`
+  );
+  saveAppNotification({
+    title: 'غياب متكرر 🚨',
+    message: `${studentName} غاب ${streak} مرات متتالية في ${groupName} — تواصل مع ولي الأمر`,
+  });
+}

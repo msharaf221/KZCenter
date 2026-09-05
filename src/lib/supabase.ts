@@ -9,6 +9,9 @@ const ENV_SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string |
 
 const STORAGE_KEY_URL = 'educenter_supabase_url';
 const STORAGE_KEY_KEY = 'educenter_supabase_key';
+/** اعتماد حساب المركز في السحابة (حساب Supabase Auth واحد لكل مركز = tenant) */
+const STORAGE_KEY_EMAIL = 'educenter_supabase_email';
+const STORAGE_KEY_PASSWORD = 'educenter_supabase_password';
 
 // Get config from localStorage (set via Settings UI) or env vars
 function getSupabaseUrl(): string | undefined {
@@ -66,6 +69,29 @@ export function getStoredSupabaseConfig(): { url: string; anonKey: string } {
     url: localStorage.getItem(STORAGE_KEY_URL) || ENV_SUPABASE_URL || '',
     anonKey: localStorage.getItem(STORAGE_KEY_KEY) || ENV_SUPABASE_ANON_KEY || '',
   };
+}
+
+// ---- اعتماد حساب المركز (tenant) في السحابة ----
+// التطبيق local-first؛ السحابة نسخة احتياطية/مزامنة لكل مركز. حساب المركز
+// الواحد في Supabase Auth هو الـ tenant: كل صف متاح لصاحبه فقط (RLS).
+
+export function saveCloudCredentials(email: string, password: string): void {
+  try {
+    if (email) localStorage.setItem(STORAGE_KEY_EMAIL, email.trim());
+    if (password) localStorage.setItem(STORAGE_KEY_PASSWORD, password);
+  } catch { /* ignore */ }
+}
+
+export function getCloudCredentials(): { email: string; password: string } {
+  return {
+    email: (localStorage.getItem(STORAGE_KEY_EMAIL) || '').trim(),
+    password: localStorage.getItem(STORAGE_KEY_PASSWORD) || '',
+  };
+}
+
+export function clearCloudCredentials(): void {
+  localStorage.removeItem(STORAGE_KEY_EMAIL);
+  localStorage.removeItem(STORAGE_KEY_PASSWORD);
 }
 
 /**
@@ -315,18 +341,19 @@ export const SQL_SCHEMA: string = schemaSql;
 
 // ==================== CLOUD SESSION ====================
 /**
- * سياسات RLS في supabase_schema.sql بترفض دور `anon` تماماً (وده مقصود:
- * الـ anon key مبني في كود العميل فأي حد يقدر يستخدمه). عشان كده التطبيق لازم
- * يعمل Supabase session قبل أي مزامنة — بنستخدم **Anonymous Sign-In**.
+ * سياسات RLS في supabase_schema.sql (قسم «عزل المستأجرين») بترفض دور `anon`
+ * تماماً، وكل صف متاح فقط لصاحبه (`tenant_id = auth.uid()`). عشان كده
+ * التطبيق لازم يعمل **تسجيل دخول بحساب المركز** (بريد + كلمة مرور) في Supabase
+ * قبل أي مزامنة.
  *
- * المطلوب تفعيله في Supabase Dashboard:
- *   Authentication → Sign In / Up → Anonymous Sign-Ins → ON
+ * المطلوب في Supabase Dashboard (مرة واحدة):
+ *   1) Authentication → Providers → Email → ON.
+ *   2) اعمل مستخدم واحد للمركز (Add user) بالبريد وكلمة المرور.
+ *   3) شغّل أحدث supabase_schema.sql (قسم عزل المستأجرين).
  */
 export interface CloudSessionResult {
   ok: boolean;
   error?: string;
-  /** هل الجلسة anonymous (مش مستخدم مسجّل في Supabase Auth) */
-  anonymous?: boolean;
 }
 
 let sessionPromise: Promise<CloudSessionResult> | null = null;
@@ -342,23 +369,34 @@ export async function ensureCloudSession(force = false): Promise<CloudSessionRes
 
   sessionPromise = (async (): Promise<CloudSessionResult> => {
     try {
+      // جلسة قائمة ومصادَق عليها من قبل؟
       const { data } = await client.auth.getSession();
-      if (data?.session) {
-        return { ok: true, anonymous: !data.session.user?.email };
+      if (data?.session?.user?.id) {
+        return { ok: true };
       }
 
-      const { data: signed, error } = await client.auth.signInAnonymously();
+      // تسجيل دخول بحساب المركز
+      const { email, password } = getCloudCredentials();
+      if (!email || !password) {
+        return {
+          ok: false,
+          error:
+            'ضع بريد وكلمة مرور حساب المركز السحابي في الإعدادات → التخزين السحابي. ' +
+            'الأنظمة الحديثة تعزل بيانات كل مركز بحساب مستقل (Supabase Auth).',
+        };
+      }
+
+      const { data: signed, error } = await client.auth.signInWithPassword({ email, password });
       if (error || !signed?.session) {
         return {
           ok: false,
           error:
-            'فشل إنشاء جلسة سحابية. فعّل Anonymous Sign-Ins من ' +
-            'Supabase Dashboard → Authentication → Sign In / Up، وتأكد إنك شغّلت ' +
-            'أحدث نسخة من supabase_schema.sql (السياسات بترفض دور anon). ' +
+            'فشل تسجيل الدخول للسحابة. تأكد من بريد/كلمة مرور حساب المركز، وتفعيل ' +
+            'Email في Supabase Auth، وتشغيل أحدث supabase_schema.sql. ' +
             (error?.message ? `(${error.message})` : ''),
         };
       }
-      return { ok: true, anonymous: true };
+      return { ok: true };
     } catch (e) {
       return { ok: false, error: `تعذّر الاتصال بـ Supabase: ${String(e)}` };
     } finally {
@@ -368,6 +406,12 @@ export async function ensureCloudSession(force = false): Promise<CloudSessionRes
   })();
 
   return sessionPromise;
+}
+
+/** تسجيل خروج من السحابة (لا يمسّ البيانات المحلية) */
+export async function cloudSignOut(): Promise<void> {
+  const client = getSupabaseClient();
+  try { await client?.auth.signOut(); } catch { /* ignore */ }
 }
 
 // ==================== CONNECTION TEST ====================

@@ -8,8 +8,8 @@
  * دلوقتي المطابقة بالتليفون الأول، وبعدين بالاسم الموحّد، والغموض بيتسجل للمراجعة.
  */
 import 'fake-indexeddb/auto';
-import * as XLSX from 'xlsx';
 import { describe, it, expect, beforeEach } from 'vitest';
+import { buildXlsxBuffer, type SheetSpec } from './helpers/excel';
 import {
   extractPhone, parseSheetBuffer, importSheetIntoDb, foldArabic,
 } from '../lib/sheetImport';
@@ -20,17 +20,12 @@ import {
 
 const NOW = '2026-03-10T10:00:00.000Z';
 
-function makeWorkbook(sheets: { name: string; rows: (string | number | null)[][] }[]): ArrayBuffer {
-  const wb = XLSX.utils.book_new();
-  for (const s of sheets) {
-    const ws = XLSX.utils.aoa_to_sheet(s.rows.map(r => r.map(c => (c === null ? '' : c))));
-    XLSX.utils.book_append_sheet(wb, ws, s.name);
-  }
-  return XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+async function makeWorkbook(sheets: SheetSpec[]): Promise<Uint8Array> {
+  return buildXlsxBuffer(sheets);
 }
 
 /** شيت بعمود واحد ومجموعة واحدة — أبسط حالة للتركيز على منطق المطابقة */
-function sheetWithStudents(names: string[], sheetName = 'ولاء'): ArrayBuffer {
+function sheetWithStudents(names: string[], sheetName = 'ولاء'): Promise<Uint8Array> {
   return makeWorkbook([
     { name: sheetName, rows: [['s.r السبت من 4/5'], ...names.map(n => [n])] },
   ]);
@@ -65,60 +60,60 @@ beforeEach(async () => {
 });
 
 describe('extractPhone — استخراج التليفون من الخلية', () => {
-  it('اسم من غير رقم بيرجع زي ما هو', () => {
+  it('اسم من غير رقم بيرجع زي ما هو', async () => {
     expect(extractPhone('أحمد محمد علي')).toEqual({ name: 'أحمد محمد علي' });
   });
 
-  it('رقم بعد الاسم', () => {
+  it('رقم بعد الاسم', async () => {
     const r = extractPhone('أحمد محمد 01012345678');
     expect(r.phone).toBe('01012345678');
     expect(r.name).toBe('أحمد محمد');
   });
 
-  it('رقم قبل الاسم', () => {
+  it('رقم قبل الاسم', async () => {
     const r = extractPhone('01012345678 أحمد محمد');
     expect(r.phone).toBe('01012345678');
     expect(r.name).toBe('أحمد محمد');
   });
 
-  it('رقم من غير الصفر الأول', () => {
+  it('رقم من غير الصفر الأول', async () => {
     expect(extractPhone('أحمد 1012345678').phone).toBe('01012345678');
   });
 
-  it('الصيغة الدولية +20', () => {
+  it('الصيغة الدولية +20', async () => {
     expect(extractPhone('أحمد +201012345678').phone).toBe('01012345678');
     expect(extractPhone('أحمد 201012345678').phone).toBe('01012345678');
   });
 
-  it('رقم متقطع بشرط ومسافات', () => {
+  it('رقم متقطع بشرط ومسافات', async () => {
     expect(extractPhone('أحمد 010-1234-5678').phone).toBe('01012345678');
     expect(extractPhone('أحمد 010 1234 5678').phone).toBe('01012345678');
     expect(extractPhone('أحمد 010(1234)5678').phone).toBe('01012345678');
   });
 
-  it('كل شبكات الموبايل المصري', () => {
+  it('كل شبكات الموبايل المصري', async () => {
     for (const p of ['01012345678', '01112345678', '01212345678', '01512345678']) {
       expect(extractPhone(`طالب ${p}`).phone).toBe(p);
     }
   });
 
-  it('أرقام مش موبايل ما تتحسبش تليفون', () => {
+  it('أرقام مش موبايل ما تتحسبش تليفون', async () => {
     expect(extractPhone('أحمد 123').phone).toBeUndefined();
     expect(extractPhone('أحمد 0212345678').phone).toBeUndefined();   // أرضي قديم
     expect(extractPhone('أحمد 2026').phone).toBeUndefined();
   });
 
-  it('الخلية الفاضية', () => {
+  it('الخلية الفاضية', async () => {
     expect(extractPhone('')).toEqual({ name: '' });
     expect(extractPhone(undefined as unknown as string).phone).toBeUndefined();
   });
 
-  it('الاسم بيتنضف من الفواصل الزايدة', () => {
+  it('الاسم بيتنضف من الفواصل الزايدة', async () => {
     const r = extractPhone('أحمد  -  محمد   01012345678');
     expect(r.name).toBe('أحمد محمد');
   });
 
-  it('لو الخلية كلها رقم (مفيش اسم) الاسم ما يفضلش فاضي', () => {
+  it('لو الخلية كلها رقم (مفيش اسم) الاسم ما يفضلش فاضي', async () => {
     const r = extractPhone('01012345678');
     expect(r.phone).toBe('01012345678');
     expect(r.name).toBe('01012345678');
@@ -126,8 +121,8 @@ describe('extractPhone — استخراج التليفون من الخلية', (
 });
 
 describe('parseSheetBuffer — studentMeta', () => {
-  it('بيستخرج التليفونات مع الأسماء', () => {
-    const parsed = parseSheetBuffer(sheetWithStudents([
+  it('بيستخرج التليفونات مع الأسماء', async () => {
+    const parsed = await parseSheetBuffer(await sheetWithStudents([
       'أحمد محمد 01012345678',
       'منى علي',
       'سارة حسن 01198765432',
@@ -140,13 +135,13 @@ describe('parseSheetBuffer — studentMeta', () => {
     expect(parsed.studentMeta[2].phone).toBe('01198765432');
   });
 
-  it('قوائم الطلاب في المجموعات من غير أرقام (نظيفة للعرض)', () => {
-    const parsed = parseSheetBuffer(sheetWithStudents(['أحمد محمد 01012345678']));
+  it('قوائم الطلاب في المجموعات من غير أرقام (نظيفة للعرض)', async () => {
+    const parsed = await parseSheetBuffer(await sheetWithStudents(['أحمد محمد 01012345678']));
     expect(parsed.groups[0].students).toEqual(['أحمد محمد']);
   });
 
-  it('نفس الطالب في مجموعتين بيظهر مرة واحدة في meta', () => {
-    const parsed = parseSheetBuffer(makeWorkbook([
+  it('نفس الطالب في مجموعتين بيظهر مرة واحدة في meta', async () => {
+    const parsed = await parseSheetBuffer(await makeWorkbook([
       { name: 'ولاء', rows: [['s.r السبت من 4/5', 's.r الاحد من 5/6'], ['أحمد محمد 01012345678', 'أحمد محمد 01012345678']] },
     ]));
     expect(parsed.studentMeta).toHaveLength(1);
@@ -154,22 +149,22 @@ describe('parseSheetBuffer — studentMeta', () => {
     expect(parsed.uniqueStudents).toHaveLength(1);
   });
 
-  it('اسم واحد برقمين مختلفين → duplicateNames', () => {
-    const parsed = parseSheetBuffer(makeWorkbook([
+  it('اسم واحد برقمين مختلفين → duplicateNames', async () => {
+    const parsed = await parseSheetBuffer(await makeWorkbook([
       { name: 'ولاء', rows: [['s.r السبت من 4/5', 's.r الاحد من 5/6'], ['أحمد محمد 01012345678', 'أحمد محمد 01198765432']] },
     ]));
     expect(parsed.duplicateNames).toEqual(['أحمد محمد']);
   });
 
-  it('اسم من غير رقم مش duplicate', () => {
-    const parsed = parseSheetBuffer(makeWorkbook([
+  it('اسم من غير رقم مش duplicate', async () => {
+    const parsed = await parseSheetBuffer(await makeWorkbook([
       { name: 'ولاء', rows: [['s.r السبت من 4/5', 's.r الاحد من 5/6'], ['أحمد محمد', 'أحمد محمد']] },
     ]));
     expect(parsed.duplicateNames).toEqual([]);
   });
 
-  it('لو ظهر الرقم في خلية والاسم لوحده في تانية، الرقم بيتحفظ', () => {
-    const parsed = parseSheetBuffer(makeWorkbook([
+  it('لو ظهر الرقم في خلية والاسم لوحده في تانية، الرقم بيتحفظ', async () => {
+    const parsed = await parseSheetBuffer(await makeWorkbook([
       { name: 'ولاء', rows: [['s.r السبت من 4/5', 's.r الاحد من 5/6'], ['أحمد محمد', 'أحمد محمد 01012345678']] },
     ]));
     expect(parsed.studentMeta).toHaveLength(1);
@@ -181,7 +176,7 @@ describe('importSheetIntoDb — المطابقة بالتليفون', () => {
   it('طالب موجود بنفس الرقم ما يتكررش حتى لو الاسم مكتوب بشكل مختلف', async () => {
     await seedStudent({ name: 'احمد محمد علي', parentPhone: '01012345678' });
 
-    const parsed = parseSheetBuffer(sheetWithStudents(['أحمد محمد علي 01012345678']));
+    const parsed = await parseSheetBuffer(await sheetWithStudents(['أحمد محمد علي 01012345678']));
     const report = await importSheetIntoDb(parsed);
 
     expect(report.studentsCreated).toBe(0);
@@ -196,7 +191,7 @@ describe('importSheetIntoDb — المطابقة بالتليفون', () => {
   it('الرقم في خانة الطالب نفسه كمان بيتطابق', async () => {
     await seedStudent({ name: 'منى', phone: '01198765432', parentPhone: '01000000000' });
 
-    const report = await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['منى علي 01198765432'])));
+    const report = await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['منى علي 01198765432'])));
     expect(report.studentsMatchedByPhone).toBe(1);
     expect(await dbGetAll<Student>('students')).toHaveLength(1);
   });
@@ -207,14 +202,14 @@ describe('importSheetIntoDb — المطابقة بالتليفون', () => {
     for (const written of ['أحمد محمد +201012345678', 'أحمد محمد 1012345678', 'أحمد محمد 010-1234-5678']) {
       await clearAll();
       await seedStudent({ name: 'أحمد', parentPhone: '01012345678' });
-      const report = await importSheetIntoDb(parseSheetBuffer(sheetWithStudents([written])));
+      const report = await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents([written])));
       expect(report.studentsMatchedByPhone, written).toBe(1);
       expect(report.studentsCreated, written).toBe(0);
     }
   });
 
   it('طالب جديد برقم حقيقي بيتحفظ رقمه (مش placeholder)', async () => {
-    const report = await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['طالب جديد 01099998888'])));
+    const report = await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['طالب جديد 01099998888'])));
     expect(report.studentsCreated).toBe(1);
 
     const [student] = await dbGetAll<Student>('students');
@@ -224,14 +219,14 @@ describe('importSheetIntoDb — المطابقة بالتليفون', () => {
   });
 
   it('طالب جديد من غير رقم بياخد placeholder وملاحظة توضح', async () => {
-    await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['طالب من غير رقم'])));
+    await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['طالب من غير رقم'])));
     const [student] = await dbGetAll<Student>('students');
     expect(student.phone).toMatch(/^0100000\d{4}$/);
     expect(student.notes).toContain('placeholder');
   });
 
   it('الـ placeholders بتتسلسل وما تتكررش', async () => {
-    await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['واحد', 'اتنين', 'تلاتة'])));
+    await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['واحد', 'اتنين', 'تلاتة'])));
     const phones = (await dbGetAll<Student>('students')).map(s => s.phone);
     expect(new Set(phones).size).toBe(3);
   });
@@ -240,7 +235,7 @@ describe('importSheetIntoDb — المطابقة بالتليفون', () => {
 describe('importSheetIntoDb — المطابقة بالاسم', () => {
   it('اسم موجود بيتطابق (مفيش تكرار)', async () => {
     await seedStudent({ name: 'ليلي صلاح احمد محمد' });
-    const report = await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['ليلي صلاح احمد محمد'])));
+    const report = await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['ليلي صلاح احمد محمد'])));
 
     expect(report.studentsExisting).toBe(1);
     expect(report.studentsCreated).toBe(0);
@@ -248,7 +243,7 @@ describe('importSheetIntoDb — المطابقة بالاسم', () => {
     expect(await dbGetAll<Student>('students')).toHaveLength(1);
   });
 
-  it('التوحيد بيصلح الهمزات والتاء المربوطة والي', () => {
+  it('التوحيد بيصلح الهمزات والتاء المربوطة والي', async () => {
     expect(foldArabic('أحمد')).toBe(foldArabic('احمد'));
     expect(foldArabic('فاطمة')).toBe(foldArabic('فاطمه'));
     expect(foldArabic('على')).toBe(foldArabic('علي'));
@@ -257,20 +252,20 @@ describe('importSheetIntoDb — المطابقة بالاسم', () => {
 
   it('اسم موجود بهمْزة مختلفة بيتطابق', async () => {
     await seedStudent({ name: 'احمد محمد' });
-    const report = await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['أحمد محمد'])));
+    const report = await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['أحمد محمد'])));
     expect(report.studentsExisting).toBe(1);
     expect(report.studentsCreated).toBe(0);
   });
 
   it('المسافات الزايدة ما تمنعش المطابقة', async () => {
     await seedStudent({ name: 'أحمد   محمد' });
-    const report = await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['أحمد محمد'])));
+    const report = await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['أحمد محمد'])));
     expect(report.studentsCreated).toBe(0);
   });
 
   it('اسم مختلف = طالب جديد', async () => {
     await seedStudent({ name: 'أحمد محمد' });
-    const report = await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['منى علي'])));
+    const report = await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['منى علي'])));
     expect(report.studentsCreated).toBe(1);
     expect(await dbGetAll<Student>('students')).toHaveLength(2);
   });
@@ -281,7 +276,7 @@ describe('importSheetIntoDb — الأسماء المكررة (الغموض)', (
     await seedStudent({ name: 'أحمد محمد', parentPhone: '01000000001' });
     await seedStudent({ name: 'أحمد محمد', parentPhone: '01000000002' });
 
-    const report = await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['أحمد محمد'])));
+    const report = await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['أحمد محمد'])));
 
     expect(report.studentsCreated).toBe(0);
     expect(report.studentsExisting).toBe(1);
@@ -294,7 +289,7 @@ describe('importSheetIntoDb — الأسماء المكررة (الغموض)', (
     const second = await seedStudent({ name: 'أحمد محمد', parentPhone: '01000000002' });
     await seedStudent({ name: 'أحمد محمد', parentPhone: '01000000001' });
 
-    const report = await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['أحمد محمد 01000000002'])));
+    const report = await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['أحمد محمد 01000000002'])));
 
     expect(report.ambiguousStudents).toEqual([]);
     expect(report.studentsMatchedByPhone).toBe(1);
@@ -308,7 +303,7 @@ describe('importSheetIntoDb — الأسماء المكررة (الغموض)', (
     await seedStudent({ name: 'منى علي', parentPhone: '01000000003' });
     await seedStudent({ name: 'منى علي', parentPhone: '01000000004' });
 
-    const report = await importSheetIntoDb(parseSheetBuffer(makeWorkbook([
+    const report = await importSheetIntoDb(await parseSheetBuffer(await makeWorkbook([
       { name: 'ولاء', rows: [['s.r السبت من 4/5', 's.r الاحد من 5/6'], ['منى علي', 'منى علي']] },
     ])));
 
@@ -316,7 +311,7 @@ describe('importSheetIntoDb — الأسماء المكررة (الغموض)', (
   });
 
   it('اسم مكرر في الشيت برقمين مختلفين → تنبيه', async () => {
-    const report = await importSheetIntoDb(parseSheetBuffer(makeWorkbook([
+    const report = await importSheetIntoDb(await parseSheetBuffer(await makeWorkbook([
       { name: 'ولاء', rows: [['s.r السبت من 4/5', 's.r الاحد من 5/6'], ['أحمد محمد 01012345678', 'أحمد محمد 01198765432']] },
     ])));
 
@@ -330,7 +325,7 @@ describe('importSheetIntoDb — التسجيلات بعد المطابقة', () 
   it('الطالب المتطابق بالتليفون بيتسجل في المجموعة', async () => {
     const existing = await seedStudent({ name: 'احمد محمد', parentPhone: '01012345678' });
 
-    await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['أحمد محمد علي 01012345678'])));
+    await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['أحمد محمد علي 01012345678'])));
 
     const enrollments = await dbGetAll<Enrollment>('enrollments');
     expect(enrollments).toHaveLength(1);
@@ -342,7 +337,7 @@ describe('importSheetIntoDb — التسجيلات بعد المطابقة', () 
 
   it('الطالب المتطابق بالاسم بيتسجل في المجموعة', async () => {
     const existing = await seedStudent({ name: 'ليلي صلاح' });
-    await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['ليلي صلاح'])));
+    await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['ليلي صلاح'])));
 
     const enrollments = await dbGetAll<Enrollment>('enrollments');
     expect(enrollments[0].studentId).toBe(existing.id);
@@ -350,8 +345,8 @@ describe('importSheetIntoDb — التسجيلات بعد المطابقة', () 
 
   it('الاستيراد مرتين idempotent (مفيش طلاب ولا مجموعات مكررة)', async () => {
     const buffer = sheetWithStudents(['أحمد محمد 01012345678', 'منى علي']);
-    const first = await importSheetIntoDb(parseSheetBuffer(buffer));
-    const second = await importSheetIntoDb(parseSheetBuffer(buffer));
+    const first = await importSheetIntoDb(await parseSheetBuffer(await buffer));
+    const second = await importSheetIntoDb(await parseSheetBuffer(await buffer));
 
     expect(first.studentsCreated).toBe(2);
     expect(second.studentsCreated).toBe(0);
@@ -361,10 +356,10 @@ describe('importSheetIntoDb — التسجيلات بعد المطابقة', () 
 
   it('استيراد تاني بنفس الرقم بيضيف المجموعة الجديدة بس', async () => {
     await seedStudent({ name: 'أحمد', parentPhone: '01012345678' });
-    await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['أحمد محمد 01012345678'])));
+    await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['أحمد محمد 01012345678'])));
     const afterFirst = await dbGetAll<Enrollment>('enrollments');
 
-    await importSheetIntoDb(parseSheetBuffer(sheetWithStudents(['أحمد محمد 01012345678'], 'هاجر')));
+    await importSheetIntoDb(await parseSheetBuffer(await sheetWithStudents(['أحمد محمد 01012345678'], 'هاجر')));
     const afterSecond = await dbGetAll<Enrollment>('enrollments');
 
     expect(afterFirst).toHaveLength(1);

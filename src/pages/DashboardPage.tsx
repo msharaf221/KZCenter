@@ -9,17 +9,19 @@ import {
 } from 'recharts';
 import Layout from '../components/layout/Layout';
 import { StatCard } from '../components/ui/Card';
-import { dbGetAll, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, getDebtors, getRenewalCandidates, Student, Teacher, Group, Course, Payment, Installment, Enrollment, DebtorRow, RenewalCandidate } from '../lib/db';
+import { dbGetAll, getGroupAttendanceForDate, getRefunds, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, getDebtors, getRenewalCandidates, Student, Teacher, Group, Course, Payment, Installment, Enrollment, DebtorRow, RenewalCandidate } from '../lib/db';
 import RenewDialog from '../components/RenewDialog';
 import { RENEWAL_STATE_LABEL } from '../lib/billing';
-import { upcomingDues, installmentRemaining } from '../lib/billing';
+import { upcomingDues, installmentRemaining, isCountedPayment } from '../lib/billing';
 import { findScheduleConflicts, type ScheduleConflict } from '../lib/schedule';
-import { formatDate, formatCurrency, getStatusLabel, getArabicDay, getWhatsAppLink } from '../lib/utils';
+import { formatDate, formatCurrency, getStatusLabel, getArabicDay } from '../lib/utils';
 import { requestNotificationPermission, showBrowserNotification } from '../lib/notifications';
 import { subscribeDebtAlert, refreshDebtAlert, DebtAlert } from '../lib/debtAlerts';
+import { getRepeatedAbsenceAlerts, type AbsenceAlert } from '../lib/absenceAlerts';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { getWhatsAppLink } from '../lib/utils';
 import { showBackupReminder } from '../lib/autoBackup';
 import dayjs from 'dayjs';
 
@@ -51,6 +53,8 @@ export default function DashboardPage() {
   const [conflicts, setConflicts] = useState<ScheduleConflict[]>([]);
   const [renewals, setRenewals] = useState<RenewalCandidate[]>([]);
   const [renewTarget, setRenewTarget] = useState<RenewalCandidate | null>(null);
+  const [absenceAlerts, setAbsenceAlerts] = useState<AbsenceAlert[]>([]);
+  const [todayAttendance, setTodayAttendance] = useState({ present: 0, absent: 0, late: 0, excused: 0, recordedGroups: 0 });
   const [loading, setLoading] = useState(true);
 
   // تنبيهات المديونيات + إشعار المتأخرات (مرة واحدة في اليوم)
@@ -94,7 +98,7 @@ export default function DashboardPage() {
   async function loadDashboard() {
     setLoading(true);
     try {
-      const [students, teachers, courses, groups, payments, installments, enrollments] = await Promise.all([
+      const [students, teachers, courses, groups, payments, installments, enrollments, refunds] = await Promise.all([
         dbGetAll<Student>('students'),
         dbGetAll<Teacher>('teachers'),
         dbGetAll<Course>('courses'),
@@ -102,24 +106,40 @@ export default function DashboardPage() {
         dbGetAll<Payment>('payments'),
         dbGetAll<Installment>('installments'),
         dbGetAll<Enrollment>('enrollments'),
+        getRefunds(),
       ]);
+
+      // الإيراد الفعلي = الدفعات المحسوبة (غير ملغاة/محذوفة) − الاستردادات
+      const validPayments = payments.filter(isCountedPayment);
+      const refundsByMonth = new Map<string, number>();
+      refunds.forEach(r => {
+        const k = (r.date || '').substring(0, 7);
+        refundsByMonth.set(k, (refundsByMonth.get(k) || 0) + (r.amount || 0));
+      });
+      const totalRefunds = refunds.filter(r => !r.deleted).reduce((s, r) => s + (r.amount || 0), 0);
 
       // Stats
       const activeStudents = students.filter(s => s.status === 'active').length;
-      const totalRevenue = payments.filter(p => p.status === 'paid').reduce((s, p) => s + p.amount, 0);
+      const totalRevenue = Math.max(0, validPayments.reduce((s, p) => s + p.amount, 0) - totalRefunds);
       const pendingPayments = payments.filter(p => p.status === 'pending' || p.status === 'late').length;
       const pendingAmount = payments.filter(p => p.status === 'pending' || p.status === 'late').reduce((s, p) => s + p.amount, 0);
 
-      // Revenue last 6 months
+      // Revenue last 6 months (net of refunds)
       const monthlyRevenue: Record<string, number> = {};
       for (let i = 5; i >= 0; i--) {
         const m = dayjs().subtract(i, 'month');
         monthlyRevenue[m.format('YYYY-MM')] = 0;
       }
-      payments.filter(p => p.status === 'paid').forEach(p => {
+      validPayments.forEach(p => {
         const key = p.date.substring(0, 7);
         if (key in monthlyRevenue) {
           monthlyRevenue[key] = (monthlyRevenue[key] || 0) + p.amount;
+        }
+      });
+      // خصم الاستردادات من إيراد شهرها
+      refundsByMonth.forEach((amt, key) => {
+        if (key in monthlyRevenue) {
+          monthlyRevenue[key] = Math.max(0, monthlyRevenue[key] - amt);
         }
       });
 
@@ -198,6 +218,28 @@ export default function DashboardPage() {
         teacherNames,
         studentNames,
       }));
+
+      // ملخص حضور النهاردة + تنبيهات الغياب المتكرر
+      try {
+        const today = dayjs().format('YYYY-MM-DD');
+        let present = 0, absent = 0, late = 0, excused = 0;
+        const groupsWithRecords = new Set<string>();
+        for (const g of groups) {
+          const recs = await getGroupAttendanceForDate(g.id, today);
+          if (recs.length > 0) groupsWithRecords.add(g.id);
+          for (const r of recs) {
+            if (r.status === 'present') present++;
+            else if (r.status === 'absent') absent++;
+            else if (r.status === 'late') late++;
+            else if (r.status === 'excused') excused++;
+          }
+        }
+        setTodayAttendance({ present, absent, late, excused, recordedGroups: groupsWithRecords.size });
+
+        setAbsenceAlerts(await getRepeatedAbsenceAlerts());
+      } catch (e) {
+        console.error('attendance summary error:', e);
+      }
     } catch (e) {
       console.error('Dashboard load error:', e);
     } finally {
@@ -414,6 +456,72 @@ export default function DashboardPage() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* ملخص حضور النهاردة */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <Users2 size={18} className="text-indigo-500" /> حضور اليوم
+            </h3>
+            <span className="text-xs text-gray-400">{todayAttendance.recordedGroups} مجموعة مسجّلة</span>
+          </div>
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { label: 'حاضر', value: todayAttendance.present, cls: 'bg-green-50 text-green-700' },
+              { label: 'غائب', value: todayAttendance.absent, cls: 'bg-red-50 text-red-700' },
+              { label: 'متأخر', value: todayAttendance.late, cls: 'bg-yellow-50 text-yellow-700' },
+              { label: 'مستأذن', value: todayAttendance.excused, cls: 'bg-blue-50 text-blue-700' },
+            ].map(it => (
+              <div key={it.label} className={`rounded-xl p-3 text-center ${it.cls}`}>
+                <p className="text-2xl font-bold">{it.value}</p>
+                <p className="text-xs font-medium mt-0.5">{it.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* تنبيهات الغياب المتكرر (3+ متتالية) — مؤشر انسحاب */}
+        {absenceAlerts.length > 0 && (
+          <div className="bg-white rounded-2xl border border-red-100 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-gray-100 flex items-center gap-2">
+              <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
+                <AlertTriangle size={18} className="text-red-500" /> غياب متكرر — تواصل مع ولي الأمر
+              </h3>
+              <span className="text-xs bg-red-50 text-red-600 px-2 py-0.5 rounded-full font-medium">
+                {absenceAlerts.length}
+              </span>
+            </div>
+            <div className="divide-y divide-gray-50">
+              {absenceAlerts.slice(0, 6).map(a => (
+                <div key={`${a.studentId}-${a.groupId}`} className="flex items-center gap-3 p-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 truncate">{a.studentName}</p>
+                    <p className="text-xs text-gray-500">{a.groupName} · آخر غياب {formatDate(a.lastDate)}</p>
+                  </div>
+                  <span className="px-2 py-1 rounded-lg bg-red-50 text-red-700 text-xs font-bold whitespace-nowrap">
+                    {a.streak} غياب متتالي
+                  </span>
+                  {a.parentPhone && (
+                    <a
+                      href={getWhatsAppLink(a.parentPhone, `السلام عليكم، نود إعلامكم بأن الطالب/ة ${a.studentName} غاب ${a.streak} مرات متتالية عن مجموعة ${a.groupName}. برجاء التواصل لتأكيد استمرارية الطالب.`)}
+                      target="_blank" rel="noopener noreferrer"
+                      className="p-2 rounded-lg bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+                      title="مراسلة ولي الأمر عبر واتساب"
+                    >
+                      <MessageCircle size={16} />
+                    </a>
+                  )}
+                  <button
+                    onClick={() => navigate(`/students/${a.studentId}`)}
+                    className="text-xs text-indigo-600 hover:underline whitespace-nowrap"
+                  >
+                    الملف
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         )}

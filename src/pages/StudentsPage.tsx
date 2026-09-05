@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users, DollarSign, FileSpreadsheet, Image as ImageIcon, AlertTriangle } from 'lucide-react';
+import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users, DollarSign, FileSpreadsheet, Image as ImageIcon, AlertTriangle, ClipboardX } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import SheetImportDialog from '../components/SheetImportDialog';
-import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus } from '../lib/db';
+import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus, Attendance } from '../lib/db';
 import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone, getContrastColor } from '../lib/utils';
 import { effectiveMonthlyPrice, proratedFirstPeriod, resolveSessionsPerMonth } from '../lib/billing';
 import SessionPicker from '../components/SessionPicker';
@@ -61,6 +61,9 @@ export default function StudentsPage() {
   const [groupFilter, setGroupFilter] = useState('');
   const [courseFilter, setCourseFilter] = useState('');
   const [balanceFilter, setBalanceFilter] = useState('');
+  const [attendanceFilter, setAttendanceFilter] = useState('');
+  /** إحصائيات الحضور لكل طالب: عدد الغياب / إجمالي السجلات — بتتحسب مرة من كل سجلات الحضور */
+  const [attStatsById, setAttStatsById] = useState<Record<string, { absent: number; total: number }>>({});
   const [courses, setCourses] = useState<Course[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
@@ -79,17 +82,29 @@ export default function StudentsPage() {
   const loadStudents = useCallback(async () => {
     setLoading(true);
     try {
-      const allGroups = await dbGetAll<Group>('groups');
-      const allCourses = await dbGetAll<Course>('courses');
+      const [allGroups, allCourses, allAttendance] = await Promise.all([
+        dbGetAll<Group>('groups'),
+        dbGetAll<Course>('courses'),
+        dbGetAll<Attendance>('attendance'),
+      ]);
       setGroups(allGroups);
       setCourses(allCourses);
+
+      // تجميع إحصائيات الحضور لكل طالب (غياب/إجمالي سجلات)
+      const stats: Record<string, { absent: number; total: number }> = {};
+      for (const a of allAttendance) {
+        if (!stats[a.studentId]) stats[a.studentId] = { absent: 0, total: 0 };
+        stats[a.studentId].total += 1;
+        if (a.status === 'absent') stats[a.studentId].absent += 1;
+      }
+      setAttStatsById(stats);
 
       const result = await dbGetPaginated<Student>('students', page, PAGE_SIZE, (s: Student) => {
         const q = debouncedSearch.toLowerCase();
         const matchSearch = !q || s.name.toLowerCase().includes(q) || s.parentPhone.includes(q);
         const matchStatus = !statusFilter || s.status === statusFilter;
         const matchGroup = !groupFilter || s.enrolledGroups?.includes(groupFilter);
-        
+
         let matchCourse = true;
         if (courseFilter) {
           const studentGroups = allGroups.filter(g => s.enrolledGroups?.includes(g.id));
@@ -102,7 +117,16 @@ export default function StudentsPage() {
           || (balanceFilter === 'debt' && remaining > 0)
           || (balanceFilter === 'settled' && remaining <= 0);
 
-        return matchSearch && matchStatus && matchGroup && matchCourse && matchBalance;
+        // فلتر الغياب: غاب على الأقل مرة / غياب متكرر (3+) / بدون سجل حضور
+        const st = stats[s.id];
+        const absentCount = st?.absent || 0;
+        const totalCount = st?.total || 0;
+        const matchAttendance = !attendanceFilter
+          || (attendanceFilter === 'absent' && absentCount > 0)
+          || (attendanceFilter === 'repeat' && absentCount >= 3)
+          || (attendanceFilter === 'none' && totalCount === 0);
+
+        return matchSearch && matchStatus && matchGroup && matchCourse && matchBalance && matchAttendance;
       });
       setStudents(result.items);
       setTotal(result.total);
@@ -110,7 +134,7 @@ export default function StudentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch, statusFilter, groupFilter, courseFilter, balanceFilter]);
+  }, [page, debouncedSearch, statusFilter, groupFilter, courseFilter, balanceFilter, attendanceFilter]);
 
   useEffect(() => {
     loadStudents();
@@ -118,7 +142,7 @@ export default function StudentsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [search, statusFilter, groupFilter, courseFilter, balanceFilter]);
+  }, [search, statusFilter, groupFilter, courseFilter, balanceFilter, attendanceFilter]);
 
   // Sync search query from the header's global search box (e.g. /students?q=...)
   useEffect(() => {
@@ -359,13 +383,25 @@ export default function StudentsPage() {
   }
 
   function exportCSV() {
-    const csv = toCSV(students as unknown as Record<string, unknown>[], [
+    const rows = students.map(s => {
+      const st = attStatsById[s.id];
+      const absent = st?.absent || 0;
+      const total = st?.total || 0;
+      return {
+        ...s,
+        absentCount: total === 0 ? '' : absent,
+        attendanceRate: total === 0 ? '' : `${Math.round(((total - absent) / total) * 100)}%`,
+      };
+    });
+    const csv = toCSV(rows as unknown as Record<string, unknown>[], [
       { key: 'name', label: 'الاسم' },
       { key: 'age', label: 'العمر' },
       { key: 'gender', label: 'النوع' },
       { key: 'phone', label: 'هاتف الطالب' },
       { key: 'parentPhone', label: 'هاتف ولي الأمر' },
       { key: 'status', label: 'الحالة' },
+      { key: 'absentCount', label: 'عدد مرات الغياب' },
+      { key: 'attendanceRate', label: 'نسبة الحضور' },
       { key: 'totalPaid', label: 'إجمالي المدفوع' },
       { key: 'totalOwed', label: 'المطلوب' },
       { key: 'notes', label: 'ملاحظات' },
@@ -508,6 +544,21 @@ export default function StudentsPage() {
               </select>
             </div>
 
+            {/* Attendance Filter */}
+            <div className="relative">
+              <ClipboardX size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <select
+                value={attendanceFilter}
+                onChange={e => setAttendanceFilter(e.target.value)}
+                className="pr-9 pl-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+              >
+                <option value="">كل الحضور</option>
+                <option value="absent">غاب مرة+</option>
+                <option value="repeat">غياب متكرر (3+)</option>
+                <option value="none">بدون سجل حضور</option>
+              </select>
+            </div>
+
             {/* Bulk delete */}
             {canEdit && selectedIds.length > 0 && (
               <button
@@ -582,6 +633,7 @@ export default function StudentsPage() {
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">العمر</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">هاتف ولي الأمر</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الحالة</th>
+                  <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الغياب</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المدفوع</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المتبقي</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">تاريخ التسجيل</th>
@@ -590,11 +642,11 @@ export default function StudentsPage() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {loading ? (
-                  <tr><td colSpan={10} className="p-8 text-center">
+                  <tr><td colSpan={11} className="p-8 text-center">
                     <div className="animate-spin w-6 h-6 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto" />
                   </td></tr>
                 ) : students.length === 0 ? (
-                  <tr><td colSpan={10} className="p-8 text-center text-gray-400">لا يوجد طلاب</td></tr>
+                  <tr><td colSpan={11} className="p-8 text-center text-gray-400">لا يوجد طلاب</td></tr>
                 ) : students.map((student, idx) => (
                   <tr key={student.id} className="hover:bg-gray-50 transition-colors">
                     <td className="p-4">
@@ -620,6 +672,32 @@ export default function StudentsPage() {
                     <td className="p-4 text-sm text-gray-700">{student.age} سنة</td>
                     <td className="p-4 text-sm text-gray-700">{student.parentPhone}</td>
                     <td className="p-4"><Badge status={student.status} /></td>
+                    <td className="p-4">
+                      {(() => {
+                        const st = attStatsById[student.id];
+                        const absent = st?.absent || 0;
+                        const total = st?.total || 0;
+                        if (total === 0) {
+                          return <span className="text-xs text-gray-400" title="لا يوجد سجل حضور لهذا الطالب">لا يوجد سجل</span>;
+                        }
+                        const rate = total > 0 ? Math.round(((total - absent) / total) * 100) : 100;
+                        const tone = absent === 0
+                          ? 'bg-green-50 text-green-700 border-green-200'
+                          : absent >= 3
+                            ? 'bg-red-50 text-red-700 border-red-200'
+                            : 'bg-amber-50 text-amber-700 border-amber-200';
+                        return (
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold border ${tone}`}
+                            title={`حضر ${total - absent} من ${total} مرة — نسبة الحضور ${rate}%`}
+                          >
+                            {absent === 0 ? <CheckSquare size={12} /> : <ClipboardX size={12} />}
+                            {absent === 0 ? 'ملتزم' : `${absent} غياب`}
+                            <span className="opacity-70 font-medium">({rate}%)</span>
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="p-4 text-sm font-medium text-gray-900">
                       {formatCurrency(student.totalPaid, settings?.currency)}
                     </td>

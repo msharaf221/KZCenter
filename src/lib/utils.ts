@@ -172,6 +172,24 @@ export function getStatusColor(status: string): string {
   return map[status] || 'bg-gray-100 text-gray-800';
 }
 
+/**
+ * وصف حالة الدفعة للعرض: الملغاة تظهر «ملغاة» (الإلغاء لا يغيّر status).
+ * تستخدم في القوائم والتصدير والشارات.
+ */
+export function paymentStatusLabel(p: { status?: string; voided?: boolean }): string {
+  if (p.voided) return 'ملغاة';
+  return p.status === 'paid' ? 'مدفوع' : p.status === 'pending' ? 'معلق' : p.status === 'late' ? 'متأخر' : '—';
+}
+
+/** صنف لون شارة حالة الدفعة (Tailwind) — يطابق paymentStatusLabel. */
+export function paymentStatusBadge(p: { status?: string; voided?: boolean }): string {
+  if (p.voided) return 'bg-gray-200 text-gray-600 line-through';
+  return p.status === 'paid' ? 'bg-green-100 text-green-700'
+    : p.status === 'pending' ? 'bg-yellow-100 text-yellow-700'
+    : p.status === 'late' ? 'bg-red-100 text-red-700'
+    : 'bg-gray-100 text-gray-500';
+}
+
 export function getStatusLabel(status: string): string {
   const map: Record<string, string> = {
     active: 'نشط',
@@ -209,13 +227,27 @@ export async function exportToExcel(
   headers: { key: string; label: string }[],
   filename: string
 ): Promise<void> {
-  const { utils, writeFile } = await import('xlsx');
-  const wsData = [
-    headers.map(h => h.label),
-    ...data.map(row => headers.map(h => row[h.key] ?? '')),
-  ];
-  const ws = utils.aoa_to_sheet(wsData);
-  const wb = utils.book_new();
-  utils.book_append_sheet(wb, ws, 'Sheet1');
-  writeFile(wb, filename);
+  // exceljs بدل xlsx (الثغرات). نسخة المتصفح تُحمَّل عند الحاجة فقط.
+  const ExcelJS = (await import('exceljs')) as unknown as { default: typeof import('exceljs') };
+  const wb = new ExcelJS.default.Workbook();
+  const ws = wb.addWorksheet('Sheet1');
+  ws.addRow(headers.map(h => h.label));
+  for (const row of data) {
+    ws.addRow(headers.map(h => {
+      const v = row[h.key];
+      return v === null || v === undefined ? '' : v;
+    }));
+  }
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }

@@ -5,27 +5,29 @@
 import 'fake-indexeddb/auto';
 import fs from 'node:fs';
 import path from 'node:path';
-import * as XLSX from 'xlsx';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import SheetImportDialog from '../components/SheetImportDialog';
 import { AppProvider } from '../contexts/AppContext';
 import { dbGetAll, dbClearStore, Student, Enrollment } from '../lib/db';
+import { makeXlsxFile } from './helpers/excel';
 
 const REAL_FILE = path.resolve(process.cwd(), 'tmp/kidszone.xlsx');
 
-function makeXlsxFile(name: string): File {
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ['s.r 1 السبت من 4/5', 'اقرا 2 الاحد من 5/6'],
-    ['ليلي صلاح احمد محمد', 'مريم احمد علي حسن'],
-    ['ادم طلال عطيه رمضان', 'ليلي صلاح احمد محمد'],
-  ]), 'ولاء');
-  const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
-  return new File([buf], name, {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  });
+const GOOD_SHEETS = [
+  {
+    name: 'ولاء',
+    rows: [
+      ['s.r 1 السبت من 4/5', 'اقرا 2 الاحد من 5/6'],
+      ['ليلي صلاح احمد محمد', 'مريم احمد علي حسن'],
+      ['ادم طلال عطيه رمضان', 'ليلي صلاح احمد محمد'],
+    ] as (string | number | boolean | null)[][],
+  },
+];
+
+async function goodFile(name: string): Promise<File> {
+  return makeXlsxFile(GOOD_SHEETS, name);
 }
 
 async function clearAll() {
@@ -55,7 +57,7 @@ describe('SheetImportDialog', () => {
 
   it('بيقرا الملف ويعرض المعاينة', async () => {
     renderDialog();
-    await uploadFile(makeXlsxFile('sheet.xlsx'));
+    await uploadFile(await goodFile('sheet.xlsx'));
 
     await waitFor(() => {
       expect(screen.getByText('sheet.xlsx')).toBeInTheDocument();
@@ -73,7 +75,7 @@ describe('SheetImportDialog', () => {
   it('بيستورد فعلاً وينشئ التسجيلات والأقساط', async () => {
     let doneCalls = 0;
     renderDialog(() => { doneCalls++; });
-    await uploadFile(makeXlsxFile('sheet.xlsx'));
+    await uploadFile(await goodFile('sheet.xlsx'));
     await waitFor(() => expect(screen.getByRole('button', { name: /ابدأ الاستيراد/ })).toBeEnabled());
 
     await userEvent.click(screen.getByRole('button', { name: /ابدأ الاستيراد/ }));
@@ -95,10 +97,11 @@ describe('SheetImportDialog', () => {
 
   it('بيرفض ملف مش شيت مركز', async () => {
     renderDialog();
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['hello'], ['world']]), 'Sheet1');
-    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
-    await uploadFile(new File([buf], 'bad.xlsx'));
+    const bad = await makeXlsxFile(
+      [{ name: 'Sheet1', rows: [['hello'], ['world']] }],
+      'bad.xlsx',
+    );
+    await uploadFile(bad);
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /ابدأ الاستيراد/ })).toBeDisabled();
@@ -107,7 +110,7 @@ describe('SheetImportDialog', () => {
 
   it('بيغيّر طريقة إنشاء الكورسات من الواجهة', async () => {
     renderDialog();
-    await uploadFile(makeXlsxFile('sheet.xlsx'));
+    await uploadFile(await goodFile('sheet.xlsx'));
     await waitFor(() => expect(screen.getByRole('button', { name: /ابدأ الاستيراد/ })).toBeEnabled());
 
     await userEvent.selectOptions(
