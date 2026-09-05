@@ -9,7 +9,10 @@
  * الجزء الأول دوال نقية (parsing) قابلة للاختبار من غير قاعدة بيانات،
  * والجزء التاني `importSheetIntoDb` هو اللي بيكتب فعلاً.
  */
-import * as XLSX from 'xlsx';
+// قراءة ملفات Excel عبر exceljs (نسخة المتصفح، لا تحمل اعتماديات Node).
+// استُبدلت مكتبة xlsx (0.18.5) لثغرات prototype-pollution و ReDoS غير القابلة
+// للترقيع على npm — exceljs حديثة ومنشورة على npm وبلا تحذيرات أمان.
+import type * as ExcelJS from 'exceljs';
 import {
   dbAdd, dbGetAll, dbGetById, enrollStudent, generateId,
   Course, Gender, Group, Student, Teacher, ScheduleItem,
@@ -105,6 +108,45 @@ export interface SheetParseResult {
 // ==================== NORMALIZATION ====================
 
 const normalize = (s: unknown): string => String(s ?? '').replace(/\s+/g, ' ').trim();
+
+/** يحوّل ورقة exceljs إلى مصفوفة صفوف ثنائية (AOA) كنصوص — بنفس شكل sheet_to_json القديم. */
+function worksheetToAOA(ws: ExcelJS.Worksheet): string[][] {
+  const rows: string[][] = [];
+  ws.eachRow({ includeEmpty: false }, (row) => {
+    const values: string[] = [];
+    let lastCol = 0;
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      while (values.length < colNumber - 1) values.push('');
+      values.push(cellToText(cell.value));
+      lastCol = colNumber;
+    });
+    void lastCol;
+    // نتجاهل الصفوف الفاضية تماماً (تناظر blankrows:false القديمة)
+    if (values.some(v => v.trim() !== '')) rows.push(values);
+  });
+  return rows;
+}
+
+/** يحوّل قيمة خلية exceljs إلى نص خام (تناظر raw:false + defval:''). */
+function cellToText(value: ExcelJS.CellValue): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value instanceof Date) return value.toISOString();
+  // rich text
+  if (typeof value === 'object' && 'richText' in value && Array.isArray((value as { richText: unknown[] }).richText)) {
+    return (value as { richText: { text?: string }[] }).richText.map(t => t.text ?? '').join('');
+  }
+  // hyperlink
+  if (typeof value === 'object' && 'text' in value && typeof (value as { text?: unknown }).text === 'string') {
+    return (value as { text: string }).text;
+  }
+  // formula / error — استخدم النتيجة المحسوبة إن وُجدت
+  if (typeof value === 'object' && 'result' in value) {
+    return cellToText((value as { result: ExcelJS.CellValue }).result);
+  }
+  return String(value);
+}
 
 const ARABIC_REPLACEMENTS: [RegExp, string][] = [
   [/[أإآٱ]/g, 'ا'],
@@ -352,8 +394,16 @@ export function courseFamily(group: Pick<ParsedGroup, 'name' | 'teacherName'>): 
 
 // ==================== PARSER ====================
 
-export function parseSheetBuffer(data: ArrayBuffer | Uint8Array): SheetParseResult {
-  const wb = XLSX.read(data, { type: 'array' });
+export async function parseSheetBuffer(data: ArrayBuffer | Uint8Array): Promise<SheetParseResult> {
+  // تحميل نسخة المتصفح من exceljs عند الحاجة فقط (lazy) لعدم زيادة الحِزمة الأولية.
+  const ExcelJSLib = (await import('exceljs')) as unknown as { default: typeof ExcelJS };
+  const wb = new ExcelJSLib.default.Workbook();
+  await wb.xlsx.load(
+    data instanceof Uint8Array
+      ? (data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer)
+      : data,
+  );
+
   const warnings: string[] = [];
   const groups: ParsedGroup[] = [];
   const teachers: string[] = [];
@@ -365,16 +415,11 @@ export function parseSheetBuffer(data: ArrayBuffer | Uint8Array): SheetParseResu
   let totalSlots = 0;
   let skippedColumns = 0;
 
-  for (const sheetName of wb.SheetNames) {
-    const ws = wb.Sheets[sheetName];
-    if (!ws['!ref']) { skippedColumns++; continue; }
-
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, {
-      header: 1, raw: false, defval: '', blankrows: false,
-    });
+  for (const ws of wb.worksheets) {
+    const rows = worksheetToAOA(ws);
     if (rows.length === 0) { skippedColumns++; continue; }
 
-    const teacherName = normalize(sheetName);
+    const teacherName = normalize(ws.name);
     const header = (rows[0] || []).map(normalize);
     let teacherHasStudents = false;
 

@@ -31,14 +31,14 @@
     "@types/bcryptjs": "^2.4.6",
     "bcryptjs": "^3.0.3",
     "dayjs": "^1.11.23",
+    "exceljs": "^4.4.0",
     "idb": "^8.0.3",
     "lucide-react": "^1.41.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-hot-toast": "^2.6.0",
     "react-router-dom": "^7.18.3",
-    "recharts": "^3.10.1",
-    "xlsx": "^0.18.5"
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
@@ -166,5 +166,8 @@
   },
   "engines": {
     "node": ">=22"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

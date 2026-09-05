@@ -7,8 +7,8 @@
 import 'fake-indexeddb/auto';
 import fs from 'node:fs';
 import path from 'node:path';
-import * as XLSX from 'xlsx';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
+import { buildXlsxBuffer, type SheetSpec } from './helpers/excel';
 import {
   parseSheetBuffer, parseDays, parseTimeRange, extractGroupName,
   isPlaceholderHeader, guessGender, courseFamily, importSheetIntoDb,
@@ -21,17 +21,13 @@ import {
 
 // ==================== helpers ====================
 
-function makeWorkbook(sheets: { name: string; rows: (string | number | null)[][] }[]): ArrayBuffer {
-  const wb = XLSX.utils.book_new();
-  for (const s of sheets) {
-    const ws = XLSX.utils.aoa_to_sheet(s.rows.map(r => r.map(c => (c === null ? '' : c))));
-    XLSX.utils.book_append_sheet(wb, ws, s.name);
-  }
-  return XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+/** شيت صغير بعناوين حقيقية من ملف المركز — يُبنى قبل الاختبارات (exceljs async). */
+let SAMPLE: Uint8Array;
+async function makeWorkbook(sheets: SheetSpec[]): Promise<Uint8Array> {
+  return buildXlsxBuffer(sheets);
 }
 
-/** شيت صغير بعناوين حقيقية من ملف المركز */
-const SAMPLE = makeWorkbook([
+const SAMPLE_SHEETS: SheetSpec[] = [
   {
     name: 'ولاء',
     rows: [
@@ -61,7 +57,11 @@ const SAMPLE = makeWorkbook([
     name: '17',
     rows: [['عمود1', 'عمود2']],
   },
-]);
+];
+
+beforeAll(async () => {
+  SAMPLE = await makeWorkbook(SAMPLE_SHEETS);
+});
 
 async function clearAll() {
   for (const store of ['installments', 'enrollments', 'students', 'groups', 'teachers', 'courses'] as const) {
@@ -194,8 +194,8 @@ describe('courseFamily', () => {
 // ==================== workbook parsing ====================
 
 describe('parseSheetBuffer', () => {
-  it('بيقرا المدرسين والمجموعات والطلاب', () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+  it('بيقرا المدرسين والمجموعات والطلاب', async () => {
+    const parsed = await parseSheetBuffer(await SAMPLE);
 
     // شيت «17» فاضي → مش مدرس
     expect(parsed.teachers).toEqual(['ولاء', 'هاجر', 'ايمان عبدالرحيم']);
@@ -203,16 +203,16 @@ describe('parseSheetBuffer', () => {
     expect(parsed.skippedColumns).toBeGreaterThan(0);
   });
 
-  it('بيتخطى الأعمدة الفاضية والـ placeholders', () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+  it('بيتخطى الأعمدة الفاضية والـ placeholders', async () => {
+    const parsed = await parseSheetBuffer(await SAMPLE);
     const names = parsed.groups.map(g => g.name);
     expect(names).not.toContain('عمود4');
     expect(names).not.toContain('gr 8');
     expect(parsed.groups.every(g => g.students.length > 0)).toBe(true);
   });
 
-  it('بيظبط الميعاد والأيام في الجدول', () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+  it('بيظبط الميعاد والأيام في الجدول', async () => {
+    const parsed = await parseSheetBuffer(await SAMPLE);
     const g = parsed.groups.find(x => x.rawHeader === 's.r 1 السبت من 4/5')!;
     expect(g.days).toEqual(['saturday']);
     expect(g.startTime).toBe('16:00');
@@ -220,8 +220,8 @@ describe('parseSheetBuffer', () => {
     expect(g.name).toBe('s.r 1');
   });
 
-  it('الطالب المتكرر في أكتر من مجموعة بيظهر مرة واحدة بس', () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+  it('الطالب المتكرر في أكتر من مجموعة بيظهر مرة واحدة بس', async () => {
+    const parsed = await parseSheetBuffer(await SAMPLE);
     // «ليلي صلاح احمد محمد» في ولاء/س.r 1 و هاجر/s.r 7/8، و«تاليا» مرتين عند ايمان
     expect(parsed.uniqueStudents.filter(n => n === 'ليلي صلاح احمد محمد')).toHaveLength(1);
     expect(parsed.totalSlots).toBe(12);
@@ -229,15 +229,15 @@ describe('parseSheetBuffer', () => {
     expect(parsed.multiGroupStudents).toBe(2);
   });
 
-  it('بيميز شيت المركز عن أي ملف إكسيل تاني', () => {
-    expect(parseSheetBuffer(SAMPLE).looksLikeCenterSheet).toBe(true);
+  it('بيميز شيت المركز عن أي ملف إكسيل تاني', async () => {
+    expect((await parseSheetBuffer(await SAMPLE)).looksLikeCenterSheet).toBe(true);
 
-    const junk = makeWorkbook([{ name: 'Sheet1', rows: [['hello'], ['world']] }]);
-    expect(parseSheetBuffer(junk).looksLikeCenterSheet).toBe(false);
+    const junk = await makeWorkbook([{ name: 'Sheet1', rows: [['hello'], ['world']] }]);
+    expect((await parseSheetBuffer(await junk)).looksLikeCenterSheet).toBe(false);
   });
 
-  it('بيفضّ اشتباك مجموعتين بنفس الاسم لنفس المدرس', () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+  it('بيفضّ اشتباك مجموعتين بنفس الاسم لنفس المدرس', async () => {
+    const parsed = await parseSheetBuffer(await SAMPLE);
     const eiman = parsed.groups.filter(g => g.teacherName === 'ايمان عبدالرحيم').map(g => g.name);
     expect(new Set(eiman).size).toBe(eiman.length);
     expect(eiman).toContain('level 3 (السبت 4/5)');
@@ -253,7 +253,7 @@ describe('importSheetIntoDb', () => {
   });
 
   it('بينشئ المدرسين والكورسات والمجموعات والطلاب والتسجيلات', async () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+    const parsed = await parseSheetBuffer(await SAMPLE);
     const report = await importSheetIntoDb(parsed, {
       ...DEFAULT_IMPORT_OPTIONS,
       courseStrategy: 'byType',
@@ -277,7 +277,7 @@ describe('importSheetIntoDb', () => {
   });
 
   it('الطالب المتكرر بيتسجل في المجموعتين بنفس الـ id', async () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+    const parsed = await parseSheetBuffer(await SAMPLE);
     await importSheetIntoDb(parsed);
 
     const students = await dbGetAll<Student>('students');
@@ -291,7 +291,7 @@ describe('importSheetIntoDb', () => {
   });
 
   it('بينشئ أقساط لكل تسجيل', async () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+    const parsed = await parseSheetBuffer(await SAMPLE);
     await importSheetIntoDb(parsed, { ...DEFAULT_IMPORT_OPTIONS, coursePrice: 800 });
 
     const enrollments = await dbGetAll<Enrollment>('enrollments');
@@ -306,7 +306,7 @@ describe('importSheetIntoDb', () => {
   });
 
   it('الاستيراد التاني ما يكررش حاجة (idempotent)', async () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+    const parsed = await parseSheetBuffer(await SAMPLE);
     await importSheetIntoDb(parsed);
     const second = await importSheetIntoDb(parsed);
 
@@ -322,7 +322,7 @@ describe('importSheetIntoDb', () => {
   });
 
   it('بيحدّث حالة المجموعة لـ full لما العدد يوصل للحد', async () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+    const parsed = await parseSheetBuffer(await SAMPLE);
     await importSheetIntoDb(parsed, { ...DEFAULT_IMPORT_OPTIONS, maxStudents: 2 });
 
     const groups = await dbGetAll<Group>('groups');
@@ -333,14 +333,14 @@ describe('importSheetIntoDb', () => {
   });
 
   it('بيراعي المدرسين الموجودين أصلاً (ما يكررش بالاسم)', async () => {
-    const parsed = parseSheetBuffer(SAMPLE);
+    const parsed = await parseSheetBuffer(await SAMPLE);
     await importSheetIntoDb(parsed);
 
     // نضيف مجموعة جديدة لمدرس موجود في شيت تاني
     const extra = makeWorkbook([
       { name: 'ولاء', rows: [['جديده الاحد من 6/7'], ['طالب جديد تمام']] },
     ]);
-    const report = await importSheetIntoDb(parseSheetBuffer(extra));
+    const report = await importSheetIntoDb(await parseSheetBuffer(await extra));
     expect(report.teachersCreated).toBe(0);
     expect(report.teachersExisting).toBe(1);
     expect(report.groupsCreated).toBe(1);
@@ -357,8 +357,8 @@ describe.skipIf(!fs.existsSync(REAL_FILE))('الشيت الحقيقي (tmp/kidsz
     await clearAll();
   });
 
-  it('بيقرا كل المدرسين والطلاب', () => {
-    const parsed = parseSheetBuffer(fs.readFileSync(REAL_FILE));
+  it('بيقرا كل المدرسين والطلاب', async () => {
+    const parsed = await parseSheetBuffer(await fs.readFileSync(REAL_FILE));
 
     expect(parsed.teachers).toHaveLength(16);
     expect(parsed.uniqueStudents).toHaveLength(771);
@@ -382,7 +382,7 @@ describe.skipIf(!fs.existsSync(REAL_FILE))('الشيت الحقيقي (tmp/kidsz
   });
 
   it('بيكتب الشيت كله في القاعدة من غير أخطاء', async () => {
-    const parsed = parseSheetBuffer(fs.readFileSync(REAL_FILE));
+    const parsed = await parseSheetBuffer(await fs.readFileSync(REAL_FILE));
     const report = await importSheetIntoDb(parsed, {
       ...DEFAULT_IMPORT_OPTIONS,
       courseStrategy: 'byType',
