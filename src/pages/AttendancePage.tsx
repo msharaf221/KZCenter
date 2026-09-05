@@ -5,9 +5,10 @@ import { dbGetAll, dbGetByIndex, dbAdd, dbPut, getGroupAttendanceForDate, getGro
 import { formatDate, getWhatsAppLink, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import { notify, notifyAttendanceSaved, notifyAbsence } from '../lib/notifications';
+import { notify, notifyAttendanceSaved, notifyAbsence, notifyRepeatedAbsence } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
 import { printTable } from '../lib/printing';
+import { checkAbsenceAlertForStudent } from '../lib/absenceAlerts';
 import dayjs from 'dayjs';
 
 export default function AttendancePage() {
@@ -117,6 +118,16 @@ export default function AttendancePage() {
             createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
           };
           await dbAdd('attendance', record);
+        }
+
+        // تنبيه الغياب المتكرر (3+ متتالية) — بعد الحفظ، للطلاب اللي حالتهم غائب
+        if (status === 'absent') {
+          try {
+            const alert = await checkAbsenceAlertForStudent(student.id, selectedGroup);
+            if (alert) notifyRepeatedAbsence(student.name, group?.name || '', alert.streak);
+          } catch (e) {
+            console.error('absence alert check error:', e);
+          }
         }
       }
       notifyAttendanceSaved(group?.name || '', savedCount);
