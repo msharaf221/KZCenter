@@ -2226,6 +2226,193 @@ export async function payStudentRemaining(
   });
 }
 
+// ==================== WRITE-OFF (تصفير المديونيات / إبراء ذمة) ====================
+
+/**
+ * نطاق التصفير:
+ *  - `all` → كل الأقساط غير المسددة (المستحق + المتأخر + اللي لسه ما استحقش)
+ *  - `due` → المستحق والمتأخر بس (dueDate ≤ اليوم) — الأقساط الجاية تفضل كما هي
+ */
+export type WriteOffScope = 'all' | 'due';
+
+export const WRITE_OFF_SCOPE_LABEL: Record<WriteOffScope, string> = {
+  all: 'كل المتبقي',
+  due: 'المستحق والمتأخر فقط',
+};
+
+export const WRITE_OFF_SCOPE_HINT: Record<WriteOffScope, string> = {
+  all: 'كل قسط عليه متبقي، حتى اللي استحقاقه لسه جاي',
+  due: 'الأقساط اللي استحقت أو اتأخرت بس — المستقبل يتفضل زي ما هو',
+};
+
+/** كلمة التأكيد اللي لازم المستخدم يكتبها في النافذة قبل تنفيذ التصفير */
+export const WRITE_OFF_CONFIRM_WORD = 'تصفير';
+
+/** الأقساط اللي هيخلّيها التصفير (للعرض في نافذة التأكيد وللتنفيذ) */
+export interface WriteOffPreview {
+  scope: WriteOffScope;
+  /** عدد الأقساط اللي هتتلغي */
+  installmentsCount: number;
+  /** عدد الطلاب المتأثرين */
+  studentsCount: number;
+  /** إجمالي المتبقي اللي هيتصفّر */
+  amount: number;
+  /** الجزء المتأخر من المبلغ (فات تاريخ استحقاقه) */
+  overdueAmount: number;
+}
+
+export interface WriteOffResult {
+  success: boolean;
+  error?: string;
+  /** ملخص اللي اتصفّر فعلاً */
+  preview?: WriteOffPreview;
+  /** إجمالي المتبقي على كل الطلاب قبل التصفير */
+  remainingBefore?: number;
+  /** إجمالي المتبقي على كل الطلاب بعد التصفير */
+  remainingAfter?: number;
+}
+
+export interface WriteOffOptions {
+  /** اليوم المرجعي لحساب «المستحق» في نطاق `due` (افتراضي: اليوم) */
+  today?: string;
+}
+
+/** تقريب لأقرب قرش — نفس قاعدة `billing` ( round2 مش متصدّرة من هناك) */
+function round2(n: number): number {
+  return Math.round((n || 0) * 100) / 100;
+}
+
+/**
+ * الأقساط المؤهلة للتصفير حسب النطاق.
+ *
+ * المستثنى دايماً: المحذوف · الملغي · المسدد بالكامل · وأقساط الطلاب المحذوفين
+ * أو المنتهيين (المنتهي أصلاً مش ظاهر في صفحة المديونيات).
+ */
+async function collectWriteOffTargets(
+  scope: WriteOffScope,
+  today: string,
+): Promise<Installment[]> {
+  const [installments, students] = await Promise.all([
+    dbGetAll<Installment>('installments'),
+    dbGetAll<Student>('students'),
+  ]);
+  const studentById = new Map(students.map(s => [s.id, s]));
+
+  return installments.filter(inst => {
+    if (inst.deleted || inst.status === 'cancelled') return false;
+    // القسط المسدد بالكامل مفيش عليه متبقي يتصفّر
+    if (installmentRemaining(inst) <= 0) return false;
+
+    const student = studentById.get(inst.studentId);
+    if (!student || student.deleted || student.status === 'ended') return false;
+
+    if (scope === 'due') {
+      if (!inst.dueDate) return false;
+      // ملاحظة: `isSameOrBefore` بتحتاج بلوجن، فبنستخدم نفي `isAfter` (نفس النتيجة)
+      return !dayjs(inst.dueDate).isAfter(dayjs(today), 'day');
+    }
+    return true;
+  });
+}
+
+function buildPreview(scope: WriteOffScope, targets: Installment[], today: string): WriteOffPreview {
+  let amount = 0;
+  let overdueAmount = 0;
+  const students = new Set<string>();
+
+  for (const inst of targets) {
+    const remaining = installmentRemaining(inst);
+    amount += remaining;
+    if (inst.dueDate && dayjs(inst.dueDate).isBefore(dayjs(today), 'day')) {
+      overdueAmount += remaining;
+    }
+    students.add(inst.studentId);
+  }
+
+  return {
+    scope,
+    installmentsCount: targets.length,
+    studentsCount: students.size,
+    amount: round2(amount),
+    overdueAmount: round2(overdueAmount),
+  };
+}
+
+/**
+ * معاينة التصفير من غير أي تعديل على البيانات — بتتستخدم في نافذة التأكيد
+ * عشان المستخدم يشوف «هيتمسح إيه بالظبط» قبل الضغط.
+ */
+export async function previewWriteOff(
+  scope: WriteOffScope,
+  opts: WriteOffOptions = {},
+): Promise<WriteOffPreview> {
+  const today = opts.today || dayjs().format('YYYY-MM-DD');
+  const targets = await collectWriteOffTargets(scope, today);
+  return buildPreview(scope, targets, today);
+}
+
+/**
+ * تصفير المديونيات (إبراء ذمة) — بداية شهر جديد قبل التجديدات.
+ *
+ * **إيه اللي بيحصل:**
+ *  - كل الأقساط المؤهلة حسب `scope` بتتحوّل للحالة `cancelled` (نفس طريقة
+ *    التحويل والخروج من مجموعة) فالمتبقي عليها بيصفّر.
+ *  - **الدفعات المحصّلة ما بتتمسش**: لا حذف ولا `void` — الفلوس اللي اتدفعت
+ *    بتفضل مسجّلة، ولو كانت أكبر من المستحق الجديد بتبقى **رصيد دائن** للطالب.
+ *  - بعد الإلغاء بيتعاد توزيع المدفوع (`rebuildInstallmentsFromPayments`) على
+ *    الأقساط اللي فضلت، فالمدفوع يغطّي الشهر الجاي بدل ما يضيع على قسط ملغي.
+ *
+ * @param scope `all` = كل المتبقي · `due` = المستحق والمتأخر فقط
+ * @param reason سبب التصفير (إلزامي — بيتسجّل على كل قسط وفي سجل المراجعة)
+ */
+export async function writeOffDebts(
+  scope: WriteOffScope,
+  reason: string,
+  opts: WriteOffOptions = {},
+): Promise<WriteOffResult> {
+  if (scope !== 'all' && scope !== 'due') {
+    return { success: false, error: `نطاق التصفير غير معروف: ${String(scope)}` };
+  }
+
+  const cleanReason = (reason || '').trim();
+  if (!cleanReason) return { success: false, error: 'سبب التصفير مطلوب' };
+
+  const today = opts.today || dayjs().format('YYYY-MM-DD');
+  const targets = await collectWriteOffTargets(scope, today);
+  if (targets.length === 0) {
+    return { success: false, error: 'لا توجد مديونيات مطابقة للتصفير' };
+  }
+
+  const remainingBefore = round2((await getDebtors()).reduce((sum, d) => sum + (d.remaining || 0), 0));
+  const now = new Date().toISOString();
+  const note = `ملغي: تصفير مديونيات — ${cleanReason}`;
+
+  // 1) إلغاء الأقساط المؤهلة (المدفوع عليها مش بيتلغي — الدفعات نفسها مفيش عليها مساس)
+  for (const inst of targets) {
+    await dbPut('installments', {
+      ...inst,
+      status: 'cancelled' as InstallmentStatus,
+      notes: inst.notes ? `${inst.notes} — ${note}` : note,
+      updatedAt: now,
+    });
+  }
+
+  // 2) إعادة توزيع المدفوع على الأقساط اللي فضلت عشان ما يضيعش على قسط ملغي
+  const studentIds = Array.from(new Set(targets.map(i => i.studentId)));
+  for (const sid of studentIds) {
+    await rebuildInstallmentsFromPayments(sid);
+  }
+
+  const remainingAfter = round2((await getDebtors()).reduce((sum, d) => sum + (d.remaining || 0), 0));
+
+  return {
+    success: true,
+    preview: buildPreview(scope, targets, today),
+    remainingBefore,
+    remainingAfter,
+  };
+}
+
 /**
  * تحديث حالات الأقساط المخزّنة: أي قسط فات تاريخ استحقاقه وفيه باقي → "متأخر".
  * تُستدعى مرة عند فتح التطبيق (وممكن دورياً).

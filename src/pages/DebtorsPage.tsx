@@ -2,14 +2,20 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle, Search, Download, MessageCircle, Eye, Receipt,
-  Users, TrendingDown, Clock, DollarSign,
+  Users, TrendingDown, Clock, DollarSign, Eraser,
 } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
-import { getDebtors, recordInstallmentPayment, markOverdueInstallments, DebtorRow } from '../lib/db';
+import WriteOffDebtsDialog from '../components/WriteOffDebtsDialog';
+import {
+  getDebtors, recordInstallmentPayment, markOverdueInstallments, DebtorRow,
+  WRITE_OFF_SCOPE_LABEL, WriteOffResult, WriteOffScope,
+} from '../lib/db';
 import { formatDate, formatCurrency, getWhatsAppLink, toCSV, downloadCSV, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
+import { addAuditEntry } from '../lib/security';
 import { refreshDebtAlert } from '../lib/debtAlerts';
 import dayjs from 'dayjs';
 
@@ -19,9 +25,11 @@ type SortKey = 'remaining' | 'overdue' | 'oldestPayment' | 'name';
 export default function DebtorsPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
+  const { user } = useAuth();
   const primaryColor = settings?.primaryColor || '#6366f1';
 
   const [debtors, setDebtors] = useState<DebtorRow[]>([]);
+  const [showWriteOff, setShowWriteOff] = useState(false);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
@@ -149,6 +157,25 @@ export default function DebtorsPage() {
     }
   }
 
+  async function handleWriteOff(info: { scope: WriteOffScope; reason: string; result: WriteOffResult }) {
+    const { scope, reason, result } = info;
+    const p = result.preview;
+    if (!p) return;
+
+    notify.success(
+      `تم تصفير ${formatCurrency(p.amount, settings?.currency)} — ${p.installmentsCount} قسط لـ ${p.studentsCount} طالب`
+    );
+    addAuditEntry({
+      userId: user?.id || 'unknown',
+      username: user?.username || 'غير معروف',
+      action: 'writeoff',
+      entity: 'installments',
+      details: `تصفير مديونيات (${WRITE_OFF_SCOPE_LABEL[scope]}): ${p.amount} — ${p.installmentsCount} قسط — ${p.studentsCount} طالب — المتبقي ${result.remainingBefore} → ${result.remainingAfter} — السبب: ${reason}`,
+    });
+    setShowWriteOff(false);
+    await load();
+  }
+
   const FILTERS: { key: FilterKey; label: string; count: number }[] = [
     { key: 'all', label: 'الكل', count: debtors.length },
     { key: 'overdue', label: 'عليهم متأخرات', count: debtors.filter(d => d.overdueCount > 0).length },
@@ -213,6 +240,12 @@ export default function DebtorsPage() {
             <button onClick={exportCSV}
               className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50">
               <Download size={16} /> تصدير
+            </button>
+
+            <button onClick={() => setShowWriteOff(true)}
+              className="flex items-center gap-2 px-3 py-2.5 border border-red-200 rounded-xl text-sm text-red-600 hover:bg-red-50"
+              title="إبراء ذمة: تصفير الأقساط غير المسددة قبل بداية شهر جديد">
+              <Eraser size={16} /> تصفير المديونيات
             </button>
           </div>
         </div>
@@ -381,6 +414,14 @@ export default function DebtorsPage() {
           </div>
         </Modal>
       )}
+
+      {/* نافذة تصفير المديونيات */}
+      <WriteOffDebtsDialog
+        isOpen={showWriteOff}
+        onClose={() => setShowWriteOff(false)}
+        onDone={handleWriteOff}
+        currency={settings?.currency}
+      />
     </Layout>
   );
 }
