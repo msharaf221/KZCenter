@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Download, Upload, Bell, Cloud, RefreshCw, Wrench, Eye, EyeOff, CheckCircle, XCircle, Loader2, Receipt, Image as ImageIcon, Trash2, Tag, Wand2 } from 'lucide-react';
+import { Save, Download, Upload, Bell, Cloud, RefreshCw, Wrench, Eye, EyeOff, CheckCircle, XCircle, Loader2, Receipt, Image as ImageIcon, Trash2, Tag, Wand2, ShieldCheck } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import BackupManager from '../components/BackupManager';
 import { runIntegrityFix, IntegrityReport } from '../lib/db';
@@ -21,6 +21,7 @@ import {
 import { syncLocalToCloud, syncCloudToLocal, type SyncReport } from '../lib/storage';
 import { SUBJECTS, DEFAULT_SUBJECT_PRICES, subjectPrice, type SubjectId, type SubjectPrices } from '../lib/subjects';
 import { syncSubjects, type SubjectSyncReport } from '../lib/subjectSync';
+import { auditData, autoFix, type QualityReport } from '../lib/dataQuality';
 
 export default function SettingsPage() {
   const {
@@ -48,6 +49,9 @@ export default function SettingsPage() {
   });
   const [applyingSubjects, setApplyingSubjects] = useState(false);
   const [subjectReport, setSubjectReport] = useState<SubjectSyncReport | null>(null);
+  const [quality, setQuality] = useState<QualityReport | null>(null);
+  const [auditing, setAuditing] = useState(false);
+  const [autoFixing, setAutoFixing] = useState(false);
   const [syncReport, setSyncReport] = useState<SyncReport | null>(null);
   const [passwordForm, setPasswordForm] = useState({ newPass: '', confirm: '' });
   const [syncing, setSyncing] = useState(false);
@@ -161,6 +165,38 @@ export default function SettingsPage() {
       notify.error('حصل خطأ أثناء تطبيق أسعار المواد');
     } finally {
       setApplyingSubjects(false);
+    }
+  }
+
+  /** فحص جودة الداتا: الروابط الناقصة والأسعار الصفرية والمواد غير المربوطة */
+  async function handleAudit() {
+    setAuditing(true);
+    try {
+      const result = await auditData();
+      setQuality(result);
+      if (result.issues.length === 0) notify.success('الداتا مترابطة صح — مفيش ملاحظات ✓');
+      else notify.info(`فيه ${result.issues.length} ملاحظة — النتيجة ${result.score}/100`);
+    } catch {
+      notify.error('حصل خطأ أثناء الفحص');
+    } finally {
+      setAuditing(false);
+    }
+  }
+
+  /** إصلاح تلقائي للمشاكل اللي ينفع تتصلح لوحدها */
+  async function handleAutoFix() {
+    setAutoFixing(true);
+    try {
+      const fix = await autoFix(form.subjectPrices as Record<SubjectId, number>);
+      setQuality(await auditData());
+      notify.success(
+        `تم: ${fix.coursesLinked} كورس اترابط · ${fix.coursesRepriced} سعر اتظبط · ` +
+        `${fix.groupsLinked} مجموعة · ${fix.teachersLinked} مدرس`
+      );
+    } catch {
+      notify.error('حصل خطأ أثناء الإصلاح');
+    } finally {
+      setAutoFixing(false);
     }
   }
 
@@ -888,6 +924,96 @@ export default function SettingsPage() {
             style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
             <Save size={16} /> تغيير كلمة المرور
           </button>
+        </div>
+
+        {/* ---------- جودة الداتا والروابط ---------- */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+          <h2 className="text-lg font-bold text-gray-900 mb-2 flex items-center gap-2">
+            <ShieldCheck size={20} /> جودة الداتا والروابط
+          </h2>
+          <p className="text-sm text-gray-500 mb-4">
+            بيتأكد إن كل مجموعة مربوطة بمدرس وكورس ومادة وسعر، وكل طالب مسجّل وعليه أقساط.
+            المشاكل اللي ينفع تتصلح لوحدها بتتصلح بضغطة زرار.
+          </p>
+
+          <div className="flex flex-wrap gap-2">
+            <button onClick={handleAudit} disabled={auditing}
+              className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium disabled:opacity-50"
+              style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
+              {auditing ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
+              {auditing ? 'جاري الفحص…' : 'افحص الداتا'}
+            </button>
+            {quality && quality.issues.some(i => i.autoFixable) && (
+              <button onClick={handleAutoFix} disabled={autoFixing}
+                className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                {autoFixing ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                {autoFixing ? 'جاري الإصلاح…' : 'إصلاح تلقائي'}
+              </button>
+            )}
+          </div>
+
+          {quality && (
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                <span className="text-sm font-semibold text-gray-700">نتيجة الجودة</span>
+                <span className="text-lg font-bold"
+                  style={{ color: quality.score >= 90 ? '#059669' : quality.score >= 70 ? '#d97706' : '#dc2626' }}>
+                  {quality.score}/100
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
+                {[
+                  { label: 'طالب', value: quality.totals.students },
+                  { label: 'مدرس', value: quality.totals.teachers },
+                  { label: 'كورس', value: quality.totals.courses },
+                  { label: 'مجموعة', value: quality.totals.groups },
+                  { label: 'تسجيل', value: quality.totals.enrollments },
+                  { label: 'مترابط', value: `${quality.totals.subjectCoverage}%` },
+                ].map(s => (
+                  <div key={s.label} className="bg-gray-50 rounded-lg py-2">
+                    <div className="text-sm font-bold text-gray-900">{s.value}</div>
+                    <div className="text-[10px] text-gray-500">{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {quality.bySubject.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {quality.bySubject.map(s => (
+                    <span key={s.id} className="text-[11px] bg-gray-50 border border-gray-100 rounded-lg px-2 py-1">
+                      <b>{s.name}</b>: {s.groups} مجموعة · {s.students} طالب · {s.price} شهرياً
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {quality.issues.length === 0 ? (
+                <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
+                  ✓ كل حاجة مترابطة صح
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                  {quality.issues.map(issue => (
+                    <div key={issue.code}
+                      className={`text-xs rounded-lg px-3 py-2 border ${
+                        issue.severity === 'error' ? 'bg-red-50 border-red-100 text-red-800'
+                        : issue.severity === 'warning' ? 'bg-amber-50 border-amber-100 text-amber-800'
+                        : 'bg-gray-50 border-gray-100 text-gray-600'
+                      }`}>
+                      <div className="font-medium">
+                        {issue.message} ({issue.count})
+                        {issue.autoFixable && <span className="text-[10px] opacity-70"> — يتصلح تلقائياً</span>}
+                      </div>
+                      <div className="opacity-75 mt-0.5">
+                        {issue.entities.slice(0, 6).join('، ')}{issue.count > 6 ? ' …' : ''}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Data Integrity */}

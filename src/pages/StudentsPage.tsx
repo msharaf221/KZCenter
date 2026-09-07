@@ -7,6 +7,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import Pagination from '../components/ui/Pagination';
 import SheetImportDialog from '../components/SheetImportDialog';
+import DataImportDialog from '../components/DataImportDialog';
 import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus, Attendance } from '../lib/db';
 import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone, getContrastColor } from '../lib/utils';
 import { effectiveMonthlyPrice, proratedFirstPeriod, resolveSessionsPerMonth } from '../lib/billing';
@@ -72,6 +73,7 @@ export default function StudentsPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [showSheetImport, setShowSheetImport] = useState(false);
+  const [showDataImport, setShowDataImport] = useState(false);
   const [groups, setGroups] = useState<Group[]>([]);
   const [initialPayments, setInitialPayments] = useState<Record<string, number>>({});
   const [startSessions, setStartSessions] = useState<Record<string, number>>({});
@@ -592,6 +594,15 @@ export default function StudentsPage() {
                     <FileSpreadsheet size={16} />
                     <span className="hidden sm:inline">استيراد شيت إكسيل</span>
                   </button>
+
+                  <button
+                    onClick={() => setShowDataImport(true)}
+                    className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                    title="استيراد داتا (Excel/CSV/JSON): صف لكل طالب مع المدرس والمجموعة والمادة"
+                  >
+                    <Upload size={16} />
+                    <span className="hidden sm:inline">استيراد داتا</span>
+                  </button>
                 </>
               )}
 
@@ -976,6 +987,13 @@ export default function StudentsPage() {
       <SheetImportDialog
         open={showSheetImport}
         onClose={() => setShowSheetImport(false)}
+        onDone={() => { loadStudents(); }}
+      />
+
+      {/* Data Import (Excel / CSV / JSON) */}
+      <DataImportDialog
+        open={showDataImport}
+        onClose={() => setShowDataImport(false)}
         onDone={() => { loadStudents(); }}
       />
 
