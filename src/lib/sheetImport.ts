@@ -14,12 +14,22 @@
 // للترقيع على npm — exceljs حديثة ومنشورة على npm وبلا تحذيرات أمان.
 import type * as ExcelJS from 'exceljs';
 import {
-  dbAdd, dbGetAll, dbGetById, enrollStudent, generateId,
+  dbAdd, dbGetAll, dbGetById, dbPut, enrollStudent, generateId,
   Course, Gender, Group, Student, Teacher, ScheduleItem,
 } from './db';
+import {
+  SUBJECTS, matchSubject, subjectPrice,
+  type Subject, type SubjectId, type SubjectPrices,
+} from './subjects';
 
-/** طريقة تحويل المجموعات لكورسات */
-export type CourseStrategy = 'single' | 'byType' | 'byTeacher';
+/**
+ * طريقة تحويل المجموعات لكورسات:
+ *  - bySubject → كورس لكل **مادة** (إنجليزي/ماث/حساب/عربي/قرآن) — الأنضف، وبياخد سعر المادة
+ *  - byType    → كورس لكل نوع مجموعة حسب اسمها الخام (s.r / level / اقرا …)
+ *  - byTeacher → كورس لكل مدرس
+ *  - single    → كورس واحد للكل
+ */
+export type CourseStrategy = 'single' | 'byType' | 'byTeacher' | 'bySubject';
 
 export interface ParsedGroup {
   /** اسم المدرس (اسم التبويب) */
@@ -496,7 +506,7 @@ export async function parseSheetBuffer(data: ArrayBuffer | Uint8Array): Promise<
 
 export interface SheetImportOptions {
   courseStrategy: CourseStrategy;
-  /** سعر الاشتراك الشهري الافتراضي للكورسات الجديدة */
+  /** سعر الاشتراك الشهري الافتراضي للكورسات اللي مش متعرف مادتها */
   coursePrice: number;
   /** مدة الكورس بالشهور */
   durationMonths: number;
@@ -504,15 +514,43 @@ export interface SheetImportOptions {
   phonePrefix: string;
   /** أكبر عدد طلاب في المجموعة */
   maxStudents: number;
+  /**
+   * استخدام أسعار المواد للكورسات اللي اتعرفت مادتها من اسم المجموعة
+   * (english 250 · math 250 · حساب 200 · عربي 200 · قرآن 200).
+   * لو متقفلة، كل الكورسات بتاخد `coursePrice`.
+   */
+  useSubjectPrices?: boolean;
+  /** أسعار مخصّصة للمواد (من الإعدادات) — الافتراضي من كاتالوج المواد */
+  subjectPrices?: SubjectPrices | null;
 }
 
 export const DEFAULT_IMPORT_OPTIONS: SheetImportOptions = {
-  courseStrategy: 'byType',
+  courseStrategy: 'bySubject',
   coursePrice: 0,
   durationMonths: 1,
   phonePrefix: '0100000',
   maxStudents: 40,
+  useSubjectPrices: true,
+  subjectPrices: null,
 };
+
+/**
+ * مادة المجموعة من الشيت: اسم المجموعة أولاً (فيه نوع الحصة عادةً)،
+ * وبعدين العنوان الخام، وآخر حاجة اسم المدرس/التبويب.
+ */
+/** المادة ← اسمها المعروض (لتقارير الاستيراد) */
+const SUBJECT_NAME = new Map<SubjectId, string>(
+  SUBJECTS.map(s => [s.id, s.name] as const)
+);
+
+/** مفتاح فريد للمجموعة داخل الشيت (مدرس + العنوان الخام) */
+function groupRefKey(g: Pick<ParsedGroup, 'teacherName' | 'rawHeader'>): string {
+  return `${g.teacherName}::${g.rawHeader}`;
+}
+
+export function subjectOfParsedGroup(g: ParsedGroup): Subject | null {
+  return matchSubject(g.name) ?? matchSubject(g.rawHeader) ?? matchSubject(g.teacherName);
+}
 
 export interface SheetImportReport {
   teachersCreated: number;
@@ -524,6 +562,12 @@ export interface SheetImportReport {
   studentsExisting: number;
   /** طلاب اتطابقوا بالتليفون (مش بالاسم) */
   studentsMatchedByPhone: number;
+  /** عدد المجموعات اللي اتعرفت مادتها */
+  groupsWithSubject: number;
+  /** مجموعات مش واضح مادتها (محتاجة ربط يدوي من صفحة الكورسات) */
+  groupsWithoutSubject: string[];
+  /** المواد اللي اتعملها كورسات + سعر كل واحدة */
+  subjectsUsed: { id: SubjectId; name: string; price: number; groups: number }[];
   /** أسماء في الشيت مطابقة لأكتر من طالب موجود → محتاجة مراجعة يدوية */
   ambiguousStudents: string[];
   enrollmentsCreated: number;
@@ -552,6 +596,7 @@ export async function importSheetIntoDb(
     groupsCreated: 0, groupsExisting: 0,
     studentsCreated: 0, studentsExisting: 0,
     studentsMatchedByPhone: 0, ambiguousStudents: [],
+    groupsWithSubject: 0, groupsWithoutSubject: [], subjectsUsed: [],
     enrollmentsCreated: 0, enrollmentsSkipped: 0,
     errors: [],
   };
@@ -618,26 +663,68 @@ export async function importSheetIntoDb(
   }
 
   // ---------- 2) الكورسات ----------
+  // مادة كل مجموعة بتتحدد من اسمها/عنوانها الخام (بتُستخدم في التسعير والربط)
+  const subjectOfGroup = new Map<string, Subject | null>();
+  for (const g of parsed.groups) {
+    subjectOfGroup.set(groupRefKey(g), subjectOfParsedGroup(g));
+  }
+
+  const useSubjectPrices = opts.useSubjectPrices !== false;
+  /** سعر الكورس حسب مادته (أو السعر الافتراضي لو المادة مش معروفة) */
+  const priceFor = (subject: Subject | null): number => {
+    if (subject && useSubjectPrices) return subjectPrice(subject.id, opts.subjectPrices);
+    return Math.max(0, opts.coursePrice);
+  };
+
+  /**
+   * اسم الكورس حسب الاستراتيجية.
+   * في وضع «كورس لكل مادة» المجموعة اللي مش متعرف مادتها بترجع لاسم نوعها
+   * (courseFamily) بدل ما تتحط في كورس عشوائي.
+   */
   const courseKeyFor = (group: ParsedGroup): string => {
     if (opts.courseStrategy === 'single') return 'Kids Zone';
     if (opts.courseStrategy === 'byTeacher') return group.teacherName;
+    if (opts.courseStrategy === 'bySubject') {
+      const subject = subjectOfGroup.get(groupRefKey(group)) || null;
+      return subject ? subject.name : courseFamily(group);
+    }
     return courseFamily(group);
   };
 
   for (const group of parsed.groups) {
     const courseName = courseKeyFor(group);
     const key = normalize(courseName);
-    if (courseByName.has(key)) continue;
+    const subject = subjectOfGroup.get(groupRefKey(group)) || null;
+
+    const existingCourse = courseByName.get(key);
+    if (existingCourse) {
+      // كورس موجود من غير مادة/بسعر صفر → نكمّله من الكاتالوج (من غير ما نلمس سعر متحدد يدوياً)
+      if (subject && (!existingCourse.subjectId || (useSubjectPrices && !existingCourse.price))) {
+        const patched: Course = {
+          ...existingCourse,
+          subjectId: existingCourse.subjectId ?? subject.id,
+          price: existingCourse.price || priceFor(subject),
+          category: existingCourse.category === 'مجموعات' ? subject.category : existingCourse.category,
+          updatedAt: now,
+        };
+        await dbPut('courses', patched);
+        courseByName.set(key, patched);
+      }
+      continue;
+    }
 
     const course: Course = {
       id: generateId(),
       name: courseName,
-      category: opts.courseStrategy === 'byTeacher' ? 'مجموعات مدرس' : 'مجموعات',
-      description: 'كورس مُنشأ تلقائياً من شيت إكسيل',
-      price: Math.max(0, opts.coursePrice),
+      category: subject
+        ? subject.category
+        : (opts.courseStrategy === 'byTeacher' ? 'مجموعات مدرس' : 'مجموعات'),
+      description: subject ? subject.description : 'كورس مُنشأ تلقائياً من شيت إكسيل',
+      subjectId: subject?.id,
+      price: priceFor(subject),
       durationMonths: Math.max(1, opts.durationMonths),
-      icon: '📘',
-      color: '#6366f1',
+      icon: subject?.icon || '📘',
+      color: subject?.color || '#6366f1',
       levels: [],
       createdAt: now,
       updatedAt: now,
@@ -649,7 +736,11 @@ export async function importSheetIntoDb(
 
   // ---------- 3) المجموعات ----------
   const resolvedGroupId = new Map<string, string>();
-  const groupRef = (g: ParsedGroup) => `${g.teacherName}::${g.rawHeader}`;
+  const groupRef = groupRefKey;
+  /** المدرس ← المواد اللي بيدرّسها (من مجموعاته) */
+  const teacherSubjects = new Map<string, Set<SubjectId>>();
+  /** المادة ← عدد المجموعات (للتقرير) */
+  const subjectGroupCount = new Map<SubjectId, number>();
 
   for (const g of parsed.groups) {
     const teacher = teacherByName.get(normalize(g.teacherName));
@@ -657,9 +748,26 @@ export async function importSheetIntoDb(
     const course = courseByName.get(normalize(courseKeyFor(g)));
     if (!course) { report.errors.push(`كورس مش موجود للمجموعة «${g.name}»`); continue; }
 
+    const subject = subjectOfGroup.get(groupRefKey(g)) || null;
+    if (subject) {
+      report.groupsWithSubject++;
+      subjectGroupCount.set(subject.id, (subjectGroupCount.get(subject.id) || 0) + 1);
+      const set = teacherSubjects.get(teacher.id) || new Set<SubjectId>();
+      set.add(subject.id);
+      teacherSubjects.set(teacher.id, set);
+    } else {
+      report.groupsWithoutSubject.push(`${g.teacherName} — ${g.name}`);
+    }
+
     const key = `${teacher.id}::${normalize(g.name)}`;
     const existing = groupByKey.get(key);
     if (existing) {
+      // مجموعة موجودة من غير مادة → نربطها (من غير ما نغيّر أي حاجة تانية)
+      if (subject && !existing.subjectId) {
+        const patched = { ...existing, subjectId: subject.id, updatedAt: now };
+        await dbPut('groups', patched);
+        groupByKey.set(key, patched);
+      }
       resolvedGroupId.set(groupRef(g), existing.id);
       report.groupsExisting++;
       tick(`مجموعة: ${g.name}`);
@@ -677,6 +785,7 @@ export async function importSheetIntoDb(
       id: generateId(),
       name: g.name,
       courseId: course.id,
+      subjectId: subject?.id ?? course.subjectId,
       teacherId: teacher.id,
       schedule,
       maxStudents: Math.max(opts.maxStudents, g.students.length),
@@ -784,6 +893,33 @@ export async function importSheetIntoDb(
       tick(`تسجيل: ${studentName}`);
     }
   }
+
+  // ---------- 5.5) مواد المدرسين + ملخص المواد ----------
+  for (const [teacherId, subjects] of teacherSubjects) {
+    const teacher = await dbGetById<Teacher>('teachers', teacherId);
+    if (!teacher) continue;
+    const merged = [...new Set([...(teacher.subjectIds || []), ...subjects])];
+    if (merged.length === (teacher.subjectIds || []).length) continue;
+    const names = merged
+      .map(id => SUBJECT_NAME.get(id))
+      .filter((n): n is string => !!n)
+      .join(' · ');
+    await dbPut('teachers', {
+      ...teacher,
+      subjectIds: merged,
+      specialization: teacher.specialization && teacher.specialization !== 'غير محدد'
+        ? teacher.specialization
+        : names,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  report.subjectsUsed = [...subjectGroupCount.entries()].map(([id, groups]) => ({
+    id,
+    name: SUBJECT_NAME.get(id) || id,
+    price: subjectPrice(id, opts.subjectPrices),
+    groups,
+  }));
 
   // ---------- 6) تحديث حالة المجموعات ----------
   for (const groupId of new Set(resolvedGroupId.values())) {

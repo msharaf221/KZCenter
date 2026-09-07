@@ -22,6 +22,7 @@ import {
 } from './billing';
 import { getBillingPolicy } from './settings';
 import { nextReceiptNo } from './receipts';
+import type { SubjectId, SubjectPrices } from './subjects';
 
 // ==================== INTERFACES ====================
 
@@ -95,6 +96,11 @@ export interface Teacher {
   id: string;
   name: string;
   specialization: string;
+  /**
+   * المواد اللي المدرس بيدرّسها (مفاتيح من كاتالوج المواد).
+   * بتتملي تلقائياً من مواد مجموعاته لو مش متحددة يدوياً.
+   */
+  subjectIds?: SubjectId[];
   phone: string;
   email?: string;
   /** الراتب الشهري الثابت (يُستخدم مع payModel = 'fixed' أو كنسبة افتراضية) */
@@ -183,6 +189,12 @@ export interface Course {
   name: string;
   category: string;
   description?: string;
+  /**
+   * المادة اللي الكورس بيدرّسها (english / math / hesab / arabic / quran).
+   * لما تكون محددة، سعر الكورس بيتحكم فيه سعر المادة (من الإعدادات أو الافتراضي)،
+   * والتقارير بتقدر تجمّع الفلوس والمجموعات بالمادة مش بالاسم الحر.
+   */
+  subjectId?: SubjectId;
   price: number;
   durationMonths: number;
   icon: string;
@@ -210,6 +222,11 @@ export interface Group {
   name: string;
   courseId: string;
   levelId?: string;
+  /**
+   * مادة المجموعة — بتتورّث من الكورس افتراضياً، وبتتخزن هنا عشان
+   * الفلترة والتقارير (والحالات النادرة اللي مجموعة فيها مادة مختلفة).
+   */
+  subjectId?: SubjectId;
   teacherId: string;
   schedule: ScheduleItem[];
   maxStudents: number;
@@ -366,6 +383,11 @@ export interface Settings {
   graceDays?: number;
   /** عدد الحصص في الشهر افتراضياً (لو الكورس/المجموعة مش محددة) */
   sessionsPerMonth?: number;
+  /**
+   * أسعار المواد الشهرية (تتجاوز الافتراضي في `lib/subjects`).
+   * مثال: { english: 250, math: 250, hesab: 200, arabic: 200, quran: 200 }
+   */
+  subjectPrices?: SubjectPrices;
   /** بادئة رقم الإيصال (افتراضي: السنة) */
   receiptPrefix?: string;
   /** تذييل الإيصال المطبوع (مثال: «الاشتراك غير قابل للاسترداد بعد أول حصة») */

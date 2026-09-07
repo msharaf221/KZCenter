@@ -367,3 +367,105 @@ describe('importSheetIntoDb — التسجيلات بعد المطابقة', () 
     expect(await dbGetAll<Student>('students')).toHaveLength(1);
   });
 });
+
+// ==================== المواد والأسعار في الاستيراد ====================
+
+describe('استيراد الشيت — المواد وأسعارها', () => {
+  beforeEach(clearAll);
+
+  /** شيت بمدرس واحد وأعمدة مواد مختلفة */
+  async function subjectsSheet(): Promise<Uint8Array> {
+    return makeWorkbook([
+      {
+        name: 'ولاء',
+        rows: [
+          ['s.r 1 السبت من 4/5', 'ماث 2 الاحد من 5/6', 'حساب 3 الاثنين من 4/5', 'قرآن 1 الثلاثاء من 5/6', 'عربي 2 الخميس من 4/5'],
+          ['أحمد محمد', 'سارة علي', 'محمود حسن', 'مريم سيد', 'يوسف طارق'],
+        ],
+      },
+    ]);
+  }
+
+  it('كل مجموعة بتاخد سعر مادتها (ماث 250 · حساب 200 · قرآن 200)', async () => {
+    const parsed = await parseSheetBuffer(await subjectsSheet());
+    const report = await importSheetIntoDb(parsed, {
+      courseStrategy: 'bySubject',
+      coursePrice: 0,
+      durationMonths: 1,
+      phonePrefix: '0100000',
+      maxStudents: 40,
+      useSubjectPrices: true,
+    });
+
+    const courses = await dbGetAll('courses');
+    const priceOf = (subjectId: string) =>
+      courses.find((c: { subjectId?: string }) => c.subjectId === subjectId)?.price;
+
+    expect(priceOf('english')).toBe(250);
+    expect(priceOf('math')).toBe(250);
+    expect(priceOf('hesab')).toBe(200);
+    expect(priceOf('quran')).toBe(200);
+    expect(priceOf('arabic')).toBe(200);
+    expect(report.groupsWithSubject).toBe(5);
+    expect(report.groupsWithoutSubject).toHaveLength(0);
+  });
+
+  it('المجموعات بتتربط بمادتها والمدرس بياخد مواده', async () => {
+    const parsed = await parseSheetBuffer(await subjectsSheet());
+    await importSheetIntoDb(parsed, {
+      courseStrategy: 'bySubject', coursePrice: 0, durationMonths: 1,
+      phonePrefix: '0100000', maxStudents: 40, useSubjectPrices: true,
+    });
+
+    const groups = await dbGetAll<Group>('groups');
+    expect(groups.map(g => g.subjectId).sort()).toEqual(
+      ['arabic', 'english', 'hesab', 'math', 'quran']
+    );
+
+    const teachers = await dbGetAll('teachers');
+    expect([...(teachers[0].subjectIds || [])].sort()).toEqual(
+      ['arabic', 'english', 'hesab', 'math', 'quran']
+    );
+  });
+
+  it('المجموعة اللي مش واضح مادتها بتاخد السعر الافتراضي وبتتسجل للمراجعة', async () => {
+    const buf = await makeWorkbook([
+      { name: 'محمد', rows: [['مجموعة 4 السبت من 4/5'], ['طالب أول']] },
+    ]);
+    const parsed = await parseSheetBuffer(buf);
+    const report = await importSheetIntoDb(parsed, {
+      courseStrategy: 'bySubject', coursePrice: 120, durationMonths: 1,
+      phonePrefix: '0100000', maxStudents: 40, useSubjectPrices: true,
+    });
+
+    expect(report.groupsWithSubject).toBe(0);
+    expect(report.groupsWithoutSubject).toHaveLength(1);
+    const courses = await dbGetAll('courses');
+    expect(courses[0].price).toBe(120);
+    expect(courses[0].subjectId).toBeUndefined();
+  });
+
+  it('لو أسعار المواد متقفلة كله بياخد السعر الموحّد', async () => {
+    const parsed = await parseSheetBuffer(await subjectsSheet());
+    await importSheetIntoDb(parsed, {
+      courseStrategy: 'bySubject', coursePrice: 175, durationMonths: 1,
+      phonePrefix: '0100000', maxStudents: 40, useSubjectPrices: false,
+    });
+
+    const courses = await dbGetAll('courses');
+    expect(courses.every((c: { price: number }) => c.price === 175)).toBe(true);
+  });
+
+  it('بيحترم أسعار المواد المخصّصة الممرّرة من الإعدادات', async () => {
+    const parsed = await parseSheetBuffer(await subjectsSheet());
+    await importSheetIntoDb(parsed, {
+      courseStrategy: 'bySubject', coursePrice: 0, durationMonths: 1,
+      phonePrefix: '0100000', maxStudents: 40, useSubjectPrices: true,
+      subjectPrices: { math: 300 },
+    });
+
+    const courses = await dbGetAll('courses');
+    expect(courses.find((c: { subjectId?: string }) => c.subjectId === 'math')?.price).toBe(300);
+    expect(courses.find((c: { subjectId?: string }) => c.subjectId === 'quran')?.price).toBe(200);
+  });
+});

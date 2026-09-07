@@ -8,6 +8,7 @@ import Badge from '../components/ui/Badge';
 import TransferDialog from '../components/TransferDialog';
 import RenewDialog from '../components/RenewDialog';
 import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, enrollStudent, unenrollStudent, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
+import { SUBJECTS, getSubject, type SubjectId } from '../lib/subjects';
 import { getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { resolveSessionsPerMonth } from '../lib/billing';
@@ -35,6 +36,8 @@ export default function GroupsPage() {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [search, setSearch] = useState('');
+  /** فلتر بالمادة ('' = الكل) */
+  const [subjectFilter, setSubjectFilter] = useState<SubjectId | ''>('');
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Group | null>(null);
@@ -76,12 +79,19 @@ export default function GroupsPage() {
       // Await all cleanup writes before updating UI
       if (cleanupPromises.length > 0) await Promise.all(cleanupPromises);
 
-      setGroups(cleanedGroups.filter(gr => !search || gr.name.toLowerCase().includes(search.toLowerCase())));
+      // مادة المجموعة: المخزّنة عليها، وإلا مادة كورسها (البيانات القديمة)
+      const subjectOf = (gr: Group): SubjectId | undefined =>
+        gr.subjectId ?? c.find(course => course.id === gr.courseId)?.subjectId;
+
+      setGroups(cleanedGroups.filter(gr =>
+        (!search || gr.name.toLowerCase().includes(search.toLowerCase()))
+        && (!subjectFilter || subjectOf(gr) === subjectFilter)
+      ));
       setCourses(c);
       setTeachers(t);
       setStudents(s);
     } finally { setLoading(false); }
-  }, [search]);
+  }, [search, subjectFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -113,8 +123,10 @@ export default function GroupsPage() {
     if (!form.teacherId) { notify.error('اختر مدرساً'); return; }
     try {
       const groupId = editing?.id || generateId();
+      // المجموعة بتورث مادة كورسها عشان الفلترة والتقارير تفضل متسقة
+      const subjectId = courses.find(c => c.id === form.courseId)?.subjectId;
       if (editing) {
-        await dbPut('groups', { ...editing, ...form, updatedAt: new Date().toISOString() });
+        await dbPut('groups', { ...editing, ...form, subjectId, updatedAt: new Date().toISOString() });
         notify.success('تم تحديث المجموعة');
         addAuditEntry({
           userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
@@ -122,7 +134,7 @@ export default function GroupsPage() {
           details: `تعديل المجموعة: ${form.name}`,
         });
       } else {
-        await dbAdd('groups', { id: groupId, ...form, studentIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        await dbAdd('groups', { id: groupId, ...form, subjectId, studentIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
         notify.success('تم إضافة المجموعة');
         addAuditEntry({
           userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
@@ -198,6 +210,11 @@ export default function GroupsPage() {
               placeholder="بحث بالاسم..."
               className="w-full pr-9 pl-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
+          <select value={subjectFilter} onChange={e => setSubjectFilter(e.target.value as SubjectId | '')}
+            className="px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none">
+            <option value="">كل المواد</option>
+            {SUBJECTS.map(s => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
+          </select>
           <button onClick={openAdd}
             className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
             style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
@@ -219,6 +236,15 @@ export default function GroupsPage() {
                     <div>
                       <h3 className="font-bold text-gray-900">{group.name}</h3>
                       <p className="text-xs text-gray-500">{course?.name} {course?.icon}</p>
+                      {(() => {
+                        const subject = getSubject(group.subjectId ?? course?.subjectId);
+                        return subject ? (
+                          <span className="inline-block mt-1 text-[11px] px-2 py-0.5 rounded-full text-white"
+                            style={{ backgroundColor: subject.color }}>
+                            {subject.icon} {subject.name}
+                          </span>
+                        ) : null;
+                      })()}
                     </div>
                     <Badge status={group.status} />
                   </div>
@@ -276,7 +302,11 @@ export default function GroupsPage() {
               <select value={form.courseId} onChange={e => setForm({...form, courseId: e.target.value, levelId: ''})}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
                 <option value="">اختر كورساً</option>
-                {courses.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+                {courses.map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.icon} {c.name}{c.subjectId ? ` — ${getSubject(c.subjectId)!.name} (${c.price})` : ''}
+                  </option>
+                ))}
               </select>
             </div>
             <div>

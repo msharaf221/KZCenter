@@ -79,6 +79,14 @@ CREATE TABLE IF NOT EXISTS groups (
   deleted BOOLEAN DEFAULT FALSE
 );
 
+-- أعمدة المواد (كاتالوج المواد: english / math / hesab / arabic / quran)
+-- المادة بتحكم سعر الكورس الشهري وبتخلي التقارير تتجمّع بالمادة مش بالاسم الحر.
+ALTER TABLE courses  ADD COLUMN IF NOT EXISTS subject_id TEXT;
+ALTER TABLE groups   ADD COLUMN IF NOT EXISTS subject_id TEXT;
+ALTER TABLE teachers ADD COLUMN IF NOT EXISTS subject_ids TEXT[] DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_courses_subject ON courses(subject_id);
+CREATE INDEX IF NOT EXISTS idx_groups_subject ON groups(subject_id);
+
 -- Payments table
 CREATE TABLE IF NOT EXISTS payments (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

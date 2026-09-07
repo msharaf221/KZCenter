@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FileSpreadsheet, Upload, AlertTriangle, CheckCircle2, Users, Layers, GraduationCap, BookOpen,
 } from 'lucide-react';
@@ -7,9 +7,11 @@ import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
 import { getContrastColor } from '../lib/utils';
 import {
-  parseSheetBuffer, importSheetIntoDb, SheetParseResult, SheetImportOptions,
+  parseSheetBuffer, importSheetIntoDb, subjectOfParsedGroup, SheetParseResult, SheetImportOptions,
   SheetImportReport, CourseStrategy,
 } from '../lib/sheetImport';
+import { SUBJECTS, type SubjectId } from '../lib/subjects';
+import { getSubjectPrices } from '../lib/subjectSync';
 
 interface Props {
   open: boolean;
@@ -19,6 +21,7 @@ interface Props {
 }
 
 const STRATEGY_LABELS: { value: CourseStrategy; label: string; hint: string }[] = [
+  { value: 'bySubject', label: 'كورس لكل مادة (مفضّل)', hint: 'إنجليزي / ماث / حساب / عربي / قرآن — بسعر المادة' },
   { value: 'byType', label: 'كورس لكل نوع مجموعة', hint: 'مثال: s.r / اقرا / level / grammer' },
   { value: 'byTeacher', label: 'كورس لكل مدرس', hint: 'كل مدرس يبقى له كورس باسمه' },
   { value: 'single', label: 'كورس واحد للكل', hint: 'كله تحت كورس «Kids Zone»' },
@@ -39,16 +42,49 @@ export default function SheetImportDialog({ open, onClose, onDone }: Props) {
   const [parsed, setParsed] = useState<SheetParseResult | null>(null);
   const [parsing, setParsing] = useState(false);
   const [opts, setOpts] = useState<SheetImportOptions>({
-    courseStrategy: 'byType',
+    courseStrategy: 'bySubject',
     coursePrice: 0,
     durationMonths: 1,
     phonePrefix: '0100000',
     maxStudents: 40,
+    useSubjectPrices: true,
   });
+  /** أسعار المواد الفعلية (من الإعدادات) — بتتحمّل مرة عند فتح النافذة */
+  const [prices, setPrices] = useState<Record<SubjectId, number> | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
   const [report, setReport] = useState<SheetImportReport | null>(null);
   const [busy, setBusy] = useState(false);
   const [showAllGroups, setShowAllGroups] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    getSubjectPrices().then(p => {
+      setPrices(p);
+      setOpts(o => ({ ...o, subjectPrices: p }));
+    });
+  }, [open]);
+
+  /** توزيع مجموعات الشيت على المواد (معاينة قبل الاستيراد) */
+  const subjectBreakdown = useMemo(() => {
+    if (!parsed) return { rows: [] as { id: SubjectId; name: string; icon: string; groups: number; price: number }[], unknown: 0 };
+    const counts = new Map<SubjectId, number>();
+    let unknown = 0;
+    for (const g of parsed.groups) {
+      const subject = subjectOfParsedGroup(g);
+      if (!subject) { unknown++; continue; }
+      counts.set(subject.id, (counts.get(subject.id) || 0) + 1);
+    }
+    const rows = SUBJECTS
+      .filter(s => counts.has(s.id))
+      .map(s => ({
+        id: s.id,
+        name: s.name,
+        icon: s.icon,
+        groups: counts.get(s.id) || 0,
+        price: prices?.[s.id] ?? s.monthlyPrice,
+      }));
+    return { rows, unknown };
+  }, [parsed, prices]);
 
   const coursesCount = useMemo(() => {
     if (!parsed) return 0;
@@ -56,6 +92,10 @@ export default function SheetImportDialog({ open, onClose, onDone }: Props) {
     for (const g of parsed.groups) {
       if (opts.courseStrategy === 'single') set.add('Kids Zone');
       else if (opts.courseStrategy === 'byTeacher') set.add(g.teacherName);
+      else if (opts.courseStrategy === 'bySubject') {
+        const subject = subjectOfParsedGroup(g);
+        set.add(subject ? subject.name : (g.name.includes(g.teacherName) ? g.teacherName : g.name.replace(/\([^)]*\)/g, '').replace(/\d+(\s*\/\s*\d+)?/g, '').trim()));
+      }
       else set.add(g.name.includes(g.teacherName) ? g.teacherName : g.name.replace(/\([^)]*\)/g, '').replace(/\d+(\s*\/\s*\d+)?/g, '').trim());
     }
     return set.size;
@@ -168,7 +208,7 @@ export default function SheetImportDialog({ open, onClose, onDone }: Props) {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">سعر الاشتراك الشهري للكورسات الجديدة</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">سعر المجموعات اللي مش معروفة مادتها</label>
             <input
               type="number"
               min={0}
@@ -179,8 +219,27 @@ export default function SheetImportDialog({ open, onClose, onDone }: Props) {
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"
             />
             <p className="text-[11px] text-gray-400 mt-1">
-              لو سبته صفر محدش هيكون عليه مديونية — تعدّله بعدين من صفحة الكورسات
+              المجموعات اللي اتعرفت مادتها بتاخد سعر المادة تلقائياً — ده للباقي بس
             </p>
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className="flex items-center gap-2 text-xs font-medium text-gray-700 p-3 bg-gray-50 rounded-xl cursor-pointer">
+              <input
+                type="checkbox"
+                disabled={busy}
+                checked={opts.useSubjectPrices !== false}
+                onChange={e => setOpts(o => ({ ...o, useSubjectPrices: e.target.checked }))}
+                className="w-4 h-4"
+              />
+              <span>
+                استخدم أسعار المواد المعتمدة
+                <span className="text-gray-400 font-normal">
+                  {' '}(إنجليزي {prices?.english ?? 250} · ماث {prices?.math ?? 250} · حساب {prices?.hesab ?? 200} ·
+                  {' '}عربي {prices?.arabic ?? 200} · قرآن {prices?.quran ?? 200})
+                </span>
+              </span>
+            </label>
           </div>
 
           <div>
@@ -227,6 +286,26 @@ export default function SheetImportDialog({ open, onClose, onDone }: Props) {
                 </div>
               ))}
             </div>
+
+            {/* المواد المكتشفة */}
+            {subjectBreakdown.rows.length > 0 && (
+              <div className="border border-gray-100 rounded-xl p-3">
+                <div className="text-xs font-bold text-gray-700 mb-2">المواد اللي اتعرفت في الشيت</div>
+                <div className="flex flex-wrap gap-2">
+                  {subjectBreakdown.rows.map(r => (
+                    <span key={r.id} className="text-xs bg-gray-50 border border-gray-100 rounded-lg px-2.5 py-1.5">
+                      {r.icon} <b>{r.name}</b> — {r.groups} مجموعة ·{' '}
+                      <span className="text-green-600 font-semibold">{r.price} شهرياً</span>
+                    </span>
+                  ))}
+                  {subjectBreakdown.unknown > 0 && (
+                    <span className="text-xs bg-amber-50 text-amber-800 border border-amber-100 rounded-lg px-2.5 py-1.5">
+                      {subjectBreakdown.unknown} مجموعة مش واضح مادتها — هتاخد السعر الافتراضي وتقدر تربطها بعدين
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="text-xs text-gray-600 bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2">
               هيتم إنشاء <b>{parsed.totalSlots}</b> تسجيل.
@@ -315,7 +394,19 @@ export default function SheetImportDialog({ open, onClose, onDone }: Props) {
               <span>طلاب: {report.studentsCreated} جديد / {report.studentsExisting} موجود</span>
               <span>تسجيلات: {report.enrollmentsCreated}</span>
               <span>اتخطّى: {report.enrollmentsSkipped}</span>
+              <span>مجموعات بمادة: {report.groupsWithSubject}</span>
             </div>
+            {report.subjectsUsed.length > 0 && (
+              <div className="text-xs pt-1">
+                المواد: {report.subjectsUsed.map(s => `${s.name} (${s.groups} مجموعة · ${s.price})`).join(' · ')}
+              </div>
+            )}
+            {report.groupsWithoutSubject.length > 0 && (
+              <div className="text-xs text-amber-800">
+                مجموعات محتاجة ربط مادة يدوي ({report.groupsWithoutSubject.length}):{' '}
+                {report.groupsWithoutSubject.slice(0, 6).join('، ')}
+              </div>
+            )}
             {report.errors.length > 0 && (
               <div className="mt-2 pt-2 border-t border-emerald-200 max-h-32 overflow-y-auto">
                 <div className="font-bold text-amber-800 mb-1">مشاكل ({report.errors.length}):</div>
