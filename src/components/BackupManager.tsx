@@ -26,6 +26,7 @@ import {
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
 import { getContrastColor } from '../lib/utils';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 export default function BackupManager() {
   const { settings } = useApp();
@@ -36,6 +37,9 @@ export default function BackupManager() {
   const [dataSize, setDataSize] = useState('...');
   const [isRunning, setIsRunning] = useState(false);
   const [schedulerActive, setSchedulerActive] = useState(false);
+  /** تأكيد الاستعادة بنافذة React بدل نافذة المتصفح الأصلية
+   *  (النوافذ الأصلية بتكسر فوكس النافذة في Electron على ويندوز وبتخلي القوائم تقفل لوحدها) */
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   async function loadData() {
     setConfig(getBackupConfig());
@@ -72,7 +76,7 @@ export default function BackupManager() {
     }
   }
 
-  async function handleRestoreFromFile() {
+  function handleRestoreFromFile() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';
@@ -80,9 +84,14 @@ export default function BackupManager() {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
 
-      if (!confirm('هل أنت متأكد من استعادة هذه النسخة؟ سيتم استبدال جميع البيانات الحالية.')) {
-        return;
-      }
+      // تأكيد بنافذة React (مش نافذة المتصفح الأصلية اللي بتكسر الفوكس)
+      const ok = await confirm({
+        title: 'استعادة نسخة احتياطية',
+        message: 'هل أنت متأكد من استعادة هذه النسخة؟ سيتم استبدال جميع البيانات الحالية.',
+        confirmLabel: 'نعم، استعادة',
+        danger: true,
+      });
+      if (!ok) return;
 
       const text = await file.text();
       const success = await restoreBackup('file', text);
@@ -412,6 +421,9 @@ export default function BackupManager() {
           </div>
         )}
       </div>
+
+      {/* تأكيد الاستعادة — نافذة React بدل نافذة المتصفح الأصلية */}
+      {confirmDialog}
     </div>
   );
 }

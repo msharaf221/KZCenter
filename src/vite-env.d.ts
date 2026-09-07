@@ -23,6 +23,10 @@ interface ElectronAPI {
   system: {
     notify: (title: string, body: string) => Promise<{ success: boolean; error?: string }>;
   };
+  window: {
+    /** استرداد فوكس النافذة بعد نوافذ alert()/confirm() الأصلية (ويندوز) */
+    refocus: () => void;
+  };
   app: {
     info: () => Promise<{
       version: string;

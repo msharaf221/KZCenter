@@ -22,6 +22,7 @@ import { syncLocalToCloud, syncCloudToLocal, type SyncReport } from '../lib/stor
 import { SUBJECTS, DEFAULT_SUBJECT_PRICES, subjectPrice, type SubjectId, type SubjectPrices } from '../lib/subjects';
 import { syncSubjects, type SubjectSyncReport } from '../lib/subjectSync';
 import { auditData, autoFix, type QualityReport } from '../lib/dataQuality';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 export default function SettingsPage() {
   const {
@@ -69,6 +70,8 @@ export default function SettingsPage() {
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [supabaseExpanded, setSupabaseExpanded] = useState(false);
+  /** تأكيدات بنافذة React بدل نوافذ المتصفح الأصلية (بتكسر فوكس النافذة في Electron على ويندوز) */
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
 
   async function handleIntegrityCheck() {
     setChecking(true);
@@ -264,16 +267,25 @@ export default function SettingsPage() {
     saveSupabaseConfig(supabaseUrl, supabaseKey);
     saveCloudCredentials(cloudEmail.trim(), cloudPassword);
     notify.success('تم حفظ إعدادات Supabase وحساب المركز. يُنصح بإعادة تحميل الصفحة.');
-    // Show reload prompt
-    setTimeout(() => {
-      if (confirm('هل تريد إعادة تحميل الصفحة لتطبيق الإعدادات؟')) {
-        window.location.reload();
-      }
-    }, 1000);
+    // سؤال إعادة التحميل — نافذة React بدل نافذة المتصفح الأصلية
+    void (async () => {
+      const ok = await confirm({
+        title: 'إعادة تحميل الصفحة',
+        message: 'هل تريد إعادة تحميل الصفحة لتطبيق الإعدادات؟',
+        confirmLabel: 'إعادة التحميل',
+      });
+      if (ok) window.location.reload();
+    })();
   }
 
-  function handleClearSupabaseConfig() {
-    if (!confirm('هل أنت متأكد من حذف إعدادات Supabase واعتماد الحساب السحابي؟ البيانات المحلية لن تتأثر.')) return;
+  async function handleClearSupabaseConfig() {
+    const ok = await confirm({
+      title: 'حذف إعدادات السحابة',
+      message: 'هل أنت متأكد من حذف إعدادات Supabase واعتماد الحساب السحابي؟ البيانات المحلية لن تتأثر.',
+      confirmLabel: 'نعم، حذف',
+      danger: true,
+    });
+    if (!ok) return;
     clearSupabaseConfig();
     clearCloudCredentials();
     setSupabaseUrl('');
@@ -1050,6 +1062,9 @@ export default function SettingsPage() {
         {/* Backup Manager */}
         <BackupManager />
       </div>
+
+      {/* تأكيدات (نافذة React بدل نوافذ المتصفح الأصلية) */}
+      {confirmDialog}
     </Layout>
   );
 }
