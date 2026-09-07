@@ -69,6 +69,18 @@ function createWindow(): void {
     mainWindow?.show();
   });
 
+  // نوافذ الطباعة المنبثقة (window.open): لما بتتقفل، النافذة الرئيسية
+  // على ويندوز بترجع بحالة فوكس مكسورة (باغ electron#31917/#41603)
+  // فقوائم <select> بتفتح وتقفل فوراً. أول ما النافذة الابن تتقفل بنرجّع
+  // الفوكس الصح بـ blur + focus.
+  mainWindow.webContents.on('did-create-window', (childWindow) => {
+    childWindow.once('closed', () => {
+      refocusMainWindow();
+      // جرعة تأمين زي بتاعة الـ renderer — بعد شوية مرة كمان.
+      setTimeout(() => refocusMainWindow(), 150);
+    });
+  });
+
   // Load app
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
@@ -107,16 +119,21 @@ app.on('window-all-closed', () => {
  * استرداد فوكس النافذة (ويندوز)
  *
  * باغ معروف في Electron على ويندوز (electron/electron#31917 و#41603):
- * بعد ما الـ renderer يعرض نافذة `alert()` أو `confirm()` أصلية، النافذة
- * الرئيسية ما بتستردش حالة الفوكس صح — فقوائم `<select>` المنسدلة بتفتح
- * وتقفل فوراً لوحدها والحقول ممكن تبطل تستجيب.
+ * بعد أي نافذة نظام أصلية (alert/confirm، حوار الطباعة، حوار اختيار
+ * الملفات، نافذة منبثقة بتتقفل)، النافذة الرئيسية ما بتستردش حالة
+ * الفوكس صح — فقوائم `<select>` المنسدلة بتفتح وتقفل فوراً لوحدها
+ * والحقول ممكن تبطل تستجيب.
  * `blur()` ورا `focus()` بيرجّع حالة الفوكس الصحيحة من غير إعادة تشغيل.
  */
-ipcMain.on('window:refocus', () => {
+function refocusMainWindow(): void {
   if (process.platform !== 'win32') return;
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.blur();
   mainWindow.focus();
+}
+
+ipcMain.on('window:refocus', () => {
+  refocusMainWindow();
 });
 
 // ==================== IPC HANDLERS - BACKUP SYSTEM ====================
@@ -159,6 +176,10 @@ ipcMain.handle('backup:restore-local', async (_event, filepath?: string) => {
         ],
         properties: ['openFile'],
       });
+
+      // حوار الملفات الأصلي بيكسر حالة الفوكس على ويندوز (زي alert/confirm)
+      // — بنرجّعها فوراً بعد ما الحوار يتقفل (إلغاء أو اختيار).
+      refocusMainWindow();
 
       if (result.canceled || !result.filePaths[0]) {
         return { success: false, error: 'تم الإلغاء' };
