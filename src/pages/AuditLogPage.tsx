@@ -16,6 +16,7 @@ const ACTION_LABELS: Record<string, string> = {
   export: 'تصدير',
   import: 'استيراد',
   backup: 'نسخ احتياطي',
+  writeoff: 'تصفير مديونيات',
 };
 
 const ACTION_COLORS: Record<string, string> = {
@@ -27,6 +28,7 @@ const ACTION_COLORS: Record<string, string> = {
   export: 'bg-purple-100 text-purple-700',
   import: 'bg-orange-100 text-orange-700',
   backup: 'bg-yellow-100 text-yellow-700',
+  writeoff: 'bg-rose-100 text-rose-700',
 };
 
 export default function AuditLogPage() {

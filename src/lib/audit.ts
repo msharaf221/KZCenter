@@ -14,7 +14,9 @@ import { dbAdd, dbGetAll, dbGetById, generateId } from './db';
 export type AuditAction =
   | 'create' | 'update' | 'delete' | 'login' | 'logout'
   | 'export' | 'import' | 'backup' | 'restore'
-  | 'void' | 'refund' | 'payment' | 'payroll' | 'sync';
+  | 'void' | 'refund' | 'payment' | 'payroll' | 'sync'
+  /** تصفير المديونيات (إبراء ذمة) — إلغاء أقساط غير مسددة */
+  | 'writeoff';
 
 export interface AuditEntry {
   id: string;
