@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit2, Trash2, Search } from 'lucide-react';
+import { Plus, Edit2, Trash2, Search, Wand2, Tag } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
@@ -9,9 +9,11 @@ import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
+import { SUBJECTS, SUBJECT_CATEGORIES, getSubject, type SubjectId } from '../lib/subjects';
+import { syncSubjects, getSubjectPrices, type SubjectSyncReport } from '../lib/subjectSync';
 
-const EMOJIS = ['📚', '🔢', '🔬', '💻', '🎨', '🎵', '🌍', '⚽', '🧪', '📖', '✏️', '🎯'];
-const CATEGORIES = ['علوم', 'رياضيات', 'لغات', 'حاسوب', 'فنون', 'رياضة', 'أخرى'];
+const EMOJIS = ['📚', '🔢', '🔬', '💻', '🎨', '🎵', '🌍', '⚽', '🧪', '📖', '✏️', '🎯', '🧮', '🕌'];
+const CATEGORIES = [...new Set([...SUBJECT_CATEGORIES, 'علوم', 'حاسوب', 'فنون', 'رياضة', 'أخرى'])];
 
 export default function CoursesPage() {
   const { settings } = useApp();
@@ -26,9 +28,14 @@ export default function CoursesPage() {
   const [studentCounts, setStudentCounts] = useState<Record<string, number>>({});
   const [form, setForm] = useState({
     name: '', category: 'علوم', description: '', price: 0,
+    subjectId: undefined as SubjectId | undefined,
     durationMonths: 3, sessionsPerMonth: undefined as number | undefined, icon: '📚', color: COLORS[0], levels: [] as CourseLevel[],
   });
   const [newLevelName, setNewLevelName] = useState('');
+  /** أسعار المواد الفعلية (إعدادات المستخدم فوق الافتراضي) */
+  const [subjectPrices, setSubjectPrices] = useState<Record<SubjectId, number> | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncReport, setSyncReport] = useState<SubjectSyncReport | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,17 +58,61 @@ export default function CoursesPage() {
   }, [search]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { getSubjectPrices().then(setSubjectPrices); }, []);
 
   function openAdd() {
     setEditing(null);
-    setForm({ name: '', category: 'علوم', description: '', price: 0, durationMonths: 3, sessionsPerMonth: undefined, icon: '📚', color: COLORS[0], levels: [] });
+    setForm({ name: '', category: 'علوم', description: '', price: 0, subjectId: undefined, durationMonths: 3, sessionsPerMonth: undefined, icon: '📚', color: COLORS[0], levels: [] });
     setShowModal(true);
   }
 
   function openEdit(c: Course) {
     setEditing(c);
-    setForm({ name: c.name, category: c.category, description: c.description || '', price: c.price, durationMonths: c.durationMonths, sessionsPerMonth: c.sessionsPerMonth, icon: c.icon, color: c.color, levels: [...c.levels] });
+    setForm({ name: c.name, category: c.category, description: c.description || '', price: c.price, subjectId: c.subjectId, durationMonths: c.durationMonths, sessionsPerMonth: c.sessionsPerMonth, icon: c.icon, color: c.color, levels: [...c.levels] });
     setShowModal(true);
+  }
+
+  /**
+   * اختيار المادة بيجرّ معاه سعرها الشهري وأيقونتها ولونها وتصنيفها،
+   * لأن السعر بقى مربوط بالمادة مش متكتب يدوي لكل كورس.
+   */
+  function pickSubject(id: SubjectId | undefined) {
+    if (!id) { setForm(f => ({ ...f, subjectId: undefined })); return; }
+    const subject = getSubject(id)!;
+    const price = subjectPrices?.[id] ?? subject.monthlyPrice;
+    setForm(f => ({
+      ...f,
+      subjectId: id,
+      price,
+      category: subject.category,
+      icon: f.icon === '📚' ? subject.icon : f.icon,
+      color: f.color === COLORS[0] ? subject.color : f.color,
+      name: f.name.trim() ? f.name : subject.name,
+    }));
+  }
+
+  /** ظبط كل الكورسات/المجموعات/المدرسين على كاتالوج المواد وأسعاره */
+  async function handleSyncSubjects() {
+    setSyncing(true);
+    try {
+      const report = await syncSubjects();
+      setSyncReport(report);
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'update', entity: 'course', entityId: 'subjects-sync',
+        details: `ظبط المواد: ${report.coursesLinked} كورس اترابط، ${report.coursesRepriced} سعر اتحدّث، ${report.groupsLinked} مجموعة، ${report.teachersLinked} مدرس`,
+      });
+      notify.success(
+        `تم الظبط: ${report.coursesCreated} كورس جديد · ${report.coursesLinked} اترابط بمادته · ` +
+        `${report.coursesRepriced} سعر اتحدّث · ${report.groupsLinked} مجموعة · ${report.teachersLinked} مدرس`
+      );
+      setSubjectPrices(await getSubjectPrices());
+      load();
+    } catch {
+      notify.error('حصل خطأ أثناء ظبط المواد');
+    } finally {
+      setSyncing(false);
+    }
   }
 
   function addLevel() {
@@ -128,11 +179,55 @@ export default function CoursesPage() {
               placeholder="بحث بالاسم..."
               className="w-full pr-9 pl-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
+          <button onClick={handleSyncSubjects} disabled={syncing}
+            title="يربط كل كورس بمادته ويحدّث الأسعار والمجموعات والمدرسين"
+            className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+            <Wand2 size={16} /> {syncing ? 'جاري الظبط…' : 'ظبط المواد والأسعار'}
+          </button>
           <button onClick={openAdd}
             className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
             style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             <Plus size={16} /> إضافة كورس
           </button>
+        </div>
+
+        {/* ---------- أسعار المواد الشهرية ---------- */}
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Tag size={16} className="text-gray-400" />
+            <h2 className="text-sm font-bold text-gray-900">أسعار المواد (الشهر الواحد)</h2>
+            <span className="text-[11px] text-gray-400">تتعدّل من الإعدادات — وأي كورس مربوط بمادة بياخد سعرها</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {SUBJECTS.map(s => (
+              <div key={s.id} className="rounded-xl border border-gray-100 p-3 text-center">
+                <div className="text-2xl mb-1">{s.icon}</div>
+                <div className="text-sm font-semibold text-gray-900">{s.name}</div>
+                <div className="text-xs font-bold text-green-600 mt-1">
+                  {formatCurrency(subjectPrices?.[s.id] ?? s.monthlyPrice, settings?.currency)}
+                </div>
+              </div>
+            ))}
+          </div>
+          {syncReport && (
+            <div className="mt-3 text-xs text-gray-600 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2 space-y-1">
+              <div>
+                كورسات: {syncReport.coursesCreated} جديد · {syncReport.coursesLinked} اترابط بمادته ·
+                {' '}{syncReport.coursesRepriced} سعر اتحدّث — مجموعات: {syncReport.groupsLinked} · مدرسين: {syncReport.teachersLinked}
+              </div>
+              {syncReport.installmentsUpdated > 0 && (
+                <div>
+                  اتحدّث {syncReport.installmentsUpdated} قسط لسه مدفعش (المدفوع والجزئي اتساب زي ما هو)
+                  {' '}وأعيد حساب {syncReport.studentsRecalculated} طالب.
+                </div>
+              )}
+              {syncReport.coursesUnmatched.length > 0 && (
+                <div className="text-amber-800">
+                  محتاج ربط يدوي ({syncReport.coursesUnmatched.length}): {syncReport.coursesUnmatched.slice(0, 8).join('، ')}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {loading ? (
@@ -148,7 +243,17 @@ export default function CoursesPage() {
                       <span className="text-3xl">{course.icon}</span>
                       <div>
                         <h3 className="font-bold text-gray-900">{course.name}</h3>
-                        <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{course.category}</span>
+                        <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                          <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{course.category}</span>
+                          {course.subjectId ? (
+                            <span className="text-xs px-2 py-0.5 rounded-full text-white"
+                              style={{ backgroundColor: getSubject(course.subjectId)!.color }}>
+                              {getSubject(course.subjectId)!.icon} {getSubject(course.subjectId)!.name}
+                            </span>
+                          ) : (
+                            <span className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">بدون مادة</span>
+                          )}
+                        </div>
                       </div>
                     </div>
                     <div className="flex gap-1">
@@ -197,6 +302,21 @@ export default function CoursesPage() {
               <label className="block text-sm font-semibold text-gray-700 mb-1">اسم الكورس *</label>
               <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-semibold text-gray-700 mb-1">المادة</label>
+              <select value={form.subjectId ?? ''} onChange={e => pickSubject((e.target.value || undefined) as SubjectId | undefined)}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
+                <option value="">— بدون مادة (سعر يدوي) —</option>
+                {SUBJECTS.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.icon} {s.name} — {subjectPrices?.[s.id] ?? s.monthlyPrice} شهرياً
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-gray-400 mt-1">
+                لما تختار مادة، السعر الشهري بياخد سعرها تلقائياً (تقدر تعدّله بعدها لهذا الكورس بس)
+              </p>
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">التصنيف</label>

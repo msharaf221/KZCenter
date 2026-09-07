@@ -12,11 +12,12 @@ import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
+import { SUBJECTS, getSubject, type SubjectId } from '../lib/subjects';
 
 const PAGE_SIZE = 20;
 
 const INITIAL_FORM: Omit<Teacher, 'id' | 'createdAt' | 'updatedAt'> = {
-  name: '', specialization: '', phone: '', email: '',
+  name: '', specialization: '', subjectIds: [], phone: '', email: '',
   salary: 0, status: 'active', avatar: '', notes: '',
 };
 
@@ -41,7 +42,14 @@ export default function TeachersPage() {
     try {
       const result = await dbGetPaginated<Teacher>('teachers', page, PAGE_SIZE, (t: Teacher) => {
         const q = search.toLowerCase();
-        return !q || t.name.toLowerCase().includes(q) || t.specialization.toLowerCase().includes(q);
+        if (!q) return true;
+        const subjectNames = (t.subjectIds || [])
+          .map(id => getSubject(id)?.name || '')
+          .join(' ')
+          .toLowerCase();
+        return t.name.toLowerCase().includes(q)
+          || t.specialization.toLowerCase().includes(q)
+          || subjectNames.includes(q);
       });
       setTeachers(result.items);
       setTotal(result.total);
@@ -71,7 +79,7 @@ export default function TeachersPage() {
 
   function openEdit(t: Teacher) {
     setEditingTeacher(t);
-    setForm({ name: t.name, specialization: t.specialization, phone: t.phone, email: t.email || '', salary: t.salary, status: t.status, avatar: t.avatar || '', notes: t.notes || '' });
+    setForm({ name: t.name, specialization: t.specialization, subjectIds: t.subjectIds || [], phone: t.phone, email: t.email || '', salary: t.salary, status: t.status, avatar: t.avatar || '', notes: t.notes || '' });
     setShowModal(true);
   }
 
@@ -139,6 +147,20 @@ export default function TeachersPage() {
                     <div>
                       <h3 className="font-bold text-gray-900 text-sm">{teacher.name}</h3>
                       <p className="text-xs text-gray-500">{teacher.specialization}</p>
+                      {(teacher.subjectIds || []).length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {(teacher.subjectIds || []).map(id => {
+                            const subject = getSubject(id);
+                            if (!subject) return null;
+                            return (
+                              <span key={id} className="text-[10px] px-1.5 py-0.5 rounded-full text-white"
+                                style={{ backgroundColor: subject.color }}>
+                                {subject.icon} {subject.name}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <Badge status={teacher.status} />
@@ -191,6 +213,29 @@ export default function TeachersPage() {
             <input type="text" value={form.specialization} onChange={e => setForm({...form, specialization: e.target.value})}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder="مثال: رياضيات، لغة عربية" />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-semibold text-gray-700 mb-2">المواد اللي بيدرّسها</label>
+            <div className="flex flex-wrap gap-2">
+              {SUBJECTS.map(s => {
+                const active = (form.subjectIds || []).includes(s.id);
+                return (
+                  <button key={s.id} type="button"
+                    onClick={() => setForm(f => {
+                      const current = f.subjectIds || [];
+                      const next = current.includes(s.id)
+                        ? current.filter(x => x !== s.id)
+                        : [...current, s.id as SubjectId];
+                      return { ...f, subjectIds: next };
+                    })}
+                    className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${active ? 'text-white border-transparent' : 'text-gray-600 border-gray-200 hover:bg-gray-50'}`}
+                    style={active ? { backgroundColor: s.color } : {}}>
+                    {s.icon} {s.name}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-1">بتتملي تلقائياً من مواد مجموعاته لما تضغط «ظبط المواد» في صفحة الكورسات</p>
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">رقم الهاتف *</label>

@@ -258,6 +258,8 @@ describe('importSheetIntoDb', () => {
       ...DEFAULT_IMPORT_OPTIONS,
       courseStrategy: 'byType',
       coursePrice: 800,
+      // سعر موحّد صريح: أسعار المواد متقفلة عشان نختبر المسار القديم
+      useSubjectPrices: false,
     });
 
     expect(report.teachersCreated).toBe(3);
@@ -292,7 +294,11 @@ describe('importSheetIntoDb', () => {
 
   it('بينشئ أقساط لكل تسجيل', async () => {
     const parsed = await parseSheetBuffer(await SAMPLE);
-    await importSheetIntoDb(parsed, { ...DEFAULT_IMPORT_OPTIONS, coursePrice: 800 });
+    await importSheetIntoDb(parsed, {
+      ...DEFAULT_IMPORT_OPTIONS,
+      coursePrice: 800,
+      useSubjectPrices: false,
+    });
 
     const enrollments = await dbGetAll<Enrollment>('enrollments');
     const installments = await dbGetAll<Installment>('installments');
@@ -387,6 +393,8 @@ describe.skipIf(!fs.existsSync(REAL_FILE))('الشيت الحقيقي (tmp/kidsz
       ...DEFAULT_IMPORT_OPTIONS,
       courseStrategy: 'byType',
       coursePrice: 800,
+      // سعر موحّد صريح: أسعار المواد متقفلة عشان نختبر المسار القديم
+      useSubjectPrices: false,
     });
 
     const [teachers, courses, groups, students, enrollments, installments] = await Promise.all([
