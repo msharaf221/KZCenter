@@ -2,6 +2,11 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App';
+import { installFocusGuard } from './lib/focusGuard';
+
+// إصلاح باغ الفوكس في Electron على ويندوز (نافذة alert/confirm الأصلية
+// بتكسر فوكس النافذة وبتخلي قوائم الاختيار تقفل لوحدها) — لازم قبل أي تفاعل.
+installFocusGuard();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

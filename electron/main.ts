@@ -101,6 +101,24 @@ app.on('window-all-closed', () => {
   }
 });
 
+// ==================== IPC HANDLERS - WINDOW ====================
+
+/**
+ * استرداد فوكس النافذة (ويندوز)
+ *
+ * باغ معروف في Electron على ويندوز (electron/electron#31917 و#41603):
+ * بعد ما الـ renderer يعرض نافذة `alert()` أو `confirm()` أصلية، النافذة
+ * الرئيسية ما بتستردش حالة الفوكس صح — فقوائم `<select>` المنسدلة بتفتح
+ * وتقفل فوراً لوحدها والحقول ممكن تبطل تستجيب.
+ * `blur()` ورا `focus()` بيرجّع حالة الفوكس الصحيحة من غير إعادة تشغيل.
+ */
+ipcMain.on('window:refocus', () => {
+  if (process.platform !== 'win32') return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.blur();
+  mainWindow.focus();
+});
+
 // ==================== IPC HANDLERS - BACKUP SYSTEM ====================
 
 /**

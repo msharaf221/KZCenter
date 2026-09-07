@@ -52,6 +52,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     notify: (title: string, body: string) => ipcRenderer.invoke('system:notify', title, body),
   },
 
+  // ==================== WINDOW ====================
+  window: {
+    /**
+     * استرداد فوكس النافذة (ويندوز):
+     * بعد نوافذ alert()/confirm() الأصلية النافذة بتفقد حالة الفوكس الصح،
+     * وقوائم <select> بتفتح وتقفل فوراً. blur + focus بيرجّع الحالة الطبيعية.
+     */
+    refocus: () => ipcRenderer.send('window:refocus'),
+  },
+
   // ==================== APP INFO ====================
   app: {
     /**
@@ -87,6 +97,10 @@ export interface ElectronAPI {
   };
   system: {
     notify: (title: string, body: string) => Promise<{ success: boolean; error?: string }>;
+  };
+  window: {
+    /** استرداد فوكس النافذة بعد نوافذ alert()/confirm() الأصلية (ويندوز) */
+    refocus: () => void;
   };
   app: {
     info: () => Promise<{

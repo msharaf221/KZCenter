@@ -4,6 +4,7 @@ import { Eye, EyeOff, Lock, User, RefreshCw, Shield, AlertTriangle } from 'lucid
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
 import { checkPasswordStrength } from '../lib/security';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -12,6 +13,8 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [mustChangePassword, setMustChangePassword] = useState(false);
+  // تأكيد إعادة التعيين بنافذة React بدل نافذة المتصفح الأصلية
+  const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordStrength, setPasswordStrength] = useState<ReturnType<typeof checkPasswordStrength> | null>(null);
@@ -99,9 +102,16 @@ export default function LoginPage() {
   }
 
   async function handleResetDatabase() {
-    if (!window.confirm('هل أنت متأكد من إعادة تعيين قاعدة البيانات؟ سيتم حذف جميع البيانات!')) {
-      return;
-    }
+    // التأكيد بنافذة React (مش نافذة المتصفح الأصلية)، لأن النوافذ الأصلية
+    // (confirm/alert) بتكسر فوكس النافذة في Electron على ويندوز وبتخلي
+    // قوائم الاختيار تقفل لوحدها بعد كده.
+    const ok = await confirm({
+      title: 'إعادة تعيين قاعدة البيانات',
+      message: 'هل أنت متأكد من إعادة تعيين قاعدة البيانات؟ سيتم حذف جميع البيانات!',
+      confirmLabel: 'نعم، إعادة التعيين',
+      danger: true,
+    });
+    if (!ok) return;
     setResetting(true);
     try {
       const deleteRequest = indexedDB.deleteDatabase('EduCenterProDB');
@@ -338,6 +348,9 @@ export default function LoginPage() {
               </button>
             </div>
           )}
+
+          {/* تأكيد إعادة تعيين قاعدة البيانات — نافذة React بدل نافذة المتصفح الأصلية */}
+          {confirmDialog}
         </div>
       </div>
     </div>
