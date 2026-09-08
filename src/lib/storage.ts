@@ -67,7 +67,7 @@ export const INTERNAL_CLOUD_FIELDS = ['tenant_id'];
 // الجداول اللي مفتاحها الأساسي مركّب (id, tenant_id) في السحابة (المعزولة
 // بعمود مستأجِر والمُنشأة حديثاً) تحتاج عمود المستأجِر في هدف التعارض، لأن
 // id لوحده يتكرر عبر المستأجرين/المراكز. الجداول القديمة مفتاحها id (UUID) فريد.
-const CONFLICT_TARGET: Record<string, string> = {
+export const CONFLICT_TARGET: Record<string, string> = {
   settings: 'id,tenant_id',
   counters: 'id,tenant_id',
   payroll: 'id,tenant_id',
@@ -373,7 +373,7 @@ export function formatSyncReport(report: SyncReport): string {
   ];
   for (const t of report.tables) {
     if (t.pushed || t.pulled || t.error) {
-      lines.push(`  • ${t}: ${t.pushed ? `رفع ${t.pushed}` : ''}${t.pulled ? ` تنزيل ${t.pulled}` : ''}${t.skipped ? ` (تخطى ${t.skipped} أقدم)` : ''}${t.error ? ` ❌ ${t.error}` : ''}`);
+      lines.push(`  • ${t.table}: ${t.pushed ? `رفع ${t.pushed}` : ''}${t.pulled ? ` تنزيل ${t.pulled}` : ''}${t.skipped ? ` (تخطى ${t.skipped} أقدم)` : ''}${t.error ? ` ❌ ${t.error}` : ''}`);
     }
   }
   if (report.errors.length) lines.push(`الأخطاء: ${report.errors.join(' | ')}`);

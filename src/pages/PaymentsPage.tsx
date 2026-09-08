@@ -76,7 +76,7 @@ export default function PaymentsPage() {
         const matchSearch = !q
           || (student?.name || '').toLowerCase().includes(q)
           || (p.receiptNo || '').toLowerCase().includes(q)
-          || (p.collectedBy || '').toLowerCase().includes(q)
+          || (p.collectedByName || p.collectedBy || '').toLowerCase().includes(q)
           || String(p.amount).includes(q);
         const matchStatus = !statusFilter || p.status === statusFilter;
         return matchSearch && matchStatus;
@@ -115,7 +115,9 @@ export default function PaymentsPage() {
           courseId: form.courseId || undefined,
           notes: form.notes || undefined,
           method: form.method,
-          collectedBy: form.collectedBy || user?.username || undefined,
+          // نفس اتفاقية RenewDialog/db: collectedBy = معرّف المستخدم، collectedByName = الاسم المعروض
+          collectedBy: user?.id || undefined,
+          collectedByName: form.collectedBy || user?.username || undefined,
         });
         if (!result.success || !result.payment) { notify.error(result.error || 'حدث خطأ'); return; }
         payment = result.payment;
@@ -123,7 +125,8 @@ export default function PaymentsPage() {
         // معلق/متأخر أو بنود غير الاشتراك (كتب/أخرى): تسجل كدفعة من غير توزيع على أقساط
         payment = {
           id: generateId(), ...form,
-          collectedBy: form.collectedBy || user?.username || undefined,
+          collectedBy: user?.id || undefined,
+          collectedByName: form.collectedBy || user?.username || undefined,
           // الإيصال المسلسل بيتسجل للدفعات المسددة فقط — المعلق ما لوش إيصال
           receiptNo: form.status === 'paid'
             ? await nextReceiptNo(form.date, settings?.receiptPrefix)
@@ -267,23 +270,18 @@ export default function PaymentsPage() {
     const st = freshSettings || settings;
     const student = students.find(x => x.id === payment.studentId);
     const course = courses.find(c => c.id === payment.courseId);
-    const group = (payment.installmentIds || []).length
-      ? undefined
-      : undefined;
-
     const before = await getStudentBalance(payment.studentId);
     const html = printReceipt({
       receiptNo: payment.receiptNo || payment.id.substring(0, 6).toUpperCase(),
       centerName: st?.centerName || 'EduCenter Pro',
       studentName: student?.name || '—',
       courseName: course?.name,
-      groupName: group,
       amount: payment.amount,
       amountInWords: amountToArabicWords(payment.amount, st?.currency),
       method: METHOD_LABEL[payment.method || 'cash'],
       type: payment.type === 'subscription' ? 'اشتراك' : payment.type === 'books' ? 'كتب' : 'أخرى',
       date: payment.date,
-      collectorName: payment.collectedBy,
+      collectorName: payment.collectedByName || payment.collectedBy,
       remainingAfter: before ? Math.max(0, before.remaining) : undefined,
       notes: payment.notes,
       settings: st,
@@ -444,7 +442,7 @@ export default function PaymentsPage() {
                     </td>
                     <td className="p-4 text-sm font-semibold text-gray-900">
                       <span className={payment.voided ? 'line-through text-gray-400' : ''}>{getStudentName(payment.studentId)}</span>
-                      {payment.collectedBy && <span className="block text-[10px] text-gray-400 font-normal">قبض: {payment.collectedBy}</span>}
+                      {(payment.collectedByName || payment.collectedBy) && <span className="block text-[10px] text-gray-400 font-normal">قبض: {payment.collectedByName || payment.collectedBy}</span>}
                     </td>
                     <td className="p-4 text-sm text-gray-600">{getCourseName(payment.courseId)}</td>
                     <td className="p-4 text-sm">

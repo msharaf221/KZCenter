@@ -15,6 +15,8 @@ import {
   transferStudent,
   getTransferHistory,
   getDebtors,
+  voidPayment,
+  dbGetPaginated,
   rebuildInstallmentsFromPayments,
   markOverdueInstallments,
   migrateInstallments,
@@ -426,5 +428,84 @@ describe('قائمة المديونيات (getDebtors)', () => {
     const student = await dbGetById<Student>('students', s.studentId);
     await dbPut('students', { ...student!, status: 'ended' });
     expect(await getDebtors()).toHaveLength(0);
+  });
+
+  it('الدفعة الملغاة ما تتحسبش كآخر دفعة', async () => {
+    const s = await seed(800, 1);
+    await enrollStudent(s.studentId, s.groupId);
+    const p = await recordInstallmentPayment({ studentId: s.studentId, amount: 200, date: '2026-03-10' });
+    expect(p.success).toBe(true);
+    expect((await getDebtors())[0].lastPaymentDate).toBe('2026-03-10');
+
+    const v = await voidPayment({ paymentId: p.payment!.id, reason: 'خطأ' });
+    expect(v.success).toBe(true);
+    const d = (await getDebtors())[0];
+    expect(d.remaining).toBe(800);
+    expect(d.lastPaymentDate).toBeUndefined();
+    expect(d.daysSinceLastPayment).toBeNull();
+  });
+});
+
+describe('التحويل بينقل خصم الطالب معاه', () => {
+  it('الخصم النسبي والسعر الخاص (نفس الكورس) بيتطبقوا على شهر المجموعة الجديدة', async () => {
+    const { courseId, groupId, studentId } = await seed(1000, 1);
+    const groupId2 = generateId();
+    await dbAdd<Group>('groups', {
+      id: groupId2, name: 'مجموعة ب', courseId, teacherId: 't2', schedule: [],
+      maxStudents: 20, status: 'open', studentIds: [], createdAt: NOW, updatedAt: NOW,
+    });
+
+    // خصم 20% → 800 على الشهر
+    await enrollStudent(studentId, groupId, 0, { discountPercent: 20, discountReason: 'أخ' });
+    expect((await getStudentBalance(studentId))?.owed).toBe(800);
+
+    const r = await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId2 });
+    expect(r.success).toBe(true);
+    const bal = await getStudentBalance(studentId);
+    expect(bal?.owed).toBe(800);             // الخصم اتنقل — مش 1000
+    expect(bal?.groups[0].groupId).toBe(groupId2);
+  });
+
+  it('السعر الخاص ما ينتقلش لو الكورس مختلف (لأنه رقم مربوط بكورس معين)', async () => {
+    const { groupId, studentId } = await seed(1000, 1);
+    const course2 = generateId();
+    const groupId2 = generateId();
+    await dbAdd<Course>('courses', {
+      id: course2, name: 'فيزياء', category: 'علوم', price: 1500, durationMonths: 1,
+      icon: '⚛️', color: '#3b82f6', levels: [], createdAt: NOW, updatedAt: NOW,
+    });
+    await dbAdd<Group>('groups', {
+      id: groupId2, name: 'فيزياء أ', courseId: course2, teacherId: 't2', schedule: [],
+      maxStudents: 20, status: 'open', studentIds: [], createdAt: NOW, updatedAt: NOW,
+    });
+
+    await enrollStudent(studentId, groupId, 0, { priceOverride: 600 });
+    expect((await getStudentBalance(studentId))?.owed).toBe(600);
+
+    const r = await transferStudent({ studentId, fromGroupId: groupId, toGroupId: groupId2 });
+    expect(r.success).toBe(true);
+    expect((await getStudentBalance(studentId))?.owed).toBe(1500);  // سعر الكورس الجديد
+  });
+});
+
+describe('dbGetPaginated — الترتيب', () => {
+  it('الأحدث أولاً حسب التاريخ ثم وقت الإنشاء', async () => {
+    const mk = (date: string, createdAt: string): Payment => ({
+      id: generateId(), studentId: 's', courseId: 'c', amount: 1, date, type: 'other',
+      status: 'paid', createdAt, updatedAt: createdAt,
+    });
+    await dbAdd<Payment>('payments', mk('2026-01-05', '2026-01-05T08:00:00.000Z'));
+    await dbAdd<Payment>('payments', mk('2026-02-01', '2026-02-01T08:00:00.000Z'));
+    await dbAdd<Payment>('payments', mk('2026-02-01', '2026-02-01T12:00:00.000Z'));
+    await dbAdd<Payment>('payments', mk('2025-12-30', '2025-12-30T08:00:00.000Z'));
+
+    const page1 = await dbGetPaginated<Payment>('payments', 1, 2);
+    expect(page1.total).toBe(4);
+    expect(page1.items.map(p => `${p.date}|${p.createdAt}`)).toEqual([
+      '2026-02-01|2026-02-01T12:00:00.000Z',
+      '2026-02-01|2026-02-01T08:00:00.000Z',
+    ]);
+    const page2 = await dbGetPaginated<Payment>('payments', 2, 2);
+    expect(page2.items.map(p => p.date)).toEqual(['2026-01-05', '2025-12-30']);
   });
 });

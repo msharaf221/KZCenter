@@ -1011,6 +1011,12 @@ export async function dbGetPaginated<T = any>(
       if (filterFn) return filterFn(item);
       return true;
     });
+    // ترتيب ثابت: الأحدث أولاً (المفاتيح UUID عشوائية، فترتيب IndexedDB الخام مش مفيد للمستخدم)
+    filtered.sort((a, b) => {
+      const ka = `${a.date || ''}|${a.createdAt || ''}`;
+      const kb = `${b.date || ''}|${b.createdAt || ''}`;
+      return kb.localeCompare(ka);
+    });
     const total = filtered.length;
     const start = (page - 1) * pageSize;
     const items = filtered.slice(start, start + pageSize) as T[];
@@ -1183,7 +1189,7 @@ export async function enrollStudent(
     await dbBulkAdd('installments', createdInstallments);
 
     if (initialPayment && initialPayment > 0) {
-      const paymentDate = now.split('T')[0];
+      const paymentDate = dayjs().format('YYYY-MM-DD'); // تاريخ محلي (مش UTC) زي باقي الدفعات
       const receiptNo = await nextReceiptNo(paymentDate, policy.receiptPrefix);
       await dbAdd('payments', {
         id: generateId(),
@@ -1649,6 +1655,17 @@ export async function transferStudent(opts: {
 
   // 4) تسجيل جديد + خطة أقساط في المجموعة الجديدة
   const startSession = opts.startSession && opts.startSession > 1 ? opts.startSession : undefined;
+
+  // الخصومات الخاصة بالطالب تتنقل معاه للمجموعة الجديدة؛ السعر الخاص (priceOverride) ينتقل
+  // فقط لو نفس الكورس (لأنه رقم مطلق مربوط بسعر كورس معيّن)
+  const sameCourse = fromGroup.courseId === toGroup.courseId;
+  const carriedPricing = {
+    priceOverride: sameCourse ? activeFrom.priceOverride : undefined,
+    discountAmount: activeFrom.discountAmount,
+    discountPercent: activeFrom.discountPercent,
+    discountReason: activeFrom.discountReason,
+  };
+
   const newEnrollment: Enrollment = {
     id: generateId(),
     studentId,
@@ -1657,6 +1674,7 @@ export async function transferStudent(opts: {
     enrolledAt: now,
     startSession,
     initialPayment: 0,
+    ...carriedPricing,
     notes: `محوّل من ${fromGroup.name}`,
     createdAt: now,
     updatedAt: now,
@@ -1669,12 +1687,19 @@ export async function transferStudent(opts: {
     courseSessionsPerMonth: course?.sessionsPerMonth,
     settingSessionsPerMonth: transferPolicy.sessionsPerMonth,
   });
-  // شهر واحد في المجموعة الجديدة (نفس قاعدة التسجيل) — ولو دخل من نص الشهر يتحاسب على الحصص الباقية
+  const transferPricing: PricingInput = { coursePrice: course?.price || 0, ...carriedPricing };
+  const transferMonthlyPrice = effectiveMonthlyPrice(transferPricing);
+  // شهر واحد في المجموعة الجديدة (نفس قاعدة التسجيل: نفس يوم الاستحقاق وفترة السماح من الإعدادات)
+  // — ولو دخل من نص الشهر يتحاسب على الحصص الباقية
   const plan = buildMonthlyPlan({
-    coursePrice: course?.price || 0,
+    ...transferPricing,
     durationMonths: 1,
     startDate: now,
-    firstPeriodAmount: startSession && course ? proratedFirstPeriod(course.price, startSession, toSessionsPerMonth) : undefined,
+    dueDayOfMonth: transferPolicy.dueDayOfMonth,
+    graceDays: transferPolicy.graceDays,
+    firstPeriodAmount: startSession
+      ? proratedFirstPeriod(transferMonthlyPrice, startSession, toSessionsPerMonth)
+      : undefined,
   });
   await dbBulkAdd<Installment>('installments', plan.map(p => ({
     id: generateId(),
@@ -1863,7 +1888,7 @@ export async function getDebtors(): Promise<DebtorRow[]> {
     if (!balance || balance.remaining <= 0) continue;
 
     const lastPaymentDate = payments
-      .filter(p => !p.deleted && p.studentId === s.id && p.status === 'paid')
+      .filter(p => isCountedPayment(p) && p.studentId === s.id)
       .map(p => p.date)
       .sort()
       .pop();

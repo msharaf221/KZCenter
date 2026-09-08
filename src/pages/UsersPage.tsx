@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Trash2, Key } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import Modal from '../components/ui/Modal';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Badge from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
-import { User, UserRole } from '../lib/db';
+import { dbGetAll, Teacher, User, UserRole } from '../lib/db';
+import { ROLE_LABEL } from '../lib/permissions';
 import { formatDate, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { notify } from '../lib/notifications';
@@ -17,7 +18,12 @@ export default function UsersPage() {
   const [showResetModal, setShowResetModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [form, setForm] = useState({ username: '', password: '', confirmPassword: '', role: 'teacher' as UserRole });
+  const [form, setForm] = useState({ username: '', password: '', confirmPassword: '', role: 'teacher' as UserRole, teacherId: '' });
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
+
+  useEffect(() => {
+    dbGetAll<Teacher>('teachers').then(ts => setTeachers(ts.filter(t => !t.deleted))).catch(() => setTeachers([]));
+  }, [showModal]);
   const [resetPassword_, setResetPassword_] = useState('');
   const [resetConfirm, setResetConfirm] = useState('');
   const [loading, setLoading] = useState(false);
@@ -26,11 +32,12 @@ export default function UsersPage() {
     if (!form.username.trim()) { notify.error('اسم المستخدم مطلوب'); return; }
     if (form.password.length < 6) { notify.error('كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
     if (form.password !== form.confirmPassword) { notify.error('كلمتا المرور غير متطابقتين'); return; }
+    if (form.role === 'teacher' && !form.teacherId) { notify.error('اختر المدرس المرتبط بهذا الحساب حتى يرى مجموعاته'); return; }
     setLoading(true);
     try {
-      await addUser(form.username, form.password, form.role);
+      await addUser(form.username, form.password, form.role, form.role === 'teacher' ? form.teacherId : undefined);
       setShowModal(false);
-      setForm({ username: '', password: '', confirmPassword: '', role: 'teacher' });
+      setForm({ username: '', password: '', confirmPassword: '', role: 'teacher', teacherId: '' });
     } catch (e: unknown) {
       notify.error(e instanceof Error ? e.message : 'حدث خطأ');
     } finally { setLoading(false); }
@@ -96,6 +103,11 @@ export default function UsersPage() {
                       <div>
                         <p className="text-sm font-semibold text-gray-900">{u.username}</p>
                         {u.id === currentUser?.id && <p className="text-xs text-indigo-500">(أنت)</p>}
+                        {u.role === 'teacher' && (
+                          <p className="text-[11px] text-gray-400">
+                            {u.teacherId ? (teachers.find(t => t.id === u.teacherId)?.name || 'مدرس محذوف') : 'غير مرتبط بمدرس'}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </td>
@@ -137,10 +149,21 @@ export default function UsersPage() {
             <label className="block text-sm font-semibold text-gray-700 mb-1">الدور</label>
             <select value={form.role} onChange={e => setForm({...form, role: e.target.value as UserRole})}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
-              <option value="admin">مسؤول</option>
-              <option value="teacher">مدرس</option>
+              <option value="admin">{ROLE_LABEL.admin}</option>
+              <option value="teacher">{ROLE_LABEL.teacher}</option>
             </select>
           </div>
+          {form.role === 'teacher' && (
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-1">المدرس المرتبط *</label>
+              <select value={form.teacherId} onChange={e => setForm({...form, teacherId: e.target.value})}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
+                <option value="">— اختر المدرس —</option>
+                {teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+              <p className="text-[11px] text-gray-400 mt-1">حساب المدرس بيشوف مجموعاته وطلابه هو بس</p>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">كلمة المرور *</label>
             <input type="password" value={form.password} onChange={e => setForm({...form, password: e.target.value})}

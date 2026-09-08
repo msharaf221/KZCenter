@@ -7,6 +7,7 @@ import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyAttendanceSaved, notifyAbsence, notifyRepeatedAbsence } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
+import { visibleGroupIds } from '../lib/permissions';
 import { printTable } from '../lib/printing';
 import { checkAbsenceAlertForStudent } from '../lib/absenceAlerts';
 import dayjs from 'dayjs';
@@ -27,7 +28,8 @@ export default function AttendancePage() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- إعادة التحميل عند تغيّر المستخدم/نطاقه فقط
+  }, [user?.role, user?.teacherId]);
 
   useEffect(() => {
     if (selectedGroup && selectedDate) {
@@ -37,10 +39,13 @@ export default function AttendancePage() {
   }, [selectedGroup, selectedDate]);
 
   async function loadData() {
-    const [g, c] = await Promise.all([
+    const [allGroups, c] = await Promise.all([
       dbGetAll<Group>('groups'),
       dbGetAll<Course>('courses'),
     ]);
+    // المدرس يشوف مجموعاته هو بس
+    const allowed = visibleGroupIds({ role: user?.role, teacherId: user?.teacherId, groups: allGroups });
+    const g = allowed ? allGroups.filter(x => allowed.has(x.id)) : allGroups;
     setGroups(g);
     setCourses(c);
     if (g.length > 0) setSelectedGroup(g[0].id);

@@ -11,6 +11,9 @@ import {
   stripInternalCloud,
   toSnakeCase,
   transformKeys,
+  formatSyncReport,
+  CONFLICT_TARGET,
+  CLOUD_TABLES,
 } from '../lib/storage';
 import {
   saveCloudCredentials,
@@ -76,5 +79,34 @@ describe('cloud credentials storage', () => {
     const creds = getCloudCredentials();
     expect(creds.email).toBe('');
     expect(creds.password).toBe('');
+  });
+});
+
+describe('formatSyncReport — اسم الجدول في الملخص', () => {
+  it('بيطبع اسم الجدول مش [object Object]', () => {
+    const text = formatSyncReport({
+      ok: false, direction: 'push', startedAt: '', finishedAt: '', durationMs: 1500, total: 7,
+      tables: [
+        { table: 'students', pushed: 5, pulled: 0, skipped: 0 },
+        { table: 'payments', pushed: 2, pulled: 0, skipped: 1, error: 'boom' },
+        { table: 'courses', pushed: 0, pulled: 0, skipped: 0 },
+      ],
+      errors: ['payments: boom'],
+    });
+    expect(text).toContain('students: رفع 5');
+    expect(text).toContain('payments: رفع 2 (تخطى 1 أقدم) ❌ boom');
+    expect(text).not.toContain('[object Object]');
+    expect(text).not.toContain('courses');   // جدول من غير حركة ما يتطبعش
+  });
+});
+
+describe('CONFLICT_TARGET — الجداول ذات المفتاح المركّب', () => {
+  it('كل جدول في CONFLICT_TARGET بيتزامن فعلاً وهدفه (id,tenant_id)', () => {
+    for (const [table, target] of Object.entries(CONFLICT_TARGET)) {
+      expect(CLOUD_TABLES).toContain(table);
+      expect(target).toBe('id,tenant_id');
+    }
+    expect(CONFLICT_TARGET.settings).toBe('id,tenant_id');
+    expect(CONFLICT_TARGET.students).toBeUndefined();
   });
 });

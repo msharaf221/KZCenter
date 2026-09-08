@@ -166,7 +166,10 @@ export async function auditStats(): Promise<{
   byUser: Record<string, number>;
 }> {
   const rows = await getAuditEntries();
-  const today = new Date().toISOString().slice(0, 10);
+  // "النهارده" بالتوقيت المحلي؛ الـ timestamp مخزّن بـ ISO (UTC) فنقارن بحدود اليوم المحلي
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const end = new Date(start); end.setDate(end.getDate() + 1);
+  const isToday = (ts: string) => { const t = new Date(ts).getTime(); return t >= start.getTime() && t < end.getTime(); };
   const byAction: Record<string, number> = {};
   const byUser: Record<string, number> = {};
 
@@ -177,7 +180,7 @@ export async function auditStats(): Promise<{
 
   return {
     total: rows.length,
-    today: rows.filter(r => (r.timestamp || '').startsWith(today)).length,
+    today: rows.filter(r => !!r.timestamp && isToday(r.timestamp)).length,
     byAction,
     byUser,
   };

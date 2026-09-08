@@ -24,7 +24,7 @@ interface AuthContextType {
   isAdmin: () => boolean;
   isTeacher: () => boolean;
   allUsers: User[];
-  addUser: (username: string, password: string, role: UserRole) => Promise<void>;
+  addUser: (username: string, password: string, role: UserRole, teacherId?: string) => Promise<void>;
   deleteUser: (id: string) => Promise<void>;
   resetPassword: (id: string, newPassword: string) => Promise<void>;
   refreshUsers: () => Promise<void>;
@@ -259,7 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true;
   }
 
-  async function addUser(username: string, password: string, role: UserRole): Promise<void> {
+  async function addUser(username: string, password: string, role: UserRole, teacherId?: string): Promise<void> {
     // Check duplicate
     const existing = await getUserByUsername(username);
     if (existing) throw new Error('اسم المستخدم موجود بالفعل');
@@ -275,6 +275,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       username,
       passwordHash,
       role,
+      // ربط حساب المدرس بسجله عشان يشوف مجموعاته هو بس (visibleGroupIds)
+      teacherId: role === 'teacher' && teacherId ? teacherId : undefined,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

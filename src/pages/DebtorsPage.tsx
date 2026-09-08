@@ -143,6 +143,8 @@ export default function DebtorsPage() {
         amount: payAmount,
         date: payDate,
         notes: payNotes.trim() || `تحصيل من صفحة المديونيات — ${payTarget.name}`,
+        method: 'cash',
+        collectedBy: user?.id, collectedByName: user?.username,
       });
       if (!result.success) { notify.error(result.error || 'حدث خطأ'); return; }
       notify.success(

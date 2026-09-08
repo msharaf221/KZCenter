@@ -43,7 +43,7 @@ export default function StudentProfilePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { settings } = useApp();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const canCollect = isAdmin();
   const primaryColor = settings?.primaryColor || '#6366f1';
 
@@ -165,6 +165,8 @@ export default function StudentProfilePage() {
         amount: payAmount,
         date: payDate,
         notes: payNotes.trim() || undefined,
+        method: 'cash',
+        collectedBy: user?.id, collectedByName: user?.username,
       });
       if (!result.success) { notify.error(result.error || 'حدث خطأ'); return; }
       notify.success(

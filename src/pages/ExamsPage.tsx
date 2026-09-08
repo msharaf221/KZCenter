@@ -9,6 +9,7 @@ import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
+import { visibleGroupIds } from '../lib/permissions';
 import dayjs from 'dayjs';
 
 export default function ExamsPage() {
@@ -29,17 +30,21 @@ export default function ExamsPage() {
   });
 
   const load = useCallback(async () => {
-    const [e, g, c, s] = await Promise.all([
+    const [allExams, allGroups, c, s] = await Promise.all([
       dbGetAll<Exam>('exams'),
       dbGetAll<Group>('groups'),
       dbGetAll<Course>('courses'),
       dbGetAll<Student>('students'),
     ]);
+    // المدرس يشوف مجموعاته واختباراتها هو بس
+    const allowed = visibleGroupIds({ role: user?.role, teacherId: user?.teacherId, groups: allGroups });
+    const g = allowed ? allGroups.filter(x => allowed.has(x.id)) : allGroups;
+    const e = allowed ? allExams.filter(x => allowed.has(x.groupId)) : allExams;
     setExams(e);
     setGroups(g);
     setCourses(c);
     setStudents(s);
-  }, []);
+  }, [user?.role, user?.teacherId]);
 
   useEffect(() => { load(); }, [load]);
 

@@ -14,6 +14,7 @@ import { effectiveMonthlyPrice, proratedFirstPeriod, resolveSessionsPerMonth } f
 import SessionPicker from '../components/SessionPicker';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import { visibleGroupIds } from '../lib/permissions';
 import { notify, notifyNewStudent } from '../lib/notifications';
 import { useDebounce } from '../hooks';
 import { addAuditEntry } from '../lib/security';
@@ -84,11 +85,14 @@ export default function StudentsPage() {
   const loadStudents = useCallback(async () => {
     setLoading(true);
     try {
-      const [allGroups, allCourses, allAttendance] = await Promise.all([
+      const [everyGroup, allCourses, allAttendance] = await Promise.all([
         dbGetAll<Group>('groups'),
         dbGetAll<Course>('courses'),
         dbGetAll<Attendance>('attendance'),
       ]);
+      // المدرس يشوف مجموعاته وطلابها هو بس
+      const allowed = visibleGroupIds({ role: user?.role, teacherId: user?.teacherId, groups: everyGroup });
+      const allGroups = allowed ? everyGroup.filter(g => allowed.has(g.id)) : everyGroup;
       setGroups(allGroups);
       setCourses(allCourses);
 
@@ -102,6 +106,7 @@ export default function StudentsPage() {
       setAttStatsById(stats);
 
       const result = await dbGetPaginated<Student>('students', page, PAGE_SIZE, (s: Student) => {
+        if (allowed && !(s.enrolledGroups || []).some(gid => allowed.has(gid))) return false;
         const q = debouncedSearch.toLowerCase();
         const matchSearch = !q || s.name.toLowerCase().includes(q) || s.parentPhone.includes(q);
         const matchStatus = !statusFilter || s.status === statusFilter;
@@ -136,7 +141,7 @@ export default function StudentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch, statusFilter, groupFilter, courseFilter, balanceFilter, attendanceFilter]);
+  }, [page, debouncedSearch, statusFilter, groupFilter, courseFilter, balanceFilter, attendanceFilter, user?.role, user?.teacherId]);
 
   useEffect(() => {
     loadStudents();
