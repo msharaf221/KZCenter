@@ -52,6 +52,7 @@ export default function StudentsPage() {
   const { settings } = useApp();
   const { isAdmin, user } = useAuth();
   const canEdit = isAdmin(); // المدرس: عرض فقط
+  const showMoney = isAdmin(); // الأرقام المالية للمسؤول فقط
   const [students, setStudents] = useState<Student[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -538,6 +539,7 @@ export default function StudentsPage() {
             </div>
 
             {/* Balance Filter */}
+            {showMoney && (
             <div className="relative">
               <DollarSign size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <select
@@ -550,6 +552,7 @@ export default function StudentsPage() {
                 <option value="settled">مسددين</option>
               </select>
             </div>
+            )}
 
             {/* Attendance Filter */}
             <div className="relative">
@@ -650,19 +653,19 @@ export default function StudentsPage() {
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">هاتف ولي الأمر</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الحالة</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الغياب</th>
-                  <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المدفوع</th>
-                  <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المتبقي</th>
+                  {showMoney && <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المدفوع</th>}
+                  {showMoney && <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المتبقي</th>}
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">تاريخ التسجيل</th>
                   <th className="p-4 text-center text-xs font-semibold text-gray-600 uppercase">إجراءات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {loading ? (
-                  <tr><td colSpan={11} className="p-8 text-center">
+                  <tr><td colSpan={showMoney ? 11 : 9} className="p-8 text-center">
                     <div className="animate-spin w-6 h-6 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto" />
                   </td></tr>
                 ) : students.length === 0 ? (
-                  <tr><td colSpan={11} className="p-8 text-center text-gray-400">لا يوجد طلاب</td></tr>
+                  <tr><td colSpan={showMoney ? 11 : 9} className="p-8 text-center text-gray-400">لا يوجد طلاب</td></tr>
                 ) : students.map((student, idx) => (
                   <tr key={student.id} className="hover:bg-gray-50 transition-colors">
                     <td className="p-4">
@@ -714,17 +717,21 @@ export default function StudentsPage() {
                         );
                       })()}
                     </td>
-                    <td className="p-4 text-sm font-medium text-gray-900">
-                      {formatCurrency(student.totalPaid, settings?.currency)}
-                    </td>
-                    <td className="p-4 text-sm">
-                      {(() => {
-                        const remaining = (student.totalOwed || 0) - student.totalPaid;
-                        if (remaining > 0) return <span className="font-bold text-red-600">{formatCurrency(remaining, settings?.currency)}</span>;
-                        if (remaining < 0) return <span className="font-bold text-blue-600">فائض {formatCurrency(Math.abs(remaining), settings?.currency)}</span>;
-                        return <span className="font-bold text-green-600">مسدد</span>;
-                      })()}
-                    </td>
+                    {showMoney && (
+                      <td className="p-4 text-sm font-medium text-gray-900">
+                        {formatCurrency(student.totalPaid, settings?.currency)}
+                      </td>
+                    )}
+                    {showMoney && (
+                      <td className="p-4 text-sm">
+                        {(() => {
+                          const remaining = (student.totalOwed || 0) - student.totalPaid;
+                          if (remaining > 0) return <span className="font-bold text-red-600">{formatCurrency(remaining, settings?.currency)}</span>;
+                          if (remaining < 0) return <span className="font-bold text-blue-600">فائض {formatCurrency(Math.abs(remaining), settings?.currency)}</span>;
+                          return <span className="font-bold text-green-600">مسدد</span>;
+                        })()}
+                      </td>
+                    )}
                     <td className="p-4 text-sm text-gray-500">{formatDate(student.createdAt)}</td>
                     <td className="p-4">
                       <div className="flex items-center justify-center gap-1">

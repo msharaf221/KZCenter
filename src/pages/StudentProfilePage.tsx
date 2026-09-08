@@ -45,6 +45,7 @@ export default function StudentProfilePage() {
   const { settings } = useApp();
   const { isAdmin, user } = useAuth();
   const canCollect = isAdmin();
+  const showMoney = isAdmin(); // الأرقام المالية للمسؤول فقط — المدرس يشوف الأكاديمي بس
   const primaryColor = settings?.primaryColor || '#6366f1';
 
   const [student, setStudent] = useState<Student | null>(null);
@@ -248,9 +249,11 @@ export default function StudentProfilePage() {
                 <PhoneCall size={14} /> اتصال بولي الأمر
               </a>
               <div className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100 text-xs"><Users size={14} /> {groups.length} مجموعة</div>
-              <div className={`px-3 py-1.5 rounded-xl font-bold border text-xs ${remaining > 0 ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-600 border-green-100'}`}>
-                {remaining > 0 ? `المتبقي: ${formatCurrency(remaining, settings?.currency)}` : 'خالص الديون'}
-              </div>
+              {showMoney && (
+                <div className={`px-3 py-1.5 rounded-xl font-bold border text-xs ${remaining > 0 ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-600 border-green-100'}`}>
+                  {remaining > 0 ? `المتبقي: ${formatCurrency(remaining, settings?.currency)}` : 'خالص الديون'}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -336,6 +339,7 @@ export default function StudentProfilePage() {
             </div>
           </div>
 
+          {showMoney && (
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden flex flex-col">
             <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><CreditCard className="text-indigo-500" /> سجل المدفوعات</h2>
             <div className="overflow-auto flex-1 max-h-[300px]">
@@ -354,9 +358,11 @@ export default function StudentProfilePage() {
               </table>
             </div>
           </div>
+          )}
         </div>
 
         {/* الحساب — شهر بشهر */}
+        {showMoney && (
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
           <div className="flex flex-wrap items-center gap-2 mb-4">
             <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
@@ -453,6 +459,7 @@ export default function StudentProfilePage() {
             </div>
           )}
         </div>
+        )}
 
         {/* سجل التحويلات */}
         {transfers.length > 0 && (

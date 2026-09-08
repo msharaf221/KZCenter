@@ -18,6 +18,7 @@ import { formatDate, formatCurrency, getStatusLabel, getArabicDay } from '../lib
 import { requestNotificationPermission, showBrowserNotification } from '../lib/notifications';
 import { subscribeDebtAlert, refreshDebtAlert, DebtAlert } from '../lib/debtAlerts';
 import { getRepeatedAbsenceAlerts, type AbsenceAlert } from '../lib/absenceAlerts';
+import { visibleGroupIds } from '../lib/permissions';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -29,9 +30,11 @@ const TODAY_KEY = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frid
 
 export default function DashboardPage() {
   const { settings } = useApp();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
   const navigate = useNavigate();
   const primaryColor = settings?.primaryColor || '#6366f1';
+  /** الأرقام المالية للمسؤول فقط — المدرس يشوف الأكاديمي بس */
+  const showMoney = isAdmin();
 
   const [stats, setStats] = useState({
     activeStudents: 0,
@@ -98,7 +101,7 @@ export default function DashboardPage() {
   async function loadDashboard() {
     setLoading(true);
     try {
-      const [students, teachers, courses, groups, payments, installments, enrollments, refunds] = await Promise.all([
+      const [allStudents, teachers, courses, allGroups, payments, allInstallments, allEnrollments, refunds] = await Promise.all([
         dbGetAll<Student>('students'),
         dbGetAll<Teacher>('teachers'),
         dbGetAll<Course>('courses'),
@@ -108,6 +111,15 @@ export default function DashboardPage() {
         dbGetAll<Enrollment>('enrollments'),
         getRefunds(),
       ]);
+
+      // عزل بيانات المدرس: مجموعاته وطلابه وأقساطهم بس
+      const allowed = visibleGroupIds({ role: user?.role, teacherId: user?.teacherId, groups: allGroups });
+      const groups = allowed ? allGroups.filter(g => allowed.has(g.id)) : allGroups;
+      const students = allowed
+        ? allStudents.filter(st => (st.enrolledGroups || []).some(gid => allowed.has(gid)))
+        : allStudents;
+      const installments = allowed ? allInstallments.filter(i => allowed.has(i.groupId)) : allInstallments;
+      const enrollments = allowed ? allEnrollments.filter(e => allowed.has(e.groupId)) : allEnrollments;
 
       // الإيراد الفعلي = الدفعات المحسوبة (غير ملغاة/محذوفة) − الاستردادات
       const validPayments = payments.filter(isCountedPayment);
@@ -202,7 +214,8 @@ export default function DashboardPage() {
 
       // اشتراكات قربت تنتهي / انتهت — عشان نجدد قبل ما الطالب يقطع
       try {
-        setRenewals(await getRenewalCandidates(settings?.upcomingDueDays ?? 7));
+        const cands = await getRenewalCandidates(settings?.upcomingDueDays ?? 7);
+        setRenewals(allowed ? cands.filter(c => allowed.has(c.groupId)) : cands);
       } catch (e) {
         console.error('renewal candidates error:', e);
       }
@@ -236,7 +249,8 @@ export default function DashboardPage() {
         }
         setTodayAttendance({ present, absent, late, excused, recordedGroups: groupsWithRecords.size });
 
-        setAbsenceAlerts(await getRepeatedAbsenceAlerts());
+        const alerts = await getRepeatedAbsenceAlerts();
+        setAbsenceAlerts(allowed ? alerts.filter(a => allowed.has(a.groupId)) : alerts);
       } catch (e) {
         console.error('attendance summary error:', e);
       }
@@ -325,20 +339,24 @@ export default function DashboardPage() {
             color="#14b8a6"
             subtitle="مجموعة"
           />
-          <StatCard
-            title="إجمالي الإيرادات"
-            value={formatCurrency(stats.totalRevenue, settings?.currency)}
-            icon={<DollarSign size={24} />}
-            color="#22c55e"
-            subtitle="مجموع المدفوعات"
-          />
-          <StatCard
-            title="المدفوعات المعلقة"
-            value={stats.pendingPayments}
-            icon={<AlertCircle size={24} />}
-            color="#f97316"
-            subtitle={formatCurrency(stats.pendingAmount, settings?.currency)}
-          />
+          {showMoney && (
+            <StatCard
+              title="إجمالي الإيرادات"
+              value={formatCurrency(stats.totalRevenue, settings?.currency)}
+              icon={<DollarSign size={24} />}
+              color="#22c55e"
+              subtitle="مجموع المدفوعات"
+            />
+          )}
+          {showMoney && (
+            <StatCard
+              title="المدفوعات المعلقة"
+              value={stats.pendingPayments}
+              icon={<AlertCircle size={24} />}
+              color="#f97316"
+              subtitle={formatCurrency(stats.pendingAmount, settings?.currency)}
+            />
+          )}
           {isAdmin() && (
             <StatCard
               title="طلاب عليهم مبالغ"
@@ -360,18 +378,21 @@ export default function DashboardPage() {
             color="#3b82f6"
             subtitle={getArabicDay(TODAY_KEY)}
           />
-          <StatCard
-            title="معدل النمو (إيرادات)"
-            value={`${stats.growthRate >= 0 ? '↑' : '↓'} ${Math.abs(Math.round(stats.growthRate))}%`}
-            icon={<TrendingUp size={24} />}
-            color={stats.growthRate >= 0 ? "#06b6d4" : "#ef4444"}
-            subtitle="مقارنة بالشهر الماضي"
-          />
+          {showMoney && (
+            <StatCard
+              title="معدل النمو (إيرادات)"
+              value={`${stats.growthRate >= 0 ? '↑' : '↓'} ${Math.abs(Math.round(stats.growthRate))}%`}
+              icon={<TrendingUp size={24} />}
+              color={stats.growthRate >= 0 ? "#06b6d4" : "#ef4444"}
+              subtitle="مقارنة بالشهر الماضي"
+            />
+          )}
         </div>
 
         {/* Charts Row */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Revenue Chart */}
+          {showMoney && (
           <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <h3 className="text-base font-bold text-gray-900 mb-4">الإيرادات الشهرية</h3>
             <ResponsiveContainer width="100%" height={240}>
@@ -396,9 +417,10 @@ export default function DashboardPage() {
               </AreaChart>
             </ResponsiveContainer>
           </div>
+          )}
 
           {/* Gender Pie */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+          <div className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-5 ${showMoney ? '' : 'lg:col-span-3'}`}>
             <h3 className="text-base font-bold text-gray-900 mb-4">أولاد و بنات</h3>
             <ResponsiveContainer width="100%" height={240}>
               <PieChart>
@@ -422,7 +444,7 @@ export default function DashboardPage() {
         </div>
 
         {/* استحقاقات قريبة — التنبيه قبل ما القسط يتأخر */}
-        {upcoming && upcoming.count > 0 && (
+        {showMoney && upcoming && upcoming.count > 0 && (
           <div className="bg-white rounded-2xl border border-amber-100 shadow-sm overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex items-center gap-2">
               <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">
@@ -579,7 +601,7 @@ export default function DashboardPage() {
                     <p className="text-sm font-semibold text-gray-900 truncate">{r.studentName}</p>
                     <p className="text-xs text-gray-500 truncate">
                       {r.groupName} • {r.courseName} • {r.teacherName}
-                      {r.remaining > 0 && <span className="text-red-500"> • باقي عليه {formatCurrency(r.remaining, settings?.currency)}</span>}
+                      {showMoney && r.remaining > 0 && <span className="text-red-500"> • باقي عليه {formatCurrency(r.remaining, settings?.currency)}</span>}
                     </p>
                   </button>
                   <div className="text-left flex-shrink-0">

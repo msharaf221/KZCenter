@@ -128,7 +128,7 @@ export default function App() {
               } />
 
               <Route path="/reports" element={
-                <ProtectedRoute><ReportsPage /></ProtectedRoute>
+                <ProtectedRoute adminOnly><ReportsPage /></ProtectedRoute>
               } />
 
               <Route path="/daily-reports" element={
