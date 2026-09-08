@@ -168,6 +168,12 @@ export function getStatusColor(status: string): string {
     present: 'bg-green-100 text-green-800',
     absent: 'bg-red-100 text-red-800',
     excused: 'bg-blue-100 text-blue-800',
+    // أدوار المستخدمين
+    admin: 'bg-indigo-100 text-indigo-800',
+    secretary: 'bg-pink-100 text-pink-800',
+    accountant: 'bg-emerald-100 text-emerald-800',
+    supervisor: 'bg-purple-100 text-purple-800',
+    teacher: 'bg-sky-100 text-sky-800',
   };
   return map[status] || 'bg-gray-100 text-gray-800';
 }
@@ -210,6 +216,9 @@ export function getStatusLabel(status: string): string {
     books: 'كتب',
     other: 'أخرى',
     admin: 'مسؤول',
+    secretary: 'استقبال',
+    accountant: 'محاسب',
+    supervisor: 'مشرف',
     teacher: 'مدرس',
     salaries: 'رواتب',
     bills: 'فواتير',

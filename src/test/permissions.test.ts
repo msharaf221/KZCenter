@@ -342,3 +342,23 @@ describe('سلامة المصفوفة', () => {
     }
   });
 });
+
+describe('توافق المسارات مع المصفوفة', () => {
+  it('المشرف الأكاديمي والاستقبال ما يشوفوش التقرير اليومي (تقرير نقدية)', () => {
+    expect(can('supervisor', 'dailyReports', 'view')).toBe(false);
+    expect(can('secretary', 'dailyReports', 'view')).toBe(false);
+    expect(can('accountant', 'dailyReports', 'view')).toBe(true);
+    expect(can('admin', 'dailyReports', 'view')).toBe(true);
+  });
+
+  it('كل كيان مستخدم في App.tsx كـ entity موجود في مصفوفة المسؤول', async () => {
+    const src = (await import('../App.tsx?raw')).default as string;
+    const used = [...src.matchAll(/entity="([a-zA-Z]+)"/g)].map(m => m[1]);
+    expect(used.length).toBeGreaterThan(10);
+    for (const e of used) {
+      expect(PERMISSIONS.admin[e as Entity], `entity "${e}" مش موجود في المصفوفة`).toBeDefined();
+    }
+    // مفيش adminOnly متبقي — كل الحماية من المصفوفة
+    expect(src).not.toContain('adminOnly');
+  });
+});

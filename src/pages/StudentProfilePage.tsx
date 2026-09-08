@@ -43,9 +43,9 @@ export default function StudentProfilePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { settings } = useApp();
-  const { isAdmin, user } = useAuth();
-  const canCollect = isAdmin();
-  const showMoney = isAdmin(); // الأرقام المالية للمسؤول فقط — المدرس يشوف الأكاديمي بس
+  const { can, user } = useAuth();
+  const canCollect = can('payments', 'create');
+  const showMoney = can('payments', 'view'); // الأرقام المالية لمن عنده صلاحية المدفوعات
   const primaryColor = settings?.primaryColor || '#6366f1';
 
   const [student, setStudent] = useState<Student | null>(null);

@@ -22,7 +22,9 @@ const PIE_COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#06b
 
 export default function ExpensesPage() {
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canWrite = can('expenses', 'create') || can('expenses', 'edit');
+  const canDelete = can('expenses', 'delete');
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [allExpenses, setAllExpenses] = useState<Expense[]>([]);
   const [total, setTotal] = useState(0);
@@ -161,11 +163,13 @@ export default function ExpensesPage() {
                   <option value="">كل الفئات</option>
                   {Object.entries(CATEGORY_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
-                <button onClick={openAdd}
-                  className="flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-medium mr-auto"
-                  style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-                  <Plus size={16} /> إضافة
-                </button>
+                {canWrite && (
+                  <button onClick={openAdd}
+                    className="flex items-center gap-2 px-4 py-2 text-white rounded-xl text-sm font-medium mr-auto"
+                    style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
+                    <Plus size={16} /> إضافة
+                  </button>
+                )}
               </div>
             </div>
 
@@ -199,8 +203,8 @@ export default function ExpensesPage() {
                       <td className="p-3 text-sm text-gray-500">{formatDate(expense.date)}</td>
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => openEdit(expense)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600"><Edit2 size={14} /></button>
-                          <button onClick={() => setDeleteId(expense.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600"><Trash2 size={14} /></button>
+                          {canWrite && <button onClick={() => openEdit(expense)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600"><Edit2 size={14} /></button>}
+                          {canDelete && <button onClick={() => setDeleteId(expense.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600"><Trash2 size={14} /></button>}
                         </div>
                       </td>
                     </tr>

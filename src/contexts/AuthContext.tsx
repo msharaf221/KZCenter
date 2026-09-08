@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { User, UserRole, seedDefaultData, getUserByUsername, dbGetAll, dbPut, dbAdd, dbSoftDelete, generateId } from '../lib/db';
 import { notify } from '../lib/notifications';
 import { migrateAuditFromLocalStorage } from '../lib/audit';
+import { can as canDo, type Entity, type Action } from '../lib/permissions';
 import {
   checkRateLimit,
   recordLoginAttempt,
@@ -23,6 +24,8 @@ interface AuthContextType {
   logout: () => void;
   isAdmin: () => boolean;
   isTeacher: () => boolean;
+  /** هل المستخدم الحالي عنده الإجراء ده على الكيان ده؟ (مصفوفة permissions.ts) */
+  can: (entity: Entity, action?: Action) => boolean;
   allUsers: User[];
   addUser: (username: string, password: string, role: UserRole, teacherId?: string) => Promise<void>;
   deleteUser: (id: string) => Promise<void>;
@@ -223,6 +226,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return user?.role === 'teacher';
   }
 
+  function can(entity: Entity, action: Action = 'view'): boolean {
+    return canDo(user?.role, entity, action);
+  }
+
   async function changePassword(oldPassword: string, newPassword: string): Promise<boolean> {
     if (!user) return false;
 
@@ -345,7 +352,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, loading, login, logout,
-      isAdmin, isTeacher,
+      isAdmin, isTeacher, can,
       allUsers, addUser, deleteUser, resetPassword, refreshUsers,
       changePassword, rateLimitInfo,
     }}>

@@ -30,11 +30,13 @@ const TODAY_KEY = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'frid
 
 export default function DashboardPage() {
   const { settings } = useApp();
-  const { isAdmin, user } = useAuth();
+  const { can, user } = useAuth();
   const navigate = useNavigate();
   const primaryColor = settings?.primaryColor || '#6366f1';
-  /** الأرقام المالية للمسؤول فقط — المدرس يشوف الأكاديمي بس */
-  const showMoney = isAdmin();
+  /** الأرقام المالية لمن عنده صلاحية المدفوعات — المدرس/المشرف يشوفوا الأكاديمي بس */
+  const showMoney = can('payments', 'view');
+  const canSeeDebtors = can('debtors', 'view');
+  const canRenew = can('payments', 'create');
 
   const [stats, setStats] = useState({
     activeStudents: 0,
@@ -62,7 +64,7 @@ export default function DashboardPage() {
 
   // تنبيهات المديونيات + إشعار المتأخرات (مرة واحدة في اليوم)
   useEffect(() => {
-    if (!isAdmin()) return;
+    if (!canSeeDebtors) return;
     const unsubscribe = subscribeDebtAlert(setDebtAlert);
     void (async () => {
       const alert = await refreshDebtAlert();
@@ -86,7 +88,7 @@ export default function DashboardPage() {
       }
     })();
     return unsubscribe;
-  }, [isAdmin, settings?.notifyLatePayment]);
+  }, [canSeeDebtors, settings?.notifyLatePayment]);
 
   useEffect(() => {
     requestNotificationPermission();
@@ -357,7 +359,7 @@ export default function DashboardPage() {
               subtitle={formatCurrency(stats.pendingAmount, settings?.currency)}
             />
           )}
-          {isAdmin() && (
+          {canSeeDebtors && (
             <StatCard
               title="طلاب عليهم مبالغ"
               value={debtAlert?.debtorsCount ?? 0}
@@ -621,7 +623,7 @@ export default function DashboardPage() {
                         <MessageCircle size={15} />
                       </a>
                     )}
-                    {isAdmin() && (
+                    {canRenew && (
                       <button onClick={() => setRenewTarget(r)}
                         className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 transition-colors">
                         تجديد
@@ -638,7 +640,7 @@ export default function DashboardPage() {
         )}
 
         {/* تنبيهات المديونيات */}
-        {isAdmin() && topDebtors.length > 0 && (
+        {canSeeDebtors && topDebtors.length > 0 && (
           <div className="bg-white rounded-2xl border border-red-100 shadow-sm overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex items-center gap-2">
               <h3 className="text-base font-bold text-gray-900 flex items-center gap-2">

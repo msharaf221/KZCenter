@@ -62,6 +62,11 @@ function renderPage() {
 }
 
 beforeEach(async () => {
+  // جلسة مسؤول — زرار التصفير والتحصيل بيظهروا حسب الصلاحيات (debtors.delete / payments.create)
+  sessionStorage.setItem('educenter_session', JSON.stringify({
+    id: 'admin-test', username: 'admin', role: 'admin', createdAt: NOW, updatedAt: NOW,
+  }));
+  sessionStorage.setItem('educenter_session_ts', Date.now().toString());
   for (const store of [
     'students', 'groups', 'courses', 'payments', 'enrollments', 'installments', 'audit_logs',
   ] as const) {
@@ -102,5 +107,41 @@ describe('زرار تصفير المديونيات في صفحة المديون�
 
     // والقايمة اتحدّثت: مفيش مديونيات
     await waitFor(() => expect(screen.getByText(/لا توجد مديونيات/)).toBeInTheDocument());
+  });
+});
+
+describe('صلاحيات الأدوار على صفحة المديونيات', () => {
+  function loginAs(role: string) {
+    sessionStorage.setItem('educenter_session', JSON.stringify({
+      id: `${role}-test`, username: role, role, createdAt: NOW, updatedAt: NOW,
+    }));
+    sessionStorage.setItem('educenter_session_ts', Date.now().toString());
+  }
+
+  it('الاستقبال: يقدر يحصّل لكن ما يقدرش يصفّر المديونيات', async () => {
+    await seedDebtor('سارة علي');
+    loginAs('secretary');
+    renderPage();
+    await waitFor(() => expect(screen.getByText('سارة علي')).toBeInTheDocument());
+    expect(screen.getByTitle('تحصيل دفعة')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /تصفير المديونيات/ })).toBeNull();
+  });
+
+  it('المحاسب: يقدر يحصّل ويصفّر', async () => {
+    await seedDebtor('منى حسن');
+    loginAs('accountant');
+    renderPage();
+    await waitFor(() => expect(screen.getByText('منى حسن')).toBeInTheDocument());
+    expect(screen.getByTitle('تحصيل دفعة')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /تصفير المديونيات/ })).toBeInTheDocument();
+  });
+
+  it('المشرف الأكاديمي: عرض فقط — لا تحصيل ولا تصفير', async () => {
+    await seedDebtor('خالد سعيد');
+    loginAs('supervisor');
+    renderPage();
+    await waitFor(() => expect(screen.getByText('خالد سعيد')).toBeInTheDocument());
+    expect(screen.queryByTitle('تحصيل دفعة')).toBeNull();
+    expect(screen.queryByRole('button', { name: /تصفير المديونيات/ })).toBeNull();
   });
 });

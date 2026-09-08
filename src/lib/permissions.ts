@@ -95,7 +95,6 @@ export const PERMISSIONS: Matrix = {
     attendance: ['view', 'create', 'edit', 'export'],
     exams: ['view', 'create', 'edit', 'export'],
     reports: ['view', 'export'],
-    dailyReports: ['view'],
     debtors: ['view'],
     inventory: ['view'],
   },

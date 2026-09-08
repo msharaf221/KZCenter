@@ -21,7 +21,11 @@ const PAGE_SIZE = 20;
 
 export default function PaymentsPage() {
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canCreate = can('payments', 'create');
+  const canEdit = can('payments', 'edit');
+  const canDelete = can('payments', 'delete');
+  const canMoney = can('refunds', 'create'); // إلغاء/استرداد = أثر محاسبي → صلاحية الاستردادات
   const [payments, setPayments] = useState<Payment[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -375,7 +379,7 @@ export default function PaymentsPage() {
                 <option value="late">متأخر</option>
               </select>
             </div>
-            {selectedIds.length > 0 && (
+            {canEdit && selectedIds.length > 0 && (
               <button onClick={handleBulkMarkPaid}
                 className="flex items-center gap-2 px-3 py-2.5 bg-green-50 text-green-700 rounded-xl text-sm font-medium hover:bg-green-100">
                 <CheckCircle size={16} /> تحديد كمدفوع ({selectedIds.length})
@@ -385,11 +389,13 @@ export default function PaymentsPage() {
               <button onClick={exportExcel} className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50">
                 <Download size={16} /> تصدير
               </button>
-              <button onClick={() => setShowModal(true)}
-                className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-                style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-                <Plus size={16} /> إضافة دفعة
-              </button>
+              {canCreate && (
+                <button onClick={() => setShowModal(true)}
+                  className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
+                  style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
+                  <Plus size={16} /> إضافة دفعة
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -485,12 +491,12 @@ export default function PaymentsPage() {
                             <Printer size={15} />
                           </button>
                         )}
-                        {payment.status !== 'paid' && (
+                        {canEdit && payment.status !== 'paid' && (
                           <button onClick={() => handleMarkPaid(payment)} className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="تحديد كمدفوع">
                             <CheckCircle size={15} />
                           </button>
                         )}
-                        {!payment.voided && payment.status === 'paid' && (
+                        {canMoney && !payment.voided && payment.status === 'paid' && (
                           <>
                             <button onClick={() => openRefund(payment)} className="p-1.5 rounded-lg hover:bg-orange-50 text-orange-600 transition-colors" title="استرداد مبلغ">
                               <RotateCcw size={15} />
@@ -500,7 +506,7 @@ export default function PaymentsPage() {
                             </button>
                           </>
                         )}
-                        {!payment.voided && payment.status !== 'paid' && (
+                        {canDelete && !payment.voided && payment.status !== 'paid' && (
                           <button onClick={() => setDeleteId(payment.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="حذف">
                             <Trash2 size={15} />
                           </button>

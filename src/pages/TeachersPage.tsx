@@ -24,7 +24,10 @@ const INITIAL_FORM: Omit<Teacher, 'id' | 'createdAt' | 'updatedAt'> = {
 export default function TeachersPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canWrite = can('teachers', 'create') || can('teachers', 'edit');
+  const canDelete = can('teachers', 'delete');
+  const showMoney = can('payroll', 'view');
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -125,11 +128,13 @@ export default function TeachersPage() {
                 placeholder="بحث بالاسم أو التخصص..."
                 className="w-full pr-9 pl-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
             </div>
-            <button onClick={openAdd}
-              className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-              <Plus size={16} /> إضافة مدرس
-            </button>
+            {canWrite && (
+              <button onClick={openAdd}
+                className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
+                style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
+                <Plus size={16} /> إضافة مدرس
+              </button>
+            )}
           </div>
         </div>
 
@@ -178,12 +183,12 @@ export default function TeachersPage() {
                 <div className="text-xs text-gray-500 mb-3">
                   <p>📱 {teacher.phone}</p>
                   {teacher.email && <p>📧 {teacher.email}</p>}
-                  <p className="text-green-600 font-medium mt-1">💰 {formatCurrency(teacher.salary, settings?.currency)} / شهر</p>
+                  {showMoney && <p className="text-green-600 font-medium mt-1">💰 {formatCurrency(teacher.salary, settings?.currency)} / شهر</p>}
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => navigate(`/teachers/${teacher.id}`)} className="flex-1 py-1.5 text-xs bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors">عرض</button>
-                  <button onClick={() => openEdit(teacher)} className="flex-1 py-1.5 text-xs bg-yellow-50 text-yellow-600 rounded-lg hover:bg-yellow-100 transition-colors">تعديل</button>
-                  <button onClick={() => setDeleteId(teacher.id)} className="flex-1 py-1.5 text-xs bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors">حذف</button>
+                  {canWrite && <button onClick={() => openEdit(teacher)} className="flex-1 py-1.5 text-xs bg-yellow-50 text-yellow-600 rounded-lg hover:bg-yellow-100 transition-colors">تعديل</button>}
+                  {canDelete && <button onClick={() => setDeleteId(teacher.id)} className="flex-1 py-1.5 text-xs bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors">حذف</button>}
                 </div>
               </div>
             ))}

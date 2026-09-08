@@ -14,7 +14,8 @@ import dayjs from 'dayjs';
 
 export default function AttendancePage() {
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canRecord = can('attendance', 'create') || can('attendance', 'edit');
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedGroup, setSelectedGroup] = useState('');
@@ -332,7 +333,8 @@ export default function AttendancePage() {
               })}
             </div>
             <div className="p-4 border-t border-gray-100">
-              <button onClick={handleSave} disabled={saving}
+              <button onClick={handleSave} disabled={saving || !canRecord}
+                title={canRecord ? '' : 'ليس لديك صلاحية تسجيل الحضور'}
                 className="w-full flex items-center justify-center gap-2 py-3 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-60"
                 style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
                 <Save size={18} />

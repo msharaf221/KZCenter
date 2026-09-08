@@ -111,7 +111,7 @@ export default function UsersPage() {
                       </div>
                     </div>
                   </td>
-                  <td className="p-4"><Badge status={u.role} /></td>
+                  <td className="p-4"><Badge status={u.role} label={ROLE_LABEL[u.role] || u.role} /></td>
                   <td className="p-4 text-sm text-gray-500">{formatDate(u.createdAt)}</td>
                   <td className="p-4">
                     <div className="flex items-center justify-center gap-2">
@@ -150,6 +150,9 @@ export default function UsersPage() {
             <select value={form.role} onChange={e => setForm({...form, role: e.target.value as UserRole})}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
               <option value="admin">{ROLE_LABEL.admin}</option>
+              <option value="secretary">{ROLE_LABEL.secretary}</option>
+              <option value="accountant">{ROLE_LABEL.accountant}</option>
+              <option value="supervisor">{ROLE_LABEL.supervisor}</option>
               <option value="teacher">{ROLE_LABEL.teacher}</option>
             </select>
           </div>

@@ -14,7 +14,9 @@ import dayjs from 'dayjs';
 
 export default function ExamsPage() {
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canWrite = can('exams', 'create') || can('exams', 'edit');
+  const canDelete = can('exams', 'delete');
   const [exams, setExams] = useState<Exam[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
@@ -127,13 +129,15 @@ export default function ExamsPage() {
   return (
     <Layout title="الاختبارات والدرجات">
       <div className="space-y-5">
-        <div className="flex justify-end">
-          <button onClick={() => { setEditing(null); setForm({ name: '', groupId: groups[0]?.id || '', date: dayjs().format('YYYY-MM-DD'), maxGrade: 100 }); setShowModal(true); }}
-            className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-            <Plus size={16} /> إضافة اختبار
-          </button>
-        </div>
+        {canWrite && (
+          <div className="flex justify-end">
+            <button onClick={() => { setEditing(null); setForm({ name: '', groupId: groups[0]?.id || '', date: dayjs().format('YYYY-MM-DD'), maxGrade: 100 }); setShowModal(true); }}
+              className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
+              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
+              <Plus size={16} /> إضافة اختبار
+            </button>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {exams.map(exam => {
@@ -147,9 +151,11 @@ export default function ExamsPage() {
                     <p className="text-xs text-gray-500">{group?.name} • {course?.name}</p>
                   </div>
                   <div className="flex gap-1">
-                    <button onClick={() => { setEditing(exam); setForm({ name: exam.name, groupId: exam.groupId, date: exam.date, maxGrade: exam.maxGrade }); setShowModal(true); }}
-                      className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600"><Edit2 size={14} /></button>
-                    <button onClick={() => setDeleteId(exam.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600"><Trash2 size={14} /></button>
+                    {canWrite && (
+                      <button onClick={() => { setEditing(exam); setForm({ name: exam.name, groupId: exam.groupId, date: exam.date, maxGrade: exam.maxGrade }); setShowModal(true); }}
+                        className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600"><Edit2 size={14} /></button>
+                    )}
+                    {canDelete && <button onClick={() => setDeleteId(exam.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600"><Trash2 size={14} /></button>}
                   </div>
                 </div>
                 <div className="flex items-center justify-between text-sm mb-3">
@@ -158,7 +164,7 @@ export default function ExamsPage() {
                 </div>
                 <button onClick={() => openGrades(exam)}
                   className="w-full flex items-center justify-center gap-2 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors">
-                  <ClipboardList size={16} /> إدخال الدرجات
+                  <ClipboardList size={16} /> {canWrite ? 'إدخال الدرجات' : 'عرض الدرجات'}
                 </button>
               </div>
             );
@@ -231,8 +237,10 @@ export default function ExamsPage() {
             ))}
           </div>
           <div className="flex gap-3 mt-5">
-            <button onClick={handleSaveGrades} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>حفظ الدرجات</button>
+            {canWrite && (
+              <button onClick={handleSaveGrades} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
+                style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>حفظ الدرجات</button>
+            )}
             <button onClick={() => setShowGradesModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
           </div>
         </Modal>

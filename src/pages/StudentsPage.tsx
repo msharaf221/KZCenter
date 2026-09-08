@@ -50,9 +50,10 @@ const digits = (s?: string) => String(s || '').replace(/\D/g, '');
 export default function StudentsPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
-  const { isAdmin, user } = useAuth();
-  const canEdit = isAdmin(); // المدرس: عرض فقط
-  const showMoney = isAdmin(); // الأرقام المالية للمسؤول فقط
+  const { can, user } = useAuth();
+  const canEdit = can('students', 'edit') || can('students', 'create'); // المدرس: عرض فقط
+  const canDelete = can('students', 'delete');
+  const showMoney = can('payments', 'view'); // الأرقام المالية لمن عنده صلاحية المدفوعات
   const [students, setStudents] = useState<Student[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -334,7 +335,7 @@ export default function StudentsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!canEdit) { notify.error('ليس لديك صلاحية الحذف'); return; }
+    if (!canDelete) { notify.error('ليس لديك صلاحية الحذف'); return; }
     try {
       const student = students.find(s => s.id === id);
       if (student && student.enrolledGroups) {
@@ -355,7 +356,7 @@ export default function StudentsPage() {
   }
 
   async function handleBulkDelete() {
-    if (!canEdit) { notify.error('ليس لديك صلاحية الحذف'); return; }
+    if (!canDelete) { notify.error('ليس لديك صلاحية الحذف'); return; }
     try {
       for (const id of selectedIds) {
         const student = students.find(s => s.id === id);
@@ -570,7 +571,7 @@ export default function StudentsPage() {
             </div>
 
             {/* Bulk delete */}
-            {canEdit && selectedIds.length > 0 && (
+            {canDelete && selectedIds.length > 0 && (
               <button
                 onClick={() => setShowBulkDelete(true)}
                 className="flex items-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 rounded-xl text-sm font-medium hover:bg-red-100 transition-colors"
@@ -743,9 +744,11 @@ export default function StudentsPage() {
                             <button onClick={() => openEdit(student)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600 transition-colors" title="تعديل">
                               <Edit2 size={15} />
                             </button>
-                            <button onClick={() => setDeleteId(student.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="حذف">
-                              <Trash2 size={15} />
-                            </button>
+                            {canDelete && (
+                              <button onClick={() => setDeleteId(student.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="حذف">
+                                <Trash2 size={15} />
+                              </button>
+                            )}
                           </>
                         )}
                       </div>

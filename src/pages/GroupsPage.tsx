@@ -30,7 +30,9 @@ const DAYS = [
 export default function GroupsPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canWrite = can('groups', 'create') || can('groups', 'edit');
+  const canDelete = can('groups', 'delete');
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
@@ -215,11 +217,13 @@ export default function GroupsPage() {
             <option value="">كل المواد</option>
             {SUBJECTS.map(s => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
           </select>
-          <button onClick={openAdd}
-            className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-            <Plus size={16} /> إضافة مجموعة
-          </button>
+          {canWrite && (
+            <button onClick={openAdd}
+              className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
+              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
+              <Plus size={16} /> إضافة مجموعة
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -276,8 +280,8 @@ export default function GroupsPage() {
                     <button onClick={() => setViewGroup(group)} className="flex-1 py-1.5 text-xs bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors flex items-center justify-center gap-1">
                       <Users size={12} /> الطلاب
                     </button>
-                    <button onClick={() => openEdit(group)} className="flex-1 py-1.5 text-xs bg-yellow-50 text-yellow-600 rounded-lg hover:bg-yellow-100 transition-colors">تعديل</button>
-                    <button onClick={() => setDeleteId(group.id)} className="flex-1 py-1.5 text-xs bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors">حذف</button>
+                    {canWrite && <button onClick={() => openEdit(group)} className="flex-1 py-1.5 text-xs bg-yellow-50 text-yellow-600 rounded-lg hover:bg-yellow-100 transition-colors">تعديل</button>}
+                    {canDelete && <button onClick={() => setDeleteId(group.id)} className="flex-1 py-1.5 text-xs bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors">حذف</button>}
                   </div>
                 </div>
               );
