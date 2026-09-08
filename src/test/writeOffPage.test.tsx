@@ -16,6 +16,7 @@ import {
   Student, Group, Course, Installment, Enrollment,
 } from '../lib/db';
 import { getAuditEntries } from '../lib/audit';
+import { ROLE_LABEL } from '../lib/permissions';
 
 const NOW = '2026-03-10T10:00:00.000Z';
 const PAST = dayjs().subtract(10, 'day').format('YYYY-MM-DD');
@@ -62,6 +63,11 @@ function renderPage() {
 }
 
 beforeEach(async () => {
+  // جلسة مسؤول — زرار التصفير والتحصيل بيظهروا حسب الصلاحيات (debtors.delete / payments.create)
+  sessionStorage.setItem('educenter_session', JSON.stringify({
+    id: 'admin-test', username: 'admin', role: 'admin', createdAt: NOW, updatedAt: NOW,
+  }));
+  sessionStorage.setItem('educenter_session_ts', Date.now().toString());
   for (const store of [
     'students', 'groups', 'courses', 'payments', 'enrollments', 'installments', 'audit_logs',
   ] as const) {
@@ -75,10 +81,11 @@ describe('زرار تصفير المديونيات في صفحة المديون�
     const user = userEvent.setup();
     renderPage();
 
-    // الطالب ظاهر في جدول المديونيات
+    // الطالب ظاهر في جدول المديونيات + الجلسة اتحمّلت (الأزرار بتظهر حسب الصلاحيات)
     await waitFor(() => expect(screen.getByText('أحمد محمد')).toBeInTheDocument());
+    await screen.findByText(ROLE_LABEL.admin, {}, { timeout: 5000 });
 
-    await user.click(screen.getByRole('button', { name: /تصفير المديونيات/ }));
+    await user.click(await screen.findByRole('button', { name: /تصفير المديونيات/ }));
     await waitFor(() => expect(screen.getByText(/عملية غير قابلة للتراجع/)).toBeInTheDocument());
 
     const inputs = screen.getAllByRole('textbox').filter(i => (i as HTMLInputElement).type === 'text');
@@ -102,5 +109,47 @@ describe('زرار تصفير المديونيات في صفحة المديون�
 
     // والقايمة اتحدّثت: مفيش مديونيات
     await waitFor(() => expect(screen.getByText(/لا توجد مديونيات/)).toBeInTheDocument());
+  });
+});
+
+describe('صلاحيات الأدوار على صفحة المديونيات', () => {
+  function loginAs(role: string) {
+    sessionStorage.setItem('educenter_session', JSON.stringify({
+      id: `${role}-test`, username: role, role, createdAt: NOW, updatedAt: NOW,
+    }));
+    sessionStorage.setItem('educenter_session_ts', Date.now().toString());
+  }
+
+  /** نستنى الطالب يظهر والجلسة تتحمّل (اسم الدور بيظهر في السايدبار) قبل ما نفحص الأزرار */
+  async function ready(studentName: string, role: keyof typeof ROLE_LABEL) {
+    await waitFor(() => expect(screen.getByText(studentName)).toBeInTheDocument());
+    await screen.findByText(ROLE_LABEL[role], {}, { timeout: 5000 });
+  }
+
+  it('الاستقبال: يقدر يحصّل لكن ما يقدرش يصفّر المديونيات', async () => {
+    await seedDebtor('سارة علي');
+    loginAs('secretary');
+    renderPage();
+    await ready('سارة علي', 'secretary');
+    expect(screen.getByTitle('تحصيل دفعة')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /تصفير المديونيات/ })).toBeNull();
+  });
+
+  it('المحاسب: يقدر يحصّل ويصفّر', async () => {
+    await seedDebtor('منى حسن');
+    loginAs('accountant');
+    renderPage();
+    await ready('منى حسن', 'accountant');
+    expect(screen.getByTitle('تحصيل دفعة')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /تصفير المديونيات/ })).toBeInTheDocument();
+  });
+
+  it('المشرف الأكاديمي: عرض فقط — لا تحصيل ولا تصفير', async () => {
+    await seedDebtor('خالد سعيد');
+    loginAs('supervisor');
+    renderPage();
+    await ready('خالد سعيد', 'supervisor');
+    expect(screen.queryByTitle('تحصيل دفعة')).toBeNull();
+    expect(screen.queryByRole('button', { name: /تصفير المديونيات/ })).toBeNull();
   });
 });

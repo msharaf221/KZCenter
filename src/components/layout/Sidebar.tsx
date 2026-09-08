@@ -19,46 +19,46 @@ interface NavItem {
   icon: React.ReactNode;
   /** مفتاح الصلاحية في permissions.ts — من غيره العنصر ظاهر للكل */
   page?: PageKey;
-  adminOnly?: boolean;
   /** يعرض عدّاد تنبيه المديونيات جنب العنصر */
   debtBadge?: boolean;
 }
 
 const navItems: NavItem[] = [
   { path: '/', label: 'لوحة التحكم', icon: <LayoutDashboard size={20} /> },
-  { path: '/students', label: 'الطلاب', icon: <GraduationCap size={20} /> },
-  { path: '/teachers', label: 'المدرسون', icon: <Users size={20} />, adminOnly: true },
-  { path: '/courses', label: 'الكورسات', icon: <BookOpen size={20} />, adminOnly: true },
-  { path: '/inventory', label: 'الملازم والمخزن', icon: <Archive size={20} />, adminOnly: true },
-  { path: '/groups', label: 'المجموعات', icon: <Users2 size={20} />, adminOnly: true },
-  { path: '/payments', label: 'المدفوعات', icon: <CreditCard size={20} />, adminOnly: true },
-  { path: '/debtors', label: 'المديونيات', icon: <AlertTriangle size={20} />, adminOnly: true, debtBadge: true },
-  { path: '/expenses', label: 'المصروفات', icon: <Wallet size={20} />, adminOnly: true },
-  { path: '/attendance', label: 'الحضور', icon: <ClipboardCheck size={20} /> },
-  { path: '/exams', label: 'الاختبارات', icon: <FileText size={20} /> },
-  { path: '/daily-reports', label: 'التقرير اليومي', icon: <CalendarDays size={20} />, adminOnly: true },
-  { path: '/reports', label: 'التقارير', icon: <BarChart3 size={20} /> },
-  { path: '/users', label: 'المستخدمون', icon: <UserCog size={20} />, adminOnly: true },
-  { path: '/audit-log', label: 'سجل المراجعة', icon: <Shield size={20} />, adminOnly: true },
-  { path: '/settings', label: 'الإعدادات', icon: <Settings size={20} />, adminOnly: true },
+  { path: '/students', label: 'الطلاب', icon: <GraduationCap size={20} />, page: 'students' },
+  { path: '/teachers', label: 'المدرسون', icon: <Users size={20} />, page: 'teachers' },
+  { path: '/courses', label: 'الكورسات', icon: <BookOpen size={20} />, page: 'courses' },
+  { path: '/inventory', label: 'الملازم والمخزن', icon: <Archive size={20} />, page: 'inventory' },
+  { path: '/groups', label: 'المجموعات', icon: <Users2 size={20} />, page: 'groups' },
+  { path: '/payments', label: 'المدفوعات', icon: <CreditCard size={20} />, page: 'payments' },
+  { path: '/debtors', label: 'المديونيات', icon: <AlertTriangle size={20} />, page: 'debtors', debtBadge: true },
+  { path: '/expenses', label: 'المصروفات', icon: <Wallet size={20} />, page: 'expenses' },
+  { path: '/attendance', label: 'الحضور', icon: <ClipboardCheck size={20} />, page: 'attendance' },
+  { path: '/exams', label: 'الاختبارات', icon: <FileText size={20} />, page: 'exams' },
+  { path: '/daily-reports', label: 'التقرير اليومي', icon: <CalendarDays size={20} />, page: 'dailyReports' },
+  { path: '/reports', label: 'التقارير', icon: <BarChart3 size={20} />, page: 'reports' },
+  { path: '/users', label: 'المستخدمون', icon: <UserCog size={20} />, page: 'users' },
+  { path: '/audit-log', label: 'سجل المراجعة', icon: <Shield size={20} />, page: 'auditLog' },
+  { path: '/settings', label: 'الإعدادات', icon: <Settings size={20} />, page: 'settings' },
 ];
 
+
 export default function Sidebar() {
-  const { user, logout, isAdmin } = useAuth();
+  const { user, logout, can } = useAuth();
   const { sidebarOpen, setSidebarOpen, settings } = useApp();
   const [debtAlert, setDebtAlert] = useState<DebtAlert | null>(null);
 
-  // تنبيه المديونيات (للمسؤول فقط) — الحساب بيتعمل مرة كل دقيقة على الأكثر
+  // تنبيه المديونيات (لمن يقدر يشوف المديونيات) — الحساب بيتعمل مرة كل دقيقة على الأكثر
+  const canSeeDebtors = can('debtors', 'view');
   useEffect(() => {
-    if (!isAdmin()) return;
+    if (!canSeeDebtors) return;
     const unsubscribe = subscribeDebtAlert(setDebtAlert);
     void refreshDebtAlert();
     return unsubscribe;
-  }, [isAdmin]);
+  }, [canSeeDebtors]);
 
   const pages = visiblePages(user?.role);
   const visibleItems = navItems.filter(item => {
-    if (item.adminOnly && !isAdmin()) return false;
     if (item.page && !pages.includes(item.page)) return false;
     return true;
   });

@@ -33,7 +33,7 @@ export default function ConfirmDialog({
             <AlertTriangle size={24} className={danger ? 'text-red-600' : 'text-yellow-600'} />
           </div>
           <h3 className="text-lg font-bold text-gray-900 text-center mb-2">{title}</h3>
-          <p className="text-sm text-gray-600 text-center mb-6">{message}</p>
+          <p className="text-sm text-gray-600 text-center mb-6 whitespace-pre-line">{message}</p>
           <div className="flex gap-3">
             <button
               onClick={onConfirm}

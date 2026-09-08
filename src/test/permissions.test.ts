@@ -34,18 +34,17 @@ describe('can() — المصفوفة', () => {
     expect(can('teacher', 'payroll', 'view')).toBe(false);
     expect(can('teacher', 'expenses', 'view')).toBe(false);
     expect(can('secretary', 'users', 'view')).toBe(false);
-    expect(can('supervisor', 'treasury', 'view')).toBe(false);
+    expect(can('supervisor', 'expenses', 'view')).toBe(false);
   });
 });
 
 describe('فصل المهام بين الأدوار', () => {
-  it('الاستقبال: تسجيل وتحصيل — من غير مصروفات ولا رواتب ولا خزينة', () => {
+  it('الاستقبال: تسجيل وتحصيل — من غير مصروفات ولا رواتب', () => {
     expect(can('secretary', 'students', 'create')).toBe(true);
     expect(can('secretary', 'students', 'edit')).toBe(true);
     expect(can('secretary', 'payments', 'create')).toBe(true);
     expect(can('secretary', 'expenses', 'view')).toBe(false);
     expect(can('secretary', 'payroll', 'view')).toBe(false);
-    expect(can('secretary', 'treasury', 'view')).toBe(false);
   });
 
   it('الاستقبال ما يقدرش يحذف (الحذف للمسؤول)', () => {
@@ -54,7 +53,7 @@ describe('فصل المهام بين الأدوار', () => {
   });
 
   it('المحاسب: الفلوس كلها', () => {
-    for (const e of ['payments', 'refunds', 'expenses', 'payroll', 'treasury', 'reports'] as Entity[]) {
+    for (const e of ['payments', 'refunds', 'expenses', 'payroll', 'reports'] as Entity[]) {
       expect(can('accountant', e, 'view')).toBe(true);
       expect(can('accountant', e, 'money')).toBe(true);
     }
@@ -91,7 +90,6 @@ describe('فصل المهام بين الأدوار', () => {
     expect(can('teacher', 'debtors', 'view')).toBe(false);
     expect(can('teacher', 'reports', 'view')).toBe(false);
     expect(can('teacher', 'expenses', 'view')).toBe(false);
-    expect(can('teacher', 'treasury', 'view')).toBe(false);
     expect(can('teacher', 'payroll', 'view')).toBe(false);
   });
 
@@ -114,10 +112,11 @@ describe('فصل المهام بين الأدوار', () => {
     expect(can('accountant', 'auditLog', 'delete')).toBe(false);
   });
 
-  it('الحذف النهائي (سلة المحذوفات) ما يتاحش لغير المسؤول', () => {
-    expect(can('admin', 'trash', 'delete')).toBe(true);
+  it('حذف المستخدمين والإعدادات للمسؤول فقط', () => {
+    expect(can('admin', 'users', 'delete')).toBe(true);
     for (const r of ['secretary', 'accountant', 'supervisor', 'teacher'] as UserRole[]) {
-      expect(can(r, 'trash', 'delete')).toBe(false);
+      expect(can(r, 'users', 'delete')).toBe(false);
+      expect(can(r, 'settings', 'delete')).toBe(false);
     }
   });
 });
@@ -150,30 +149,27 @@ describe('visiblePages() — السايدبار', () => {
     const pages = visiblePages('admin');
     expect(pages).toContain('students');
     expect(pages).toContain('payroll');
-    expect(pages).toContain('treasury');
     expect(pages).toContain('users');
     expect(pages).toContain('settings');
-    expect(pages).toContain('trash');
+    expect(pages).toContain('backup');
   });
 
   it('المدرس: صفحات أكاديمية بس', () => {
     const pages = visiblePages('teacher');
     expect(pages).toContain('students');
     expect(pages).toContain('attendance');
-    expect(pages).toContain('timetable');
+    expect(pages).toContain('exams');
     expect(pages).not.toContain('payroll');
-    expect(pages).not.toContain('treasury');
     expect(pages).not.toContain('expenses');
     expect(pages).not.toContain('reports');
     expect(pages).not.toContain('users');
     expect(pages).not.toContain('settings');
   });
 
-  it('الاستقبال: مفيش خزينة ولا رواتب ولا مصروفات', () => {
+  it('الاستقبال: مفيش رواتب ولا مصروفات', () => {
     const pages = visiblePages('secretary');
     expect(pages).toContain('students');
     expect(pages).toContain('payments');
-    expect(pages).not.toContain('treasury');
     expect(pages).not.toContain('payroll');
     expect(pages).not.toContain('expenses');
     expect(pages).not.toContain('reports');
@@ -181,7 +177,7 @@ describe('visiblePages() — السايدبار', () => {
 
   it('المحاسب: الفلوس والتقارير ظاهرة', () => {
     const pages = visiblePages('accountant');
-    expect(pages).toContain('treasury');
+    expect(pages).toContain('payments');
     expect(pages).toContain('payroll');
     expect(pages).toContain('expenses');
     expect(pages).toContain('reports');
@@ -192,9 +188,9 @@ describe('visiblePages() — السايدبار', () => {
   it('المشرف: أكاديمي + تقارير عرض فقط', () => {
     const pages = visiblePages('supervisor');
     expect(pages).toContain('groups');
-    expect(pages).toContain('timetable');
+    expect(pages).toContain('exams');
     expect(pages).toContain('reports');
-    expect(pages).not.toContain('treasury');
+    expect(pages).not.toContain('expenses');
     expect(pages).not.toContain('payroll');
   });
 
@@ -344,5 +340,25 @@ describe('سلامة المصفوفة', () => {
         for (const a of actions || []) expect(valid).toContain(a);
       }
     }
+  });
+});
+
+describe('توافق المسارات مع المصفوفة', () => {
+  it('المشرف الأكاديمي والاستقبال ما يشوفوش التقرير اليومي (تقرير نقدية)', () => {
+    expect(can('supervisor', 'dailyReports', 'view')).toBe(false);
+    expect(can('secretary', 'dailyReports', 'view')).toBe(false);
+    expect(can('accountant', 'dailyReports', 'view')).toBe(true);
+    expect(can('admin', 'dailyReports', 'view')).toBe(true);
+  });
+
+  it('كل كيان مستخدم في App.tsx كـ entity موجود في مصفوفة المسؤول', async () => {
+    const src = (await import('../App.tsx?raw')).default as string;
+    const used = [...src.matchAll(/entity="([a-zA-Z]+)"/g)].map(m => m[1]);
+    expect(used.length).toBeGreaterThan(10);
+    for (const e of used) {
+      expect(PERMISSIONS.admin[e as Entity], `entity "${e}" مش موجود في المصفوفة`).toBeDefined();
+    }
+    // مفيش adminOnly متبقي — كل الحماية من المصفوفة
+    expect(src).not.toContain('adminOnly');
   });
 });

@@ -17,7 +17,9 @@ const CATEGORIES = [...new Set([...SUBJECT_CATEGORIES, 'علوم', 'حاسوب',
 
 export default function CoursesPage() {
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canWrite = can('courses', 'create') || can('courses', 'edit');
+  const canDelete = can('courses', 'delete');
   const [courses, setCourses] = useState<Course[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -184,11 +186,13 @@ export default function CoursesPage() {
             className="flex items-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
             <Wand2 size={16} /> {syncing ? 'جاري الظبط…' : 'ظبط المواد والأسعار'}
           </button>
-          <button onClick={openAdd}
-            className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-            <Plus size={16} /> إضافة كورس
-          </button>
+          {canWrite && (
+            <button onClick={openAdd}
+              className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
+              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
+              <Plus size={16} /> إضافة كورس
+            </button>
+          )}
         </div>
 
         {/* ---------- أسعار المواد الشهرية ---------- */}
@@ -257,8 +261,8 @@ export default function CoursesPage() {
                       </div>
                     </div>
                     <div className="flex gap-1">
-                      <button onClick={() => openEdit(course)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600"><Edit2 size={14} /></button>
-                      <button onClick={() => setDeleteId(course.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600"><Trash2 size={14} /></button>
+                      {canWrite && <button onClick={() => openEdit(course)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600"><Edit2 size={14} /></button>}
+                      {canDelete && <button onClick={() => setDeleteId(course.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600"><Trash2 size={14} /></button>}
                     </div>
                   </div>
                   {course.description && <p className="text-xs text-gray-500 mb-3 line-clamp-2">{course.description}</p>}

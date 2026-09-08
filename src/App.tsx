@@ -75,76 +75,76 @@ export default function App() {
               } />
 
               <Route path="/students" element={
-                <ProtectedRoute>
+                <ProtectedRoute entity="students">
                   <StudentsPage />
                 </ProtectedRoute>
               } />
               <Route path="/students/:id" element={
-                <ProtectedRoute>
+                <ProtectedRoute entity="students">
                   <StudentProfilePage />
                 </ProtectedRoute>
               } />
               <Route path="/teachers" element={
-                <ProtectedRoute adminOnly>
+                <ProtectedRoute entity="teachers">
                   <TeachersPage />
                 </ProtectedRoute>
               } />
               <Route path="/teachers/:id" element={
-                <ProtectedRoute adminOnly>
+                <ProtectedRoute entity="teachers">
                   <TeacherProfilePage />
                 </ProtectedRoute>
               } />
 
               <Route path="/courses" element={
-                <ProtectedRoute adminOnly><CoursesPage /></ProtectedRoute>
+                <ProtectedRoute entity="courses"><CoursesPage /></ProtectedRoute>
               } />
 
               <Route path="/groups" element={
-                <ProtectedRoute adminOnly><GroupsPage /></ProtectedRoute>
+                <ProtectedRoute entity="groups"><GroupsPage /></ProtectedRoute>
               } />
 
               <Route path="/payments" element={
-                <ProtectedRoute adminOnly><PaymentsPage /></ProtectedRoute>
+                <ProtectedRoute entity="payments"><PaymentsPage /></ProtectedRoute>
               } />
 
               <Route path="/debtors" element={
-                <ProtectedRoute adminOnly><DebtorsPage /></ProtectedRoute>
+                <ProtectedRoute entity="debtors"><DebtorsPage /></ProtectedRoute>
               } />
 
               <Route path="/inventory" element={
-                <ProtectedRoute adminOnly><InventoryPage /></ProtectedRoute>
+                <ProtectedRoute entity="inventory"><InventoryPage /></ProtectedRoute>
               } />
 
               <Route path="/expenses" element={
-                <ProtectedRoute adminOnly><ExpensesPage /></ProtectedRoute>
+                <ProtectedRoute entity="expenses"><ExpensesPage /></ProtectedRoute>
               } />
 
               <Route path="/attendance" element={
-                <ProtectedRoute><AttendancePage /></ProtectedRoute>
+                <ProtectedRoute entity="attendance"><AttendancePage /></ProtectedRoute>
               } />
 
               <Route path="/exams" element={
-                <ProtectedRoute><ExamsPage /></ProtectedRoute>
+                <ProtectedRoute entity="exams"><ExamsPage /></ProtectedRoute>
               } />
 
               <Route path="/reports" element={
-                <ProtectedRoute><ReportsPage /></ProtectedRoute>
+                <ProtectedRoute entity="reports"><ReportsPage /></ProtectedRoute>
               } />
 
               <Route path="/daily-reports" element={
-                <ProtectedRoute adminOnly><DailyReportsPage /></ProtectedRoute>
+                <ProtectedRoute entity="dailyReports"><DailyReportsPage /></ProtectedRoute>
               } />
 
               <Route path="/users" element={
-                <ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>
+                <ProtectedRoute entity="users"><UsersPage /></ProtectedRoute>
               } />
 
               <Route path="/settings" element={
-                <ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>
+                <ProtectedRoute entity="settings"><SettingsPage /></ProtectedRoute>
               } />
 
               <Route path="/audit-log" element={
-                <ProtectedRoute adminOnly><AuditLogPage /></ProtectedRoute>
+                <ProtectedRoute entity="auditLog"><AuditLogPage /></ProtectedRoute>
               } />
 
               <Route path="*" element={<Navigate to="/" replace />} />

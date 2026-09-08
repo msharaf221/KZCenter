@@ -14,6 +14,7 @@ import { effectiveMonthlyPrice, proratedFirstPeriod, resolveSessionsPerMonth } f
 import SessionPicker from '../components/SessionPicker';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import { visibleGroupIds } from '../lib/permissions';
 import { notify, notifyNewStudent } from '../lib/notifications';
 import { useDebounce } from '../hooks';
 import { addAuditEntry } from '../lib/security';
@@ -49,8 +50,10 @@ const digits = (s?: string) => String(s || '').replace(/\D/g, '');
 export default function StudentsPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
-  const { isAdmin, user } = useAuth();
-  const canEdit = isAdmin(); // المدرس: عرض فقط
+  const { can, user } = useAuth();
+  const canEdit = can('students', 'edit') || can('students', 'create'); // المدرس: عرض فقط
+  const canDelete = can('students', 'delete');
+  const showMoney = can('payments', 'view'); // الأرقام المالية لمن عنده صلاحية المدفوعات
   const [students, setStudents] = useState<Student[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -84,11 +87,14 @@ export default function StudentsPage() {
   const loadStudents = useCallback(async () => {
     setLoading(true);
     try {
-      const [allGroups, allCourses, allAttendance] = await Promise.all([
+      const [everyGroup, allCourses, allAttendance] = await Promise.all([
         dbGetAll<Group>('groups'),
         dbGetAll<Course>('courses'),
         dbGetAll<Attendance>('attendance'),
       ]);
+      // المدرس يشوف مجموعاته وطلابها هو بس
+      const allowed = visibleGroupIds({ role: user?.role, teacherId: user?.teacherId, groups: everyGroup });
+      const allGroups = allowed ? everyGroup.filter(g => allowed.has(g.id)) : everyGroup;
       setGroups(allGroups);
       setCourses(allCourses);
 
@@ -102,6 +108,7 @@ export default function StudentsPage() {
       setAttStatsById(stats);
 
       const result = await dbGetPaginated<Student>('students', page, PAGE_SIZE, (s: Student) => {
+        if (allowed && !(s.enrolledGroups || []).some(gid => allowed.has(gid))) return false;
         const q = debouncedSearch.toLowerCase();
         const matchSearch = !q || s.name.toLowerCase().includes(q) || s.parentPhone.includes(q);
         const matchStatus = !statusFilter || s.status === statusFilter;
@@ -136,7 +143,7 @@ export default function StudentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch, statusFilter, groupFilter, courseFilter, balanceFilter, attendanceFilter]);
+  }, [page, debouncedSearch, statusFilter, groupFilter, courseFilter, balanceFilter, attendanceFilter, user?.role, user?.teacherId]);
 
   useEffect(() => {
     loadStudents();
@@ -305,6 +312,10 @@ export default function StudentsPage() {
               discountAmount: pricing.discountAmount && pricing.discountAmount > 0 ? pricing.discountAmount : undefined,
               discountPercent: pricing.discountPercent && pricing.discountPercent > 0 ? pricing.discountPercent : undefined,
               discountReason: pricing.discountReason || undefined,
+              // الدفعة الأولى تتسجل باسم اللي حصّلها (تظهر في التقرير اليومي بالموظف)
+              paymentMethod: 'cash',
+              collectedBy: user?.id,
+              collectedByName: user?.username,
             }
           );
           if (!result.success) {
@@ -328,7 +339,7 @@ export default function StudentsPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!canEdit) { notify.error('ليس لديك صلاحية الحذف'); return; }
+    if (!canDelete) { notify.error('ليس لديك صلاحية الحذف'); return; }
     try {
       const student = students.find(s => s.id === id);
       if (student && student.enrolledGroups) {
@@ -341,6 +352,11 @@ export default function StudentsPage() {
         }
       }
       await dbSoftDelete('students', id);
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'delete', entity: 'student', entityId: id,
+        details: `حذف طالب: ${student?.name || id}${student && (student.totalOwed || 0) - student.totalPaid > 0 ? ` (كان عليه ${formatCurrency((student.totalOwed || 0) - student.totalPaid, settings?.currency)})` : ''}`,
+      });
       notify.success('تم حذف الطالب');
       loadStudents();
     } catch {
@@ -348,8 +364,20 @@ export default function StudentsPage() {
     }
   }
 
+  /** رسالة تأكيد الحذف — بتنبّه لو الطالب عليه فلوس (الحذف بيسقط دينه من قائمة المديونيات) */
+  function deleteMessage(ids: string[]): string {
+    const targets = students.filter(s => ids.includes(s.id));
+    const debt = targets.reduce((sum, s) => sum + Math.max(0, (s.totalOwed || 0) - s.totalPaid), 0);
+    const base = ids.length === 1
+      ? 'هل أنت متأكد من حذف هذا الطالب؟ سيتم حذفه بشكل مؤقت.'
+      : `هل أنت متأكد من حذف ${ids.length} طالب؟`;
+    return debt > 0
+      ? `${base}\n⚠️ تنبيه: عليه متبقي ${formatCurrency(debt, settings?.currency)} — الحذف هيسقط الدين من قائمة المديونيات. لو المقصود تسجيل انسحاب فقط، غيّر الحالة إلى «منتهي» بدل الحذف.`
+      : base;
+  }
+
   async function handleBulkDelete() {
-    if (!canEdit) { notify.error('ليس لديك صلاحية الحذف'); return; }
+    if (!canDelete) { notify.error('ليس لديك صلاحية الحذف'); return; }
     try {
       for (const id of selectedIds) {
         const student = students.find(s => s.id === id);
@@ -363,6 +391,11 @@ export default function StudentsPage() {
           }
         }
         await dbSoftDelete('students', id);
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'delete', entity: 'student', entityId: id,
+          details: `حذف طالب (جماعي): ${student?.name || id}`,
+        });
       }
       notify.success(`تم حذف ${selectedIds.length} طالب`);
       setSelectedIds([]);
@@ -533,6 +566,7 @@ export default function StudentsPage() {
             </div>
 
             {/* Balance Filter */}
+            {showMoney && (
             <div className="relative">
               <DollarSign size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <select
@@ -545,6 +579,7 @@ export default function StudentsPage() {
                 <option value="settled">مسددين</option>
               </select>
             </div>
+            )}
 
             {/* Attendance Filter */}
             <div className="relative">
@@ -562,7 +597,7 @@ export default function StudentsPage() {
             </div>
 
             {/* Bulk delete */}
-            {canEdit && selectedIds.length > 0 && (
+            {canDelete && selectedIds.length > 0 && (
               <button
                 onClick={() => setShowBulkDelete(true)}
                 className="flex items-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 rounded-xl text-sm font-medium hover:bg-red-100 transition-colors"
@@ -645,19 +680,19 @@ export default function StudentsPage() {
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">هاتف ولي الأمر</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الحالة</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الغياب</th>
-                  <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المدفوع</th>
-                  <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المتبقي</th>
+                  {showMoney && <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المدفوع</th>}
+                  {showMoney && <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">المتبقي</th>}
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">تاريخ التسجيل</th>
                   <th className="p-4 text-center text-xs font-semibold text-gray-600 uppercase">إجراءات</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {loading ? (
-                  <tr><td colSpan={11} className="p-8 text-center">
+                  <tr><td colSpan={showMoney ? 11 : 9} className="p-8 text-center">
                     <div className="animate-spin w-6 h-6 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto" />
                   </td></tr>
                 ) : students.length === 0 ? (
-                  <tr><td colSpan={11} className="p-8 text-center text-gray-400">لا يوجد طلاب</td></tr>
+                  <tr><td colSpan={showMoney ? 11 : 9} className="p-8 text-center text-gray-400">لا يوجد طلاب</td></tr>
                 ) : students.map((student, idx) => (
                   <tr key={student.id} className="hover:bg-gray-50 transition-colors">
                     <td className="p-4">
@@ -709,17 +744,21 @@ export default function StudentsPage() {
                         );
                       })()}
                     </td>
-                    <td className="p-4 text-sm font-medium text-gray-900">
-                      {formatCurrency(student.totalPaid, settings?.currency)}
-                    </td>
-                    <td className="p-4 text-sm">
-                      {(() => {
-                        const remaining = (student.totalOwed || 0) - student.totalPaid;
-                        if (remaining > 0) return <span className="font-bold text-red-600">{formatCurrency(remaining, settings?.currency)}</span>;
-                        if (remaining < 0) return <span className="font-bold text-blue-600">فائض {formatCurrency(Math.abs(remaining), settings?.currency)}</span>;
-                        return <span className="font-bold text-green-600">مسدد</span>;
-                      })()}
-                    </td>
+                    {showMoney && (
+                      <td className="p-4 text-sm font-medium text-gray-900">
+                        {formatCurrency(student.totalPaid, settings?.currency)}
+                      </td>
+                    )}
+                    {showMoney && (
+                      <td className="p-4 text-sm">
+                        {(() => {
+                          const remaining = (student.totalOwed || 0) - student.totalPaid;
+                          if (remaining > 0) return <span className="font-bold text-red-600">{formatCurrency(remaining, settings?.currency)}</span>;
+                          if (remaining < 0) return <span className="font-bold text-blue-600">فائض {formatCurrency(Math.abs(remaining), settings?.currency)}</span>;
+                          return <span className="font-bold text-green-600">مسدد</span>;
+                        })()}
+                      </td>
+                    )}
                     <td className="p-4 text-sm text-gray-500">{formatDate(student.createdAt)}</td>
                     <td className="p-4">
                       <div className="flex items-center justify-center gap-1">
@@ -731,9 +770,11 @@ export default function StudentsPage() {
                             <button onClick={() => openEdit(student)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600 transition-colors" title="تعديل">
                               <Edit2 size={15} />
                             </button>
-                            <button onClick={() => setDeleteId(student.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="حذف">
-                              <Trash2 size={15} />
-                            </button>
+                            {canDelete && (
+                              <button onClick={() => setDeleteId(student.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="حذف">
+                                <Trash2 size={15} />
+                              </button>
+                            )}
                           </>
                         )}
                       </div>
@@ -977,7 +1018,7 @@ export default function StudentsPage() {
       <ConfirmDialog
         isOpen={!!deleteId}
         title="حذف الطالب"
-        message="هل أنت متأكد من حذف هذا الطالب؟ سيتم حذفه بشكل مؤقت."
+        message={deleteId ? deleteMessage([deleteId]) : ''}
         onConfirm={() => { if (deleteId) handleDelete(deleteId); setDeleteId(null); }}
         onCancel={() => setDeleteId(null)}
         danger
@@ -1001,7 +1042,7 @@ export default function StudentsPage() {
       <ConfirmDialog
         isOpen={showBulkDelete}
         title="حذف جماعي"
-        message={`هل أنت متأكد من حذف ${selectedIds.length} طالب؟`}
+        message={deleteMessage(selectedIds)}
         onConfirm={() => { handleBulkDelete(); setShowBulkDelete(false); }}
         onCancel={() => setShowBulkDelete(false)}
         danger

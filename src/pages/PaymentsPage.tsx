@@ -21,7 +21,11 @@ const PAGE_SIZE = 20;
 
 export default function PaymentsPage() {
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canCreate = can('payments', 'create');
+  const canEdit = can('payments', 'edit');
+  const canDelete = can('payments', 'delete');
+  const canMoney = can('refunds', 'create'); // إلغاء/استرداد = أثر محاسبي → صلاحية الاستردادات
   const [payments, setPayments] = useState<Payment[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -76,7 +80,7 @@ export default function PaymentsPage() {
         const matchSearch = !q
           || (student?.name || '').toLowerCase().includes(q)
           || (p.receiptNo || '').toLowerCase().includes(q)
-          || (p.collectedBy || '').toLowerCase().includes(q)
+          || (p.collectedByName || p.collectedBy || '').toLowerCase().includes(q)
           || String(p.amount).includes(q);
         const matchStatus = !statusFilter || p.status === statusFilter;
         return matchSearch && matchStatus;
@@ -102,6 +106,8 @@ export default function PaymentsPage() {
   async function handleSave() {
     if (!form.studentId) { notify.error('اختر طالباً'); return; }
     if (form.amount <= 0) { notify.error('المبلغ يجب أن يكون أكبر من 0'); return; }
+    if (busy) return; // حماية من الضغط المزدوج (دفعة مكررة + إيصالين)
+    setBusy(true);
     try {
       let payment: Payment;
 
@@ -115,7 +121,9 @@ export default function PaymentsPage() {
           courseId: form.courseId || undefined,
           notes: form.notes || undefined,
           method: form.method,
-          collectedBy: form.collectedBy || user?.username || undefined,
+          // نفس اتفاقية RenewDialog/db: collectedBy = معرّف المستخدم، collectedByName = الاسم المعروض
+          collectedBy: user?.id || undefined,
+          collectedByName: form.collectedBy || user?.username || undefined,
         });
         if (!result.success || !result.payment) { notify.error(result.error || 'حدث خطأ'); return; }
         payment = result.payment;
@@ -123,7 +131,8 @@ export default function PaymentsPage() {
         // معلق/متأخر أو بنود غير الاشتراك (كتب/أخرى): تسجل كدفعة من غير توزيع على أقساط
         payment = {
           id: generateId(), ...form,
-          collectedBy: form.collectedBy || user?.username || undefined,
+          collectedBy: user?.id || undefined,
+          collectedByName: form.collectedBy || user?.username || undefined,
           // الإيصال المسلسل بيتسجل للدفعات المسددة فقط — المعلق ما لوش إيصال
           receiptNo: form.status === 'paid'
             ? await nextReceiptNo(form.date, settings?.receiptPrefix)
@@ -151,6 +160,7 @@ export default function PaymentsPage() {
       setForm(f => ({ ...f, studentId: '', courseId: '', amount: 0, notes: '', collectedBy: '' }));
       load();
     } catch { notify.error('حدث خطأ'); }
+    finally { setBusy(false); }
   }
 
   // ---------- إلغاء دفعة (void) ----------
@@ -214,9 +224,34 @@ export default function PaymentsPage() {
     } finally { setBusy(false); }
   }
 
+  /**
+   * تحويل دفعة معلقة/متأخرة إلى مدفوعة:
+   * - إيصال مسلسل (المعلق ما كانش له إيصال) بتاريخ التحصيل الفعلي
+   * - تسجيل المحصِّل + الأثر في سجل المراجعة
+   */
+  async function markPaymentPaid(payment: Payment): Promise<void> {
+    // تاريخ الدفعة = يوم التحصيل الفعلي (وإلا الفلوس تظهر في التقرير اليومي لتاريخ قديم)
+    const today = dayjs().format('YYYY-MM-DD');
+    const receiptNo = payment.receiptNo || await nextReceiptNo(today, settings?.receiptPrefix);
+    await dbPut('payments', {
+      ...payment,
+      status: 'paid',
+      date: today,
+      receiptNo,
+      collectedBy: payment.collectedBy || user?.id,
+      collectedByName: payment.collectedByName || user?.username,
+      updatedAt: new Date().toISOString(),
+    });
+    addAuditEntry({
+      userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+      action: 'payment', entity: 'payment', entityId: payment.id,
+      details: `تحصيل دفعة معلقة بقيمة ${payment.amount} للطالب: ${getStudentName(payment.studentId)} — إيصال ${receiptNo}`,
+    });
+  }
+
   async function handleMarkPaid(payment: Payment) {
     try {
-      await dbPut('payments', { ...payment, status: 'paid', updatedAt: new Date().toISOString() });
+      await markPaymentPaid(payment);
       // الدفعة بقت مسددة → لازم تتوزّع على الأقساط
       await rebuildInstallmentsFromPayments(payment.studentId);
       notify.success('تم تغيير الحالة إلى مدفوع');
@@ -248,7 +283,7 @@ export default function PaymentsPage() {
       const affectedStudents = new Set<string>();
       for (const p of selected) {
         if (p.status !== 'paid') {
-          await dbPut('payments', { ...p, status: 'paid', updatedAt: new Date().toISOString() });
+          await markPaymentPaid(p);
           affectedStudents.add(p.studentId);
         }
       }
@@ -267,23 +302,18 @@ export default function PaymentsPage() {
     const st = freshSettings || settings;
     const student = students.find(x => x.id === payment.studentId);
     const course = courses.find(c => c.id === payment.courseId);
-    const group = (payment.installmentIds || []).length
-      ? undefined
-      : undefined;
-
     const before = await getStudentBalance(payment.studentId);
     const html = printReceipt({
       receiptNo: payment.receiptNo || payment.id.substring(0, 6).toUpperCase(),
       centerName: st?.centerName || 'EduCenter Pro',
       studentName: student?.name || '—',
       courseName: course?.name,
-      groupName: group,
       amount: payment.amount,
       amountInWords: amountToArabicWords(payment.amount, st?.currency),
       method: METHOD_LABEL[payment.method || 'cash'],
       type: payment.type === 'subscription' ? 'اشتراك' : payment.type === 'books' ? 'كتب' : 'أخرى',
       date: payment.date,
-      collectorName: payment.collectedBy,
+      collectorName: payment.collectedByName || payment.collectedBy,
       remainingAfter: before ? Math.max(0, before.remaining) : undefined,
       notes: payment.notes,
       settings: st,
@@ -377,7 +407,7 @@ export default function PaymentsPage() {
                 <option value="late">متأخر</option>
               </select>
             </div>
-            {selectedIds.length > 0 && (
+            {canEdit && selectedIds.length > 0 && (
               <button onClick={handleBulkMarkPaid}
                 className="flex items-center gap-2 px-3 py-2.5 bg-green-50 text-green-700 rounded-xl text-sm font-medium hover:bg-green-100">
                 <CheckCircle size={16} /> تحديد كمدفوع ({selectedIds.length})
@@ -387,11 +417,13 @@ export default function PaymentsPage() {
               <button onClick={exportExcel} className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50">
                 <Download size={16} /> تصدير
               </button>
-              <button onClick={() => setShowModal(true)}
-                className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
-                style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-                <Plus size={16} /> إضافة دفعة
-              </button>
+              {canCreate && (
+                <button onClick={() => setShowModal(true)}
+                  className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
+                  style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
+                  <Plus size={16} /> إضافة دفعة
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -444,7 +476,7 @@ export default function PaymentsPage() {
                     </td>
                     <td className="p-4 text-sm font-semibold text-gray-900">
                       <span className={payment.voided ? 'line-through text-gray-400' : ''}>{getStudentName(payment.studentId)}</span>
-                      {payment.collectedBy && <span className="block text-[10px] text-gray-400 font-normal">قبض: {payment.collectedBy}</span>}
+                      {(payment.collectedByName || payment.collectedBy) && <span className="block text-[10px] text-gray-400 font-normal">قبض: {payment.collectedByName || payment.collectedBy}</span>}
                     </td>
                     <td className="p-4 text-sm text-gray-600">{getCourseName(payment.courseId)}</td>
                     <td className="p-4 text-sm">
@@ -487,12 +519,12 @@ export default function PaymentsPage() {
                             <Printer size={15} />
                           </button>
                         )}
-                        {payment.status !== 'paid' && (
+                        {canEdit && payment.status !== 'paid' && (
                           <button onClick={() => handleMarkPaid(payment)} className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="تحديد كمدفوع">
                             <CheckCircle size={15} />
                           </button>
                         )}
-                        {!payment.voided && payment.status === 'paid' && (
+                        {canMoney && !payment.voided && payment.status === 'paid' && (
                           <>
                             <button onClick={() => openRefund(payment)} className="p-1.5 rounded-lg hover:bg-orange-50 text-orange-600 transition-colors" title="استرداد مبلغ">
                               <RotateCcw size={15} />
@@ -502,7 +534,7 @@ export default function PaymentsPage() {
                             </button>
                           </>
                         )}
-                        {!payment.voided && payment.status !== 'paid' && (
+                        {canDelete && !payment.voided && payment.status !== 'paid' && (
                           <button onClick={() => setDeleteId(payment.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors" title="حذف">
                             <Trash2 size={15} />
                           </button>
@@ -657,8 +689,8 @@ export default function PaymentsPage() {
           </div>
         </div>
         <div className="flex gap-3 mt-5">
-          <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>إضافة</button>
+          <button onClick={handleSave} disabled={busy} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm disabled:opacity-60"
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>{busy ? 'جاري الحفظ...' : 'إضافة'}</button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
         </div>
       </Modal>

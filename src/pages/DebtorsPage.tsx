@@ -25,7 +25,9 @@ type SortKey = 'remaining' | 'overdue' | 'oldestPayment' | 'name';
 export default function DebtorsPage() {
   const navigate = useNavigate();
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canCollect = can('payments', 'create');
+  const canWriteOff = can('debtors', 'delete'); // إبراء الذمة = إلغاء أقساط → صلاحية حذف
   const primaryColor = settings?.primaryColor || '#6366f1';
 
   const [debtors, setDebtors] = useState<DebtorRow[]>([]);
@@ -143,6 +145,8 @@ export default function DebtorsPage() {
         amount: payAmount,
         date: payDate,
         notes: payNotes.trim() || `تحصيل من صفحة المديونيات — ${payTarget.name}`,
+        method: 'cash',
+        collectedBy: user?.id, collectedByName: user?.username,
       });
       if (!result.success) { notify.error(result.error || 'حدث خطأ'); return; }
       notify.success(
@@ -242,11 +246,13 @@ export default function DebtorsPage() {
               <Download size={16} /> تصدير
             </button>
 
-            <button onClick={() => setShowWriteOff(true)}
-              className="flex items-center gap-2 px-3 py-2.5 border border-red-200 rounded-xl text-sm text-red-600 hover:bg-red-50"
-              title="إبراء ذمة: تصفير الأقساط غير المسددة قبل بداية شهر جديد">
-              <Eraser size={16} /> تصفير المديونيات
-            </button>
+            {canWriteOff && (
+              <button onClick={() => setShowWriteOff(true)}
+                className="flex items-center gap-2 px-3 py-2.5 border border-red-200 rounded-xl text-sm text-red-600 hover:bg-red-50"
+                title="إبراء ذمة: تصفير الأقساط غير المسددة قبل بداية شهر جديد">
+                <Eraser size={16} /> تصفير المديونيات
+              </button>
+            )}
           </div>
         </div>
 
@@ -320,10 +326,12 @@ export default function DebtorsPage() {
                     </td>
                     <td className="p-4">
                       <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => openPay(d)}
-                          className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="تحصيل دفعة">
-                          <Receipt size={15} />
-                        </button>
+                        {canCollect && (
+                          <button onClick={() => openPay(d)}
+                            className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="تحصيل دفعة">
+                            <Receipt size={15} />
+                          </button>
+                        )}
                         {d.parentPhone && (
                           <a href={getWhatsAppLink(d.parentPhone, reminderText(d))} target="_blank" rel="noopener noreferrer"
                             className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors" title="تذكير عبر واتساب">

@@ -15,9 +15,9 @@ import type { UserRole, Group } from './db';
 
 export type Entity =
   | 'students' | 'teachers' | 'courses' | 'groups' | 'inventory'
-  | 'payments' | 'refunds' | 'debtors' | 'expenses' | 'payroll' | 'treasury'
-  | 'attendance' | 'exams' | 'reports' | 'dailyReports' | 'timetable'
-  | 'messages' | 'users' | 'auditLog' | 'settings' | 'trash' | 'backup';
+  | 'payments' | 'refunds' | 'debtors' | 'expenses' | 'payroll'
+  | 'attendance' | 'exams' | 'reports' | 'dailyReports'
+  | 'users' | 'auditLog' | 'settings' | 'backup';
 
 export type Action = 'view' | 'create' | 'edit' | 'delete' | 'export' | 'money';
 
@@ -50,12 +50,11 @@ export const PERMISSIONS: Matrix = {
   admin: {
     students: ALL, teachers: ALL, courses: ALL, groups: ALL, inventory: ALL,
     payments: ALL, refunds: ALL, debtors: ALL, expenses: ALL, payroll: ALL,
-    treasury: ALL, attendance: ALL, exams: ALL, reports: ALL, dailyReports: ALL,
-    timetable: ALL, messages: ALL, users: ALL, auditLog: ALL, settings: ALL,
-    trash: ALL, backup: ALL,
+    attendance: ALL, exams: ALL, reports: ALL, dailyReports: ALL,
+    users: ALL, auditLog: ALL, settings: ALL, backup: ALL,
   },
 
-  // الاستقبال: تسجيل وتحصيل وحضور — من غير مصروفات ولا رواتب ولا خزينة ولا حذف نهائي
+  // الاستقبال: تسجيل وتحصيل وحضور — من غير مصروفات ولا رواتب ولا حذف
   secretary: {
     students: ['view', 'create', 'edit', 'export'],
     groups: ['view'],
@@ -64,15 +63,12 @@ export const PERMISSIONS: Matrix = {
     payments: ['view', 'create', 'export'],
     debtors: ['view', 'export'],
     attendance: ['view', 'create', 'edit', 'export'],
-    timetable: ['view'],
-    messages: ['view', 'create'],
     inventory: ['view'],
     exams: ['view'],
     reports: [],
-    trash: ['view'],
   },
 
-  // المحاسب: الفلوس كلها (تحصيل/استرداد/مصروفات/رواتب/خزينة) من غير تعديل أكاديمي
+  // المحاسب: الفلوس كلها (تحصيل/استرداد/مصروفات/رواتب) من غير تعديل أكاديمي
   accountant: {
     students: ['view', 'export'],
     payments: ALL,
@@ -80,7 +76,6 @@ export const PERMISSIONS: Matrix = {
     debtors: ALL,
     expenses: ALL,
     payroll: ALL,
-    treasury: ALL,
     inventory: ['view', 'create', 'edit', 'export'],
     reports: ALL,
     dailyReports: ALL,
@@ -91,7 +86,7 @@ export const PERMISSIONS: Matrix = {
     auditLog: ['view', 'export'],
   },
 
-  // المشرف الأكاديمي: مجموعات/حضور/اختبارات/جدول — من غير فلوس
+  // المشرف الأكاديمي: مجموعات/حضور/اختبارات — من غير فلوس
   supervisor: {
     students: ['view', 'create', 'edit', 'export'],
     groups: ['view', 'create', 'edit'],
@@ -99,10 +94,7 @@ export const PERMISSIONS: Matrix = {
     teachers: ['view'],
     attendance: ['view', 'create', 'edit', 'export'],
     exams: ['view', 'create', 'edit', 'export'],
-    timetable: ['view', 'create', 'edit'],
-    messages: ['view', 'create'],
     reports: ['view', 'export'],
-    dailyReports: ['view'],
     debtors: ['view'],
     inventory: ['view'],
   },
@@ -113,8 +105,6 @@ export const PERMISSIONS: Matrix = {
     groups: ['view'],
     attendance: ['view', 'create', 'edit'],
     exams: ['view', 'create', 'edit'],
-    timetable: ['view'],
-    messages: ['view', 'create'],
   },
 };
 

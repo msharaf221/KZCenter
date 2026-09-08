@@ -6,10 +6,17 @@
 
 import { exportAllData, importAllData } from './db';
 import { getSupabaseClient, getSupabaseConfigured } from './supabase';
-import { CLOUD_TABLES, UPSERT_BATCH, prepareCloud, stripSensitive, toSnakeCase, transformKeys } from './storage';
+import { CLOUD_TABLES, CONFLICT_TARGET, UPSERT_BATCH, prepareCloud, stripSensitive, toSnakeCase, transformKeys } from './storage';
 import { notify } from './notifications';
 import { addAuditEntry } from './security';
 import { markBackupDone } from './autoBackup';
+
+/** YYYY-MM-DD بالتوقيت المحلي للجهاز */
+function localDateKey(d: Date): string {
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
 
 // ==================== TYPES ====================
 
@@ -197,7 +204,9 @@ async function backupToCloud(): Promise<{ success: boolean; size: number; error?
 
       for (let i = 0; i < transformed.length; i += UPSERT_BATCH) {
         const batch = transformed.slice(i, i + UPSERT_BATCH);
-        const { error } = await client.from(table).upsert(batch, { onConflict: 'id' });
+        // الجداول ذات المفتاح المركّب (id, tenant_id) لازم نفس هدف التعارض المستخدم في المزامنة
+        // وإلا Postgres يرفض الـ upsert (no unique constraint matching ON CONFLICT)
+        const { error } = await client.from(table).upsert(batch, { onConflict: CONFLICT_TARGET[table] || 'id' });
         if (error) {
           console.error(`Failed to sync ${table}:`, error);
           syncErrors.push(`${table}: ${error.message}`);
@@ -360,9 +369,9 @@ export function startBackupScheduler(): void {
     const [targetHour, targetMinute] = config.time.split(':').map(Number);
 
     if (now.getHours() === targetHour && now.getMinutes() === targetMinute) {
-      // Check if we already backed up today
-      const today = now.toISOString().split('T')[0];
-      const lastDate = config.lastBackupDate?.split('T')[0];
+      // Check if we already backed up today (بالتوقيت المحلي — مش UTC عشان ما يتكررش/يتفوّتش بعد منتصف الليل)
+      const today = localDateKey(now);
+      const lastDate = config.lastBackupDate ? localDateKey(new Date(config.lastBackupDate)) : null;
 
       if (lastDate !== today) {
         executeBackup(config.destination, true);

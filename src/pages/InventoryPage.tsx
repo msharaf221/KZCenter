@@ -29,7 +29,9 @@ export default function InventoryPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canWrite = can('inventory', 'create') || can('inventory', 'edit');
+  const canDelete = can('inventory', 'delete');
 
   const load = useCallback(async () => {
     try {
@@ -151,9 +153,11 @@ export default function InventoryPage() {
               className="w-full pl-4 pr-10 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
-          <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-semibold hover:bg-opacity-90 w-full sm:w-auto" style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-            <Plus size={20} /> إضافة للمخزن
-          </button>
+          {canWrite && (
+            <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-semibold hover:bg-opacity-90 w-full sm:w-auto" style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
+              <Plus size={20} /> إضافة للمخزن
+            </button>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -197,12 +201,16 @@ export default function InventoryPage() {
                     <td className="p-4 text-sm text-gray-500">{formatDate(item.createdAt)}</td>
                     <td className="p-4">
                       <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => openEdit(item)} className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-600 transition-colors">
-                          <Edit2 size={16} />
-                        </button>
-                        <button onClick={() => setDeleteId(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors">
-                          <Trash2 size={16} />
-                        </button>
+                        {canWrite && (
+                          <button onClick={() => openEdit(item)} className="p-1.5 rounded-lg hover:bg-indigo-50 text-indigo-600 transition-colors">
+                            <Edit2 size={16} />
+                          </button>
+                        )}
+                        {canDelete && (
+                          <button onClick={() => setDeleteId(item.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors">
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

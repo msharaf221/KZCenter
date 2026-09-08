@@ -7,13 +7,15 @@ import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import { notify, notifyAttendanceSaved, notifyAbsence, notifyRepeatedAbsence } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
+import { visibleGroupIds } from '../lib/permissions';
 import { printTable } from '../lib/printing';
 import { checkAbsenceAlertForStudent } from '../lib/absenceAlerts';
 import dayjs from 'dayjs';
 
 export default function AttendancePage() {
   const { settings } = useApp();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canRecord = can('attendance', 'create') || can('attendance', 'edit');
   const [groups, setGroups] = useState<Group[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [selectedGroup, setSelectedGroup] = useState('');
@@ -27,7 +29,8 @@ export default function AttendancePage() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- إعادة التحميل عند تغيّر المستخدم/نطاقه فقط
+  }, [user?.role, user?.teacherId]);
 
   useEffect(() => {
     if (selectedGroup && selectedDate) {
@@ -37,10 +40,13 @@ export default function AttendancePage() {
   }, [selectedGroup, selectedDate]);
 
   async function loadData() {
-    const [g, c] = await Promise.all([
+    const [allGroups, c] = await Promise.all([
       dbGetAll<Group>('groups'),
       dbGetAll<Course>('courses'),
     ]);
+    // المدرس يشوف مجموعاته هو بس
+    const allowed = visibleGroupIds({ role: user?.role, teacherId: user?.teacherId, groups: allGroups });
+    const g = allowed ? allGroups.filter(x => allowed.has(x.id)) : allGroups;
     setGroups(g);
     setCourses(c);
     if (g.length > 0) setSelectedGroup(g[0].id);
@@ -327,7 +333,8 @@ export default function AttendancePage() {
               })}
             </div>
             <div className="p-4 border-t border-gray-100">
-              <button onClick={handleSave} disabled={saving}
+              <button onClick={handleSave} disabled={saving || !canRecord}
+                title={canRecord ? '' : 'ليس لديك صلاحية تسجيل الحضور'}
                 className="w-full flex items-center justify-center gap-2 py-3 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-60"
                 style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
                 <Save size={18} />

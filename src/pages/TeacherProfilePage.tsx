@@ -41,8 +41,8 @@ export default function TeacherProfilePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { settings } = useApp();
-  const { isAdmin } = useAuth();
-  const showMoney = isAdmin();
+  const { can } = useAuth();
+  const showMoney = can('payroll', 'view');
   const primaryColor = settings?.primaryColor || '#6366f1';
 
   const [teacher, setTeacher] = useState<Teacher | null>(null);
