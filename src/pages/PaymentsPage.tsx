@@ -106,6 +106,8 @@ export default function PaymentsPage() {
   async function handleSave() {
     if (!form.studentId) { notify.error('اختر طالباً'); return; }
     if (form.amount <= 0) { notify.error('المبلغ يجب أن يكون أكبر من 0'); return; }
+    if (busy) return; // حماية من الضغط المزدوج (دفعة مكررة + إيصالين)
+    setBusy(true);
     try {
       let payment: Payment;
 
@@ -158,6 +160,7 @@ export default function PaymentsPage() {
       setForm(f => ({ ...f, studentId: '', courseId: '', amount: 0, notes: '', collectedBy: '' }));
       load();
     } catch { notify.error('حدث خطأ'); }
+    finally { setBusy(false); }
   }
 
   // ---------- إلغاء دفعة (void) ----------
@@ -221,9 +224,34 @@ export default function PaymentsPage() {
     } finally { setBusy(false); }
   }
 
+  /**
+   * تحويل دفعة معلقة/متأخرة إلى مدفوعة:
+   * - إيصال مسلسل (المعلق ما كانش له إيصال) بتاريخ التحصيل الفعلي
+   * - تسجيل المحصِّل + الأثر في سجل المراجعة
+   */
+  async function markPaymentPaid(payment: Payment): Promise<void> {
+    // تاريخ الدفعة = يوم التحصيل الفعلي (وإلا الفلوس تظهر في التقرير اليومي لتاريخ قديم)
+    const today = dayjs().format('YYYY-MM-DD');
+    const receiptNo = payment.receiptNo || await nextReceiptNo(today, settings?.receiptPrefix);
+    await dbPut('payments', {
+      ...payment,
+      status: 'paid',
+      date: today,
+      receiptNo,
+      collectedBy: payment.collectedBy || user?.id,
+      collectedByName: payment.collectedByName || user?.username,
+      updatedAt: new Date().toISOString(),
+    });
+    addAuditEntry({
+      userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+      action: 'payment', entity: 'payment', entityId: payment.id,
+      details: `تحصيل دفعة معلقة بقيمة ${payment.amount} للطالب: ${getStudentName(payment.studentId)} — إيصال ${receiptNo}`,
+    });
+  }
+
   async function handleMarkPaid(payment: Payment) {
     try {
-      await dbPut('payments', { ...payment, status: 'paid', updatedAt: new Date().toISOString() });
+      await markPaymentPaid(payment);
       // الدفعة بقت مسددة → لازم تتوزّع على الأقساط
       await rebuildInstallmentsFromPayments(payment.studentId);
       notify.success('تم تغيير الحالة إلى مدفوع');
@@ -255,7 +283,7 @@ export default function PaymentsPage() {
       const affectedStudents = new Set<string>();
       for (const p of selected) {
         if (p.status !== 'paid') {
-          await dbPut('payments', { ...p, status: 'paid', updatedAt: new Date().toISOString() });
+          await markPaymentPaid(p);
           affectedStudents.add(p.studentId);
         }
       }
@@ -661,8 +689,8 @@ export default function PaymentsPage() {
           </div>
         </div>
         <div className="flex gap-3 mt-5">
-          <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>إضافة</button>
+          <button onClick={handleSave} disabled={busy} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm disabled:opacity-60"
+            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>{busy ? 'جاري الحفظ...' : 'إضافة'}</button>
           <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
         </div>
       </Modal>

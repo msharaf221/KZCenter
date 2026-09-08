@@ -175,7 +175,12 @@ export default function GroupsPage() {
         studentId,
         groupId,
         paymentAmountToAdd ? Number(paymentAmountToAdd) : undefined,
-        startSessionToAdd > 1 ? { startSession: startSessionToAdd } : undefined
+        {
+          startSession: startSessionToAdd > 1 ? startSessionToAdd : undefined,
+          paymentMethod: 'cash',
+          collectedBy: user?.id,
+          collectedByName: user?.username,
+        }
       );
       if (!result.success) {
         notify.error(result.error || 'حدث خطأ');

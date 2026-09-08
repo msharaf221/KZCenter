@@ -312,6 +312,10 @@ export default function StudentsPage() {
               discountAmount: pricing.discountAmount && pricing.discountAmount > 0 ? pricing.discountAmount : undefined,
               discountPercent: pricing.discountPercent && pricing.discountPercent > 0 ? pricing.discountPercent : undefined,
               discountReason: pricing.discountReason || undefined,
+              // الدفعة الأولى تتسجل باسم اللي حصّلها (تظهر في التقرير اليومي بالموظف)
+              paymentMethod: 'cash',
+              collectedBy: user?.id,
+              collectedByName: user?.username,
             }
           );
           if (!result.success) {
@@ -348,11 +352,28 @@ export default function StudentsPage() {
         }
       }
       await dbSoftDelete('students', id);
+      addAuditEntry({
+        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+        action: 'delete', entity: 'student', entityId: id,
+        details: `حذف طالب: ${student?.name || id}${student && (student.totalOwed || 0) - student.totalPaid > 0 ? ` (كان عليه ${formatCurrency((student.totalOwed || 0) - student.totalPaid, settings?.currency)})` : ''}`,
+      });
       notify.success('تم حذف الطالب');
       loadStudents();
     } catch {
       notify.error('حدث خطأ أثناء الحذف');
     }
+  }
+
+  /** رسالة تأكيد الحذف — بتنبّه لو الطالب عليه فلوس (الحذف بيسقط دينه من قائمة المديونيات) */
+  function deleteMessage(ids: string[]): string {
+    const targets = students.filter(s => ids.includes(s.id));
+    const debt = targets.reduce((sum, s) => sum + Math.max(0, (s.totalOwed || 0) - s.totalPaid), 0);
+    const base = ids.length === 1
+      ? 'هل أنت متأكد من حذف هذا الطالب؟ سيتم حذفه بشكل مؤقت.'
+      : `هل أنت متأكد من حذف ${ids.length} طالب؟`;
+    return debt > 0
+      ? `${base}\n⚠️ تنبيه: عليه متبقي ${formatCurrency(debt, settings?.currency)} — الحذف هيسقط الدين من قائمة المديونيات. لو المقصود تسجيل انسحاب فقط، غيّر الحالة إلى «منتهي» بدل الحذف.`
+      : base;
   }
 
   async function handleBulkDelete() {
@@ -370,6 +391,11 @@ export default function StudentsPage() {
           }
         }
         await dbSoftDelete('students', id);
+        addAuditEntry({
+          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
+          action: 'delete', entity: 'student', entityId: id,
+          details: `حذف طالب (جماعي): ${student?.name || id}`,
+        });
       }
       notify.success(`تم حذف ${selectedIds.length} طالب`);
       setSelectedIds([]);
@@ -992,7 +1018,7 @@ export default function StudentsPage() {
       <ConfirmDialog
         isOpen={!!deleteId}
         title="حذف الطالب"
-        message="هل أنت متأكد من حذف هذا الطالب؟ سيتم حذفه بشكل مؤقت."
+        message={deleteId ? deleteMessage([deleteId]) : ''}
         onConfirm={() => { if (deleteId) handleDelete(deleteId); setDeleteId(null); }}
         onCancel={() => setDeleteId(null)}
         danger
@@ -1016,7 +1042,7 @@ export default function StudentsPage() {
       <ConfirmDialog
         isOpen={showBulkDelete}
         title="حذف جماعي"
-        message={`هل أنت متأكد من حذف ${selectedIds.length} طالب؟`}
+        message={deleteMessage(selectedIds)}
         onConfirm={() => { handleBulkDelete(); setShowBulkDelete(false); }}
         onCancel={() => setShowBulkDelete(false)}
         danger
