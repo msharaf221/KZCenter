@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   verify:
-    name: Typecheck · Lint · Test · Build
+    name: Typecheck · Lint · Architecture · Test · Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +30,10 @@ jobs:
         run: npm run typecheck
 
       - name: Lint
-        run: npm run lint -- --max-warnings=100
+        run: npm run lint -- --max-warnings=0
+
+      - name: Architecture boundaries
+        run: npm run check:architecture
 
       - name: Test
         run: npm run test

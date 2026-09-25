@@ -1,130 +1,68 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit2, Trash2, ClipboardList } from 'lucide-react';
+import dayjs from 'dayjs';
+import { ClipboardList, Edit2, Plus, Trash2 } from 'lucide-react';
+import { useCallback, useState } from 'react';
 import Layout from '../components/layout/Layout';
-import Modal from '../components/ui/Modal';
+import PageReadError from '../components/layout/PageReadError';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import { dbGetAll, dbPut, dbSoftDelete, dbAdd, dbGetByIndex, getGroupStudents, generateId, Exam, Grade, Group, Course, Student } from '../lib/db';
-import { formatDate, getContrastColor } from '../lib/utils';
+import Modal from '../components/ui/Modal';
+import ResourceError from '../components/ui/ResourceError';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import { readByIndex } from '../data/readers';
+import type { Exam, Student } from '../domain/models';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { usePageResource } from '../hooks/usePageResource';
+import { useResourceDraft } from '../hooks/useResourceDraft';
 import { notify } from '../lib/notifications';
-import { addAuditEntry } from '../lib/security';
-import { visibleGroupIds } from '../lib/permissions';
-import dayjs from 'dayjs';
+import { formatDate, getContrastColor } from '../lib/utils';
+import { deleteExam, saveExam, saveExamGrades } from '../services/commands/academic';
+import { getGroupStudents } from '../services/enrollmentService';
+import { loadExamsCatalog } from '../services/queries/exams';
 
 export default function ExamsPage() {
+  const task = useCommandTask();
   const { settings } = useApp();
   const { user, can } = useAuth();
   const canWrite = can('exams', 'create') || can('exams', 'edit');
   const canDelete = can('exams', 'delete');
-  const [exams, setExams] = useState<Exam[]>([]);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [, setStudents] = useState<Student[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [showGradesModal, setShowGradesModal] = useState(false);
   const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
-  const [grades, setGrades] = useState<Record<string, number>>({});
   const [editing, setEditing] = useState<Exam | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: '', groupId: '', date: dayjs().format('YYYY-MM-DD'), maxGrade: 100,
   });
 
-  const load = useCallback(async () => {
-    const [allExams, allGroups, c, s] = await Promise.all([
-      dbGetAll<Exam>('exams'),
-      dbGetAll<Group>('groups'),
-      dbGetAll<Course>('courses'),
-      dbGetAll<Student>('students'),
-    ]);
-    // المدرس يشوف مجموعاته واختباراتها هو بس
-    const allowed = visibleGroupIds({ role: user?.role, teacherId: user?.teacherId, groups: allGroups });
-    const g = allowed ? allGroups.filter(x => allowed.has(x.id)) : allGroups;
-    const e = allowed ? allExams.filter(x => allowed.has(x.groupId)) : allExams;
-    setExams(e);
-    setGroups(g);
-    setCourses(c);
-    setStudents(s);
-  }, [user?.role, user?.teacherId]);
+  const query = useCallback(() => loadExamsCatalog(user?.role, user?.teacherId), [user?.role, user?.teacherId]);
+  const { data: { exams, groups, courses }, reload: load, error } = usePageResource(query, { exams: [], groups: [], courses: [] });
 
-  useEffect(() => { load(); }, [load]);
-
-  async function openGrades(exam: Exam) {
+  const gradeQuery = useCallback(async () => {
+    const [records, students] = selectedExam ? await Promise.all([
+      readByIndex('grades', 'by-examId', selectedExam.id), getGroupStudents(selectedExam.groupId),
+    ]) : [[], []];
+    return { grades: Object.fromEntries(records.map(grade => [grade.studentId, grade.grade])), students };
+  }, [selectedExam]);
+  const { value: gradeData, setValue: setGradeData, ready: gradesReady, error: gradesError, reload: reloadGrades } = useResourceDraft<{
+    grades: Record<string, number>; students: Student[];
+  }>(selectedExam?.id || '', gradeQuery, { grades: {}, students: [] }, showGradesModal && !!selectedExam);
+  const { grades, students: examGroupStudents } = gradeData;
+  const setGrades = (grades: Record<string, number>) => setGradeData(current => ({ ...current, grades }));
+  function openGrades(exam: Exam) {
     setSelectedExam(exam);
-    const existingGrades = await dbGetByIndex<Grade>('grades', 'by-examId', exam.id);
-    const map: Record<string, number> = {};
-    existingGrades.forEach(g => { map[g.studentId] = g.grade; });
-    setGrades(map);
     setShowGradesModal(true);
   }
 
   async function handleSaveGrades() {
-    if (!selectedExam) return;
-    try {
-      const existingGrades = await dbGetByIndex<Grade>('grades', 'by-examId', selectedExam.id);
-      const groupStudents = await getGroupStudents(selectedExam.groupId);
-
-      for (const student of groupStudents) {
-        const grade = grades[student.id];
-        if (grade === undefined || grade === null) continue;
-        // Validate grade range against the exam's max grade
-        if (grade < 0 || grade > selectedExam.maxGrade) {
-          notify.error(`درجة ${student.name} غير صحيحة (0 - ${selectedExam.maxGrade})`);
-          return;
-        }
-        const existing = existingGrades.find(g => g.studentId === student.id);
-        if (existing) {
-          await dbPut('grades', { ...existing, grade, updatedAt: new Date().toISOString() });
-        } else {
-          await dbAdd('grades', {
-            id: generateId(), examId: selectedExam.id, studentId: student.id,
-            grade, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-          });
-        }
-      }
-      notify.success('تم حفظ الدرجات');
-      setShowGradesModal(false);
-    } catch { notify.error('حدث خطأ'); }
+    if (!selectedExam || !gradesReady) return;
+    await task.run(async () => { await saveExamGrades(user, selectedExam.id, grades); notify.success('تم حفظ الدرجات'); setShowGradesModal(false); });
   }
 
   async function handleSave() {
-    if (!form.name.trim()) { notify.error('اسم الاختبار مطلوب'); return; }
-    if (!form.groupId) { notify.error('اختر مجموعة'); return; }
-    if (form.maxGrade <= 0) { notify.error('الدرجة العظمى يجب أن تكون أكبر من صفر'); return; }
-    try {
-      const examId = editing?.id || generateId();
-      if (editing) {
-        await dbPut('exams', { ...editing, ...form, updatedAt: new Date().toISOString() });
-        notify.success('تم تحديث الاختبار');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'update', entity: 'exam', entityId: examId,
-          details: `تعديل الاختبار: ${form.name}`,
-        });
-      } else {
-        await dbAdd('exams', { id: examId, ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-        notify.success('تم إضافة الاختبار');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'create', entity: 'exam', entityId: examId,
-          details: `إضافة اختبار: ${form.name}`,
-        });
-      }
-      setShowModal(false);
-      load();
-    } catch { notify.error('حدث خطأ'); }
+    await task.run(async () => { await saveExam(user, form, editing?.id); notify.success(editing ? 'تم تحديث الاختبار' : 'تم إضافة الاختبار'); setShowModal(false); await load(); });
   }
 
-  // Load enrolled students from enrollments table when exam is selected
-  const [examGroupStudents, setExamGroupStudents] = useState<Student[]>([]);
-  useEffect(() => {
-    if (selectedExam) {
-      getGroupStudents(selectedExam.groupId).then(setExamGroupStudents);
-    } else {
-      setExamGroupStudents([]);
-    }
-  }, [selectedExam]);
+  if (error) return <PageReadError title="الاختبارات والدرجات" onRetry={load} />;
 
   return (
     <Layout title="الاختبارات والدرجات">
@@ -209,7 +147,7 @@ export default function ExamsPage() {
           </div>
         </div>
         <div className="flex gap-3 mt-5">
-          <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
+          <button onClick={handleSave} disabled={task.pending} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
             style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editing ? 'تحديث' : 'إضافة'}
           </button>
@@ -222,7 +160,7 @@ export default function ExamsPage() {
         <Modal isOpen={showGradesModal} onClose={() => setShowGradesModal(false)} title={`درجات: ${selectedExam.name}`} size="md">
           <div className="space-y-3">
             <p className="text-sm text-gray-500">الدرجة العظمى: <strong>{selectedExam.maxGrade}</strong></p>
-            {examGroupStudents.length === 0 ? (
+            {gradesError ? <ResourceError onRetry={reloadGrades} /> : !gradesReady ? <p role="status" className="p-6 text-center">جاري تحميل الدرجات...</p> : examGroupStudents.length === 0 ? (
               <p className="text-center text-gray-400 py-6">لا يوجد طلاب</p>
             ) : examGroupStudents.map(student => (
               <div key={student.id} className="flex items-center gap-3">
@@ -238,7 +176,7 @@ export default function ExamsPage() {
           </div>
           <div className="flex gap-3 mt-5">
             {canWrite && (
-              <button onClick={handleSaveGrades} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
+              <button onClick={handleSaveGrades} disabled={!gradesReady || task.pending} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
                 style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>حفظ الدرجات</button>
             )}
             <button onClick={() => setShowGradesModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm">إلغاء</button>
@@ -248,17 +186,8 @@ export default function ExamsPage() {
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف الاختبار" message="هل أنت متأكد؟"
         onConfirm={async () => {
-          if (deleteId) {
-            const exam = exams.find(x => x.id === deleteId);
-            await dbSoftDelete('exams', deleteId);
-            addAuditEntry({
-              userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-              action: 'delete', entity: 'exam', entityId: deleteId,
-              details: `حذف اختبار: ${exam?.name || deleteId}`,
-            });
-            notify.success('تم الحذف');
-            load();
-          }
+          if (!deleteId) return;
+          await task.run(async () => { await deleteExam(user, deleteId); notify.success('تم الحذف'); await load(); });
           setDeleteId(null);
         }}
         onCancel={() => setDeleteId(null)} danger />

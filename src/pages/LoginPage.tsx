@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { AlertTriangle, Eye, EyeOff, Lock, RefreshCw, Shield, User } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff, Lock, User, RefreshCw, Shield, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { userErrorMessage } from '../domain/errors';
+import { useConfirmDialog } from '../hooks/useConfirmDialog';
 import { notify } from '../lib/notifications';
 import { checkPasswordStrength } from '../lib/security';
-import { useConfirmDialog } from '../hooks/useConfirmDialog';
+import { resetLocalDatabase } from '../services/localRecoveryService';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -69,6 +71,7 @@ export default function LoginPage() {
 
   async function handleChangePassword(e: React.FormEvent) {
     e.preventDefault();
+    if (!password) { notify.error('أدخل كلمة المرور الحالية'); return; }
     if (!newPassword || newPassword.length < 6) {
       notify.error('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
       return;
@@ -102,41 +105,22 @@ export default function LoginPage() {
   }
 
   async function handleResetDatabase() {
-    // التأكيد بنافذة React (مش نافذة المتصفح الأصلية)، لأن النوافذ الأصلية
-    // (confirm/alert) بتكسر فوكس النافذة في Electron على ويندوز وبتخلي
-    // قوائم الاختيار تقفل لوحدها بعد كده.
+    if (!username.trim() || !password) { notify.error('أدخل بيانات حساب مسؤول لإعادة تعيين القاعدة'); return; }
     const ok = await confirm({
       title: 'إعادة تعيين قاعدة البيانات',
-      message: 'هل أنت متأكد من إعادة تعيين قاعدة البيانات؟ سيتم حذف جميع البيانات!',
-      confirmLabel: 'نعم، إعادة التعيين',
-      danger: true,
+      message: 'هل أنت متأكد من إعادة تعيين قاعدة البيانات؟ سيتم حذف جميع البيانات المحلية! تأكد من وجود نسخة احتياطية.',
+      confirmLabel: 'نعم، إعادة التعيين', danger: true,
     });
     if (!ok) return;
     setResetting(true);
     try {
-      const deleteRequest = indexedDB.deleteDatabase('EduCenterProDB');
-      deleteRequest.onsuccess = () => {
-        notify.success('تم إعادة تعيين قاعدة البيانات. سيتم تحديث الصفحة...');
-        setTimeout(() => window.location.reload(), 1500);
-      };
-      deleteRequest.onerror = () => {
-        console.error('❌ Failed to delete database');
-        notify.error('فشل في إعادة تعيين قاعدة البيانات');
-        setResetting(false);
-      };
-      deleteRequest.onblocked = () => {
-        console.warn('⚠️ Database deletion blocked');
-        notify.warning('قاعدة البيانات مقفلة. أغلق جميع التبويبات الأخرى وحاول مرة أخرى.');
-        setResetting(false);
-      };
-    } catch (err) {
-      console.error('Reset error:', err);
-      notify.error('حدث خطأ');
-      setResetting(false);
-    }
+      await resetLocalDatabase(username, password, true, () => notify.error('أغلق النوافذ الأخرى للتطبيق لاستكمال إعادة التعيين'));
+      notify.success('تم إعادة تعيين قاعدة البيانات. سيتم تحديث الصفحة...');
+      window.location.reload();
+    } catch (error) { notify.error(userErrorMessage(error, 'حدث خطأ أثناء إعادة التعيين')); }
+    finally { setResetting(false); }
   }
 
-  // Must change password screen
   if (mustChangePassword) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-50 via-white to-red-50 flex items-center justify-center p-4" dir="rtl">
@@ -146,7 +130,7 @@ export default function LoginPage() {
               <Shield size={40} className="text-white" />
             </div>
             <h1 className="text-3xl font-black text-gray-900">تغيير كلمة المرور</h1>
-            <p className="text-gray-500 mt-2">يجب تغيير كلمة المرور الافتراضية قبل المتابعة</p>
+            <p className="text-gray-500 mt-2">يجب تغيير كلمة المرور قبل المتابعة</p>
           </div>
 
           <div className="bg-white rounded-3xl shadow-xl p-8 border border-gray-100">
@@ -156,11 +140,17 @@ export default function LoginPage() {
                 <p className="text-sm font-bold text-orange-800">تنبيه أمني</p>
               </div>
               <p className="text-xs text-orange-700">
-                أنت تستخدم كلمة المرور الافتراضية. يجب تغييرها فوراً لحماية حسابك.
+                هذا الحساب يحتاج تغيير كلمة المرور لحمايته، سواء كانت افتراضية أو أعاد المسؤول تعيينها.
               </p>
             </div>
 
             <form onSubmit={handleChangePassword} className="space-y-4">
+              <div>
+                <label htmlFor="current-password" className="block text-sm font-semibold text-gray-700 mb-2">كلمة المرور الحالية</label>
+                <input id="current-password" type="password" autoComplete="current-password" value={password}
+                  onChange={event => setPassword(event.target.value)} placeholder="أدخل كلمة المرور الحالية"
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-orange-500" />
+              </div>
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">كلمة المرور الجديدة</label>
                 <div className="relative">
@@ -219,7 +209,7 @@ export default function LoginPage() {
               </div>
               <button
                 type="submit"
-                disabled={loading || !newPassword || newPassword !== confirmPassword || (passwordStrength?.score ?? 0) < 2}
+                disabled={loading || !password || !newPassword || newPassword !== confirmPassword || (passwordStrength?.score ?? 0) < 2}
                 className="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl font-bold text-sm transition-all
                   disabled:opacity-60 disabled:cursor-not-allowed shadow-md shadow-orange-200"
               >

@@ -4,11 +4,10 @@
  * البحث القديم في الهيدر كان بيودّيك لصفحة الطلاب بس. الاستقبال محتاج يلاقي
  * أي حاجة بسرعة: طالب، إيصال، دفعة، مجموعة، مدرس — من مكان واحد (Ctrl+K).
  */
-import { dbGetAll } from './db';
-import type { Course, Group, Payment, Student, Teacher, Refund } from './db';
+import { readAll } from '../data/readers';
+import type { Course, Group, Payment, Refund, Student, Teacher, UserRole } from '../domain/models';
+import { can, visibleGroupIds } from './permissions';
 import { formatCurrency, formatDate } from './utils';
-import type { UserRole } from './db';
-import { can } from './permissions';
 
 export type SearchKind = 'student' | 'teacher' | 'group' | 'course' | 'payment' | 'refund';
 
@@ -66,6 +65,7 @@ export interface GlobalSearchOptions {
   role?: UserRole | null;
   /** تقييد على مجموعات محددة (للمدرس) */
   allowedGroupIds?: Set<string> | null;
+  teacherId?: string;
   currency?: string;
 }
 
@@ -76,18 +76,23 @@ export async function globalSearch(opts: GlobalSearchOptions): Promise<SearchRes
 
   const limit = opts.limit ?? 12;
   const role = opts.role ?? 'admin';
-  const allowed = opts.allowedGroupIds ?? null;
+  let allowed = opts.allowedGroupIds ?? null;
   const currency = opts.currency || 'EGP';
   const out: SearchResult[] = [];
 
   const [students, teachers, groups, courses, payments, refunds] = await Promise.all([
-    can(role, 'students', 'view') ? dbGetAll<Student>('students') : Promise.resolve([] as Student[]),
-    can(role, 'teachers', 'view') ? dbGetAll<Teacher>('teachers') : Promise.resolve([] as Teacher[]),
-    can(role, 'groups', 'view') ? dbGetAll<Group>('groups') : Promise.resolve([] as Group[]),
-    can(role, 'courses', 'view') ? dbGetAll<Course>('courses') : Promise.resolve([] as Course[]),
-    can(role, 'payments', 'view') ? dbGetAll<Payment>('payments') : Promise.resolve([] as Payment[]),
-    can(role, 'refunds', 'view') ? dbGetAll<Refund>('refunds') : Promise.resolve([] as Refund[]),
+    can(role, 'students', 'view') ? readAll<Student>('students') : Promise.resolve([] as Student[]),
+    can(role, 'teachers', 'view') ? readAll<Teacher>('teachers') : Promise.resolve([] as Teacher[]),
+    can(role, 'groups', 'view') ? readAll<Group>('groups') : Promise.resolve([] as Group[]),
+    can(role, 'courses', 'view') ? readAll<Course>('courses') : Promise.resolve([] as Course[]),
+    can(role, 'payments', 'view') ? readAll<Payment>('payments') : Promise.resolve([] as Payment[]),
+    can(role, 'refunds', 'view') ? readAll<Refund>('refunds') : Promise.resolve([] as Refund[]),
   ]);
+
+  if (role === 'teacher') {
+    const owned = opts.teacherId !== undefined ? visibleGroupIds({ role, teacherId: opts.teacherId, groups }) : allowed;
+    allowed = owned ? (allowed ? new Set([...owned].filter(id => allowed!.has(id))) : owned) : new Set<string>();
+  }
 
   const groupName = (id?: string) => groups.find(g => g.id === id)?.name || '';
   const studentName = (id?: string) => students.find(s => s.id === id)?.name || '';
@@ -108,7 +113,7 @@ export async function globalSearch(opts: GlobalSearchOptions): Promise<SearchRes
       out.push({
         kind: 'student', id: s.id, score: sc,
         title: s.name,
-        subtitle: [s.parentPhone, (s.enrolledGroups || []).map(groupName).filter(Boolean).join(' · ')].filter(Boolean).join(' — '),
+        subtitle: [s.parentPhone, (s.enrolledGroups || []).filter(id => !allowed || allowed.has(id)).map(groupName).filter(Boolean).join(' · ')].filter(Boolean).join(' — '),
         to: `/students/${s.id}`,
         badge: s.status === 'active' ? 'نشط' : s.status === 'suspended' ? 'متوقف' : 'منتهي',
       });
@@ -145,7 +150,7 @@ export async function globalSearch(opts: GlobalSearchOptions): Promise<SearchRes
     if (sc > 0) {
       out.push({
         kind: 'course', id: c.id, score: sc, title: c.name,
-        subtitle: `${formatCurrency(c.price, currency)} / شهر`, to: '/courses',
+        subtitle: can(role, 'payments', 'view') ? `${formatCurrency(c.price, currency)} / شهر` : c.category, to: '/courses',
       });
     }
   }

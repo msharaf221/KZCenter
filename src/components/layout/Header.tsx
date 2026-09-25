@@ -1,13 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { Bell, Menu, Moon, Search, Sun, Trash2, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, Moon, Sun, Search, Menu, Trash2, X } from 'lucide-react';
-import { useAuth } from '../../contexts/AuthContext';
 import { useApp } from '../../contexts/AppContext';
-import { getAppNotifications, markAppNotificationsAsRead, clearAppNotifications, AppNotification } from '../../lib/notifications';
-import { formatDateTime, getContrastColor } from '../../lib/utils';
+import { useAuth } from '../../contexts/AuthContext';
+import { AppNotification, clearAppNotifications, getAppNotifications, markAppNotificationsAsRead } from '../../lib/notifications';
 import { globalSearch, kindLabel, type SearchResult } from '../../lib/search';
-import { visibleGroupIds } from '../../lib/permissions';
-import { dbGetAll, type Group } from '../../lib/db';
+import { formatDateTime, getContrastColor } from '../../lib/utils';
 
 interface HeaderProps {
   title: string;
@@ -36,29 +34,20 @@ export default function Header({ title }: HeaderProps) {
     return () => window.removeEventListener('app_notifications_updated', loadNotifications);
   }, []);
 
-  // مجموعات المستخدم (لتقييد بحث المدرس على مجموعاته)
-  const [myGroupIds, setMyGroupIds] = useState<Set<string> | null>(null);
-  useEffect(() => {
-    if (user?.role !== 'teacher') { setMyGroupIds(null); return; }
-    dbGetAll<Group>('groups')
-      .then(gs => setMyGroupIds(visibleGroupIds({ role: user.role, teacherId: user.teacherId, groups: gs })))
-      .catch(() => setMyGroupIds(null));
-  }, [user?.role, user?.teacherId]);
-
   // بحث شامل مُ debounce
   useEffect(() => {
     const q = query.trim();
-    if (q.length < 2) { setResults([]); setSearchOpen(false); return; }
+    if (q.length < 2 || !user?.role) { setResults([]); setSearchOpen(false); setSearching(false); return; }
     let cancelled = false;
     setSearching(true);
     const t = setTimeout(() => {
-      globalSearch({ query: q, role: user?.role, allowedGroupIds: myGroupIds, currency: settings?.currency, limit: 10 })
+      globalSearch({ query: q, role: user?.role, teacherId: user?.teacherId, currency: settings?.currency, limit: 10 })
         .then(r => { if (!cancelled) { setResults(r); setSearchOpen(true); } })
         .catch(() => { if (!cancelled) setResults([]); })
         .finally(() => { if (!cancelled) setSearching(false); });
     }, 250);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [query, myGroupIds, user?.role, settings?.currency]);
+  }, [query, user?.role, user?.teacherId, settings?.currency]);
 
   // Ctrl+K / Cmd+K يركّز على البحث
   useEffect(() => {
@@ -104,20 +93,21 @@ export default function Header({ title }: HeaderProps) {
   return (
     <header className="fixed top-0 left-0 right-0 z-30 bg-white border-b border-gray-200 h-16"
       style={{ right: sidebarOpen ? '256px' : '64px', transition: 'right 0.3s ease' }}>
-      <div className="flex items-center justify-between h-full px-6">
+      <div className="flex items-center justify-between gap-2 h-full px-3 sm:px-6">
         {/* Right side */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center min-w-0 gap-2 sm:gap-4">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
+            aria-label={sidebarOpen ? 'طي القائمة الجانبية' : 'فتح القائمة الجانبية'}
             className="p-2 rounded-lg hover:bg-gray-100 text-gray-500 md:hidden"
           >
             <Menu size={20} />
           </button>
-          <h1 className="text-lg font-bold text-gray-900">{title}</h1>
+          <h1 className="text-sm sm:text-lg truncate font-bold text-gray-900">{title}</h1>
         </div>
 
         {/* Left side */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center shrink-0 gap-1 sm:gap-3">
           {/* بحث شامل (Ctrl+K) بنتائج فورية من كل الكيانات */}
           <div ref={searchBoxRef} className="relative hidden md:block">
             <div className="flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-2">

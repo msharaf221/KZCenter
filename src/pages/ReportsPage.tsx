@@ -1,169 +1,55 @@
-import { useState, useEffect } from 'react';
+import dayjs from 'dayjs';
+import { AlertTriangle, Calendar, Clock, Download, Printer } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell, Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis, YAxis,
 } from 'recharts';
 import Layout from '../components/layout/Layout';
-import { dbGetAll, getRefunds, installmentRemaining } from '../lib/db';
-import type { Student, Teacher, Course, Group, Payment, Expense, Refund, Installment } from '../lib/db';
-import { formatCurrency, formatDate, toCSV, downloadCSV } from '../lib/utils';
-import { calcGroupProfitability, type GroupProfit } from '../lib/payroll';
-import { debtAging, upcomingDues, AGING_RANGES, isCountedPayment } from '../lib/billing';
+import PageReadError from '../components/layout/PageReadError';
 import { useApp } from '../contexts/AppContext';
-import { Download, Printer, Calendar, TrendingUp, Clock, AlertTriangle } from 'lucide-react';
+import { reportCharts } from '../domain/reporting/charts';
+import { dateRange, financialSummary } from '../domain/reporting/finance';
+import { usePageResource } from '../hooks/usePageResource';
+import { AGING_RANGES, debtAging, installmentRemaining, upcomingDues } from '../lib/billing';
 import { notify } from '../lib/notifications';
-import dayjs from 'dayjs';
+import { downloadCSV, formatCurrency, formatDate, toCSV } from '../lib/utils';
+import { loadReportData } from '../services/queries/reports';
 
 const GENDER_COLORS = ['#6366f1', '#ec4899'];
-const STATUS_COLORS: Record<string, string> = {
-  active: '#22c55e', suspended: '#f97316', ended: '#94a3b8',
-};
+const PIE_COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#06b6d4'];
 
 export default function ReportsPage() {
   const { settings } = useApp();
   const primaryColor = settings?.primaryColor || '#6366f1';
 
-  const [loading, setLoading] = useState(true);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [teachers, setTeachers] = useState<Teacher[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [refunds, setRefunds] = useState<Refund[]>([]);
-  const [installments, setInstallments] = useState<Installment[]>([]);
-
   // فترة التقرير — كان ثابت على «آخر 6 أشهر» من غير اختيار
   const [from, setFrom] = useState(dayjs().subtract(6, 'month').startOf('month').format('YYYY-MM-DD'));
   const [to, setTo] = useState(dayjs().format('YYYY-MM-DD'));
-  const [profitability, setProfitability] = useState<GroupProfit[]>([]);
-  const [profitLoading, setProfitLoading] = useState(false);
 
-  // ربحية المجموعات بتتحسب في lib/payroll (بتقرا الأقساط والحضور والسلف من القاعدة)
-  useEffect(() => {
-    let cancelled = false;
-    setProfitLoading(true);
-    calcGroupProfitability({ from, to })
-      .then(rows => { if (!cancelled) setProfitability(rows); })
-      .catch(() => { if (!cancelled) setProfitability([]); })
-      .finally(() => { if (!cancelled) setProfitLoading(false); });
-    return () => { cancelled = true; };
-  }, [from, to]);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const [s, t, c, g, p, e, r, ins] = await Promise.all([
-        dbGetAll<Student>('students'),
-        dbGetAll<Teacher>('teachers'),
-        dbGetAll<Course>('courses'),
-        dbGetAll<Group>('groups'),
-        dbGetAll<Payment>('payments'),
-        dbGetAll<Expense>('expenses'),
-        getRefunds(),
-        dbGetAll<Installment>('installments'),
-      ]);
-      setStudents(s); setTeachers(t); setCourses(c);
-      setGroups(g); setPayments(p); setExpenses(e);
-      setRefunds(r); setInstallments(ins);
-    } finally { setLoading(false); }
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  // Gender data
-  const genderData = [
-    { name: 'أولاد', value: students.filter(s => s.gender === 'male').length },
-    { name: 'بنات', value: students.filter(s => s.gender === 'female').length },
-  ];
-
-  // Status data
-  const statusData = [
-    { name: 'نشط', value: students.filter(s => s.status === 'active').length, color: STATUS_COLORS.active },
-    { name: 'متوقف', value: students.filter(s => s.status === 'suspended').length, color: STATUS_COLORS.suspended },
-    { name: 'منتهي', value: students.filter(s => s.status === 'ended').length, color: STATUS_COLORS.ended },
-  ];
-
-  // Age distribution
-  const ageGroups = [
-    { name: '3-6', value: students.filter(s => s.age >= 3 && s.age <= 6).length },
-    { name: '7-9', value: students.filter(s => s.age >= 7 && s.age <= 9).length },
-    { name: '10-12', value: students.filter(s => s.age >= 10 && s.age <= 12).length },
-    { name: '13-15', value: students.filter(s => s.age >= 13 && s.age <= 15).length },
-    { name: '16-18', value: students.filter(s => s.age >= 16 && s.age <= 18).length },
-  ];
-
-  // Course enrollment
-  const courseData = courses.map(c => ({
-    name: c.name.length > 20 ? c.name.substring(0, 18) + '…' : c.name,
-    students: groups.filter(g => g.courseId === c.id).reduce((sum, g) => sum + g.studentIds.length, 0),
-  })).sort((a, b) => b.students - a.students);
-
-  // Group fill rate
-  const groupFillData = groups.map(g => {
-    const course = courses.find(c => c.id === g.courseId);
-    return {
-      name: g.name.length > 18 ? g.name.substring(0, 16) + '…' : g.name,
-      fill: g.maxStudents > 0 ? Math.round((g.studentIds.length / g.maxStudents) * 100) : 0,
-      course: course?.name || '',
-    };
+  const { data, loading, error, reload } = usePageResource(loadReportData, {
+    students: [], teachers: [], courses: [], groups: [], payments: [], expenses: [], refunds: [], installments: [],
   });
 
-  // Monthly revenue vs expenses (last 6 months)
-  const monthlyData = [];
-  for (let i = 5; i >= 0; i--) {
-    const m = dayjs().subtract(i, 'month');
-    const key = m.format('YYYY-MM');
-    const gross = payments.filter(p => isCountedPayment(p) && p.date.startsWith(key)).reduce((s, p) => s + p.amount, 0);
-    const monthRefunds = refunds.filter(r => !r.deleted && (r.date || '').startsWith(key)).reduce((s, r) => s + (r.amount || 0), 0);
-    const revenue = Math.max(0, gross - monthRefunds);
-    const expense = expenses.filter(e => !e.deleted && e.date.startsWith(key)).reduce((s, e) => s + e.amount, 0);
-    monthlyData.push({ month: m.format('MMM'), revenue, expense, profit: revenue - expense });
-  }
-
-  // Teacher performance
-  const teacherData = teachers.map(t => {
-    const teacherGroups = groups.filter(g => g.teacherId === t.id);
-    const teacherStudents = teacherGroups.reduce((sum, g) => sum + g.studentIds.length, 0);
-    return { name: t.name.length > 18 ? t.name.substring(0, 16) + '…' : t.name, groups: teacherGroups.length, students: teacherStudents };
-  }).filter(t => t.groups > 0);
-
-  // Expense categories
-  const expenseCategories: Record<string, number> = {};
-  expenses.filter(e => !e.deleted).forEach(e => { expenseCategories[e.category] = (expenseCategories[e.category] || 0) + e.amount; });
-  const expensePieData = Object.entries(expenseCategories).map(([cat, amount]) => ({
-    name: { salaries: 'رواتب', bills: 'فواتير', maintenance: 'صيانة', purchases: 'مشتريات', rent: 'إيجار', other: 'أخرى' }[cat] || cat,
-    value: amount,
-  }));
-  const PIE_COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#06b6d4'];
-
-  // ===== أرقام الفترة المختارة =====
-  const inRange = (date: string) => date >= from && date <= to;
-  /** الإيراد المحسوب = المدفوع غير الملغي − الاستردادات (مش مجرد sum للدفعات) */
-  const rangePayments = payments.filter(p => isCountedPayment(p) && inRange(p.date));
-  const rangeRefunds = refunds.filter(r => !r.deleted && inRange(r.date));
-  const rangeExpenses = expenses.filter(e => !e.deleted && inRange(e.date));
-
-  const totalRevenue = rangePayments.reduce((s, p) => s + p.amount, 0);
-  const totalRefunds = rangeRefunds.reduce((s, r) => s + r.amount, 0);
-  const netRevenue = totalRevenue - totalRefunds;
-  const totalExpenses = rangeExpenses.reduce((s, e) => s + e.amount, 0);
-  const netProfit = netRevenue - totalExpenses;
-  const byMethod = rangePayments.reduce<Record<string, number>>((acc, p) => {
-    const m = p.method || 'cash';
-    acc[m] = (acc[m] || 0) + p.amount;
-    return acc;
-  }, {});
+  const { students, installments } = data;
+  const today = dayjs().format('YYYY-MM-DD');
+  const { genderData, statusData, ageGroups, courseData, groupFillData, monthlyData, teacherData, expensePieData } = useMemo(() => reportCharts(data, today), [data, today]);
+  const { grossRevenue: totalRevenue, refunds: totalRefunds, expenses: totalExpenses, profit: netProfit, byMethod, paymentCount, refundCount, expenseCount } = useMemo(
+    () => financialSummary(data, dateRange(from, to), 'signed'), [data, from, to],
+  );
 
   // ===== أعمار الديون =====
   const debtBuckets = debtAging(installments);
 
   // ===== استحقاقات قريبة =====
   const upcoming = upcomingDues(installments, settings?.upcomingDueDays ?? 3);
-
-  // ===== ربحية المجموعات (بتتحمل من القاعدة على الفترة المختارة) =====
 
   function exportReport() {
     const data = students.map(s => ({
@@ -179,6 +65,8 @@ export default function ReportsPage() {
     downloadCSV(csv, 'students_report.csv');
     notify.success('تم تصدير التقرير');
   }
+
+  if (error) return <PageReadError title="التقارير والإحصائيات" onRetry={reload} />;
 
   if (loading) {
     return (
@@ -234,17 +122,17 @@ export default function ReportsPage() {
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <p className="text-sm text-gray-500">إجمالي المحصل</p>
             <p className="text-2xl font-bold text-green-600">{formatCurrency(totalRevenue, settings?.currency)}</p>
-            <p className="text-[11px] text-gray-400 mt-1">{rangePayments.length} دفعة</p>
+            <p className="text-[11px] text-gray-400 mt-1">{paymentCount} دفعة</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <p className="text-sm text-gray-500">المسترد</p>
             <p className="text-2xl font-bold text-orange-500">{formatCurrency(totalRefunds, settings?.currency)}</p>
-            <p className="text-[11px] text-gray-400 mt-1">{rangeRefunds.length} عملية</p>
+            <p className="text-[11px] text-gray-400 mt-1">{refundCount} عملية</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <p className="text-sm text-gray-500">إجمالي المصروفات</p>
             <p className="text-2xl font-bold text-red-500">{formatCurrency(totalExpenses, settings?.currency)}</p>
-            <p className="text-[11px] text-gray-400 mt-1">{rangeExpenses.length} بند</p>
+            <p className="text-[11px] text-gray-400 mt-1">{expenseCount} بند</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <p className="text-sm text-gray-500">صافي الربح</p>
@@ -339,66 +227,6 @@ export default function ReportsPage() {
             </div>
           </div>
         )}
-
-        {/* ربحية المجموعات */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-          <h3 className="text-base font-bold text-gray-900 mb-1 flex items-center gap-2">
-            <TrendingUp size={17} className="text-emerald-600" /> ربحية المجموعات
-          </h3>
-          <p className="text-xs text-gray-400 mb-4">
-            إيراد المجموعة = عدد الطلاب × سعرها الشهري (بالخصومات الفعلية) · التكلفة = حصة المدرس من مرتبه
-          </p>
-          {profitLoading ? (
-            <p className="text-sm text-gray-400 py-6 text-center">جاري حساب الربحية...</p>
-          ) : profitability.length === 0 ? (
-            <p className="text-sm text-gray-400 py-6 text-center">مفيش مجموعات محسوب لها ربحية لسه</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr className="text-right text-xs text-gray-500">
-                    <th className="px-4 py-2.5 font-medium">المجموعة</th>
-                    <th className="px-4 py-2.5 font-medium">المدرس</th>
-                    <th className="px-4 py-2.5 font-medium">الطلاب</th>
-                    <th className="px-4 py-2.5 font-medium">المحصّل</th>
-                    <th className="px-4 py-2.5 font-medium">المستحق</th>
-                    <th className="px-4 py-2.5 font-medium">تكلفة المدرس</th>
-                    <th className="px-4 py-2.5 font-medium">الملازم</th>
-                    <th className="px-4 py-2.5 font-medium">صافي الربح</th>
-                    <th className="px-4 py-2.5 font-medium">الهامش</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {[...profitability].sort((a, b) => b.profit - a.profit).map(r => (
-                    <tr key={r.groupId} className="border-t border-gray-50 hover:bg-gray-50/50">
-                      <td className="px-4 py-2.5 font-medium text-gray-900">
-                        {r.groupName}
-                        <span className="block text-[10px] text-gray-400 font-normal">{r.courseName}</span>
-                      </td>
-                      <td className="px-4 py-2.5 text-gray-600 text-xs">{r.teacherName || '—'}</td>
-                      <td className="px-4 py-2.5 text-gray-600">{r.students}</td>
-                      <td className="px-4 py-2.5 text-green-700 font-medium">{formatCurrency(r.collected, settings?.currency)}</td>
-                      <td className="px-4 py-2.5 text-gray-600">{formatCurrency(r.owed, settings?.currency)}</td>
-                      <td className="px-4 py-2.5 text-red-600">{formatCurrency(r.teacherCost, settings?.currency)}</td>
-                      <td className="px-4 py-2.5 text-red-500 text-xs">{formatCurrency(r.materialCost, settings?.currency)}</td>
-                      <td className={`px-4 py-2.5 font-bold ${r.profit >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
-                        {formatCurrency(r.profit, settings?.currency)}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${
-                          r.marginPct >= 50 ? 'bg-green-100 text-green-700'
-                          : r.marginPct >= 25 ? 'bg-amber-100 text-amber-700'
-                          : 'bg-red-100 text-red-700'}`}>
-                          {Math.round(r.marginPct)}%
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
 
         {/* Revenue vs Expenses */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">

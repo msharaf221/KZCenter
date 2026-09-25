@@ -1,17 +1,22 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit2, Trash2, Search } from 'lucide-react';
-import { PieChart, Pie, Cell, Legend, ResponsiveContainer, Tooltip } from 'recharts';
+import dayjs from 'dayjs';
+import { Edit2, Plus, Search, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import Layout from '../components/layout/Layout';
-import Modal from '../components/ui/Modal';
+import PageReadError from '../components/layout/PageReadError';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
+import Modal from '../components/ui/Modal';
 import Pagination from '../components/ui/Pagination';
-import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, Expense, ExpenseCategory } from '../lib/db';
-import { formatDate, formatCurrency, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import type { Expense, ExpenseCategory } from '../domain/models';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { usePageResource } from '../hooks/usePageResource';
 import { notify } from '../lib/notifications';
-import { addAuditEntry } from '../lib/security';
-import dayjs from 'dayjs';
+import { formatCurrency, formatDate, getContrastColor } from '../lib/utils';
+import { deleteExpense, saveExpense } from '../services/commands/expenses';
+import { loadExpensesList } from '../services/queries/expenses';
 
 const PAGE_SIZE = 20;
 const CATEGORY_LABELS: Record<ExpenseCategory, string> = {
@@ -21,17 +26,14 @@ const CATEGORY_LABELS: Record<ExpenseCategory, string> = {
 const PIE_COLORS = ['#6366f1', '#8b5cf6', '#ec4899', '#f97316', '#22c55e', '#06b6d4'];
 
 export default function ExpensesPage() {
+  const task = useCommandTask();
   const { settings } = useApp();
   const { user, can } = useAuth();
   const canWrite = can('expenses', 'create') || can('expenses', 'edit');
   const canDelete = can('expenses', 'delete');
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [allExpenses, setAllExpenses] = useState<Expense[]>([]);
-  const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
-  const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Expense | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -41,23 +43,10 @@ export default function ExpensesPage() {
     date: dayjs().format('YYYY-MM-DD'),
   });
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const all = await dbGetAll<Expense>('expenses');
-      setAllExpenses(all);
-      const result = await dbGetPaginated<Expense>('expenses', page, PAGE_SIZE, (e: Expense) => {
-        const q = search.toLowerCase();
-        const matchSearch = !q || e.description.toLowerCase().includes(q);
-        const matchCat = !categoryFilter || e.category === categoryFilter;
-        return matchSearch && matchCat;
-      });
-      setExpenses(result.items);
-      setTotal(result.total);
-    } finally { setLoading(false); }
-  }, [page, search, categoryFilter]);
-
-  useEffect(() => { load(); }, [load]);
+  const query = useCallback(() => loadExpensesList({ page, pageSize: PAGE_SIZE, search, categoryFilter }), [page, search, categoryFilter]);
+  const { data: { allExpenses, expenses, total }, loading, reload: load, error } = usePageResource(query, {
+    allExpenses: [], expenses: [], total: 0,
+  });
   useEffect(() => { setPage(1); }, [search, categoryFilter]);
 
   function openAdd() {
@@ -66,36 +55,19 @@ export default function ExpensesPage() {
     setShowModal(true);
   }
   function openEdit(e: Expense) {
+    if (e.payrollId) { notify.error('سند صرف المرتب مرتبط بكشف معتمد ولا يُعدّل يدوياً'); return; }
     setEditing(e);
     setForm({ category: e.category, amount: e.amount, description: e.description, date: e.date });
     setShowModal(true);
   }
 
   async function handleSave() {
-    if (!form.description.trim()) { notify.error('الوصف مطلوب'); return; }
-    if (form.amount <= 0) { notify.error('المبلغ يجب أن يكون أكبر من 0'); return; }
-    try {
-      const expenseId = editing?.id || generateId();
-      if (editing) {
-        await dbPut('expenses', { ...editing, ...form, updatedAt: new Date().toISOString() });
-        notify.success('تم تحديث المصروف');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'update', entity: 'expense', entityId: expenseId,
-          details: `تعديل مصروف: ${form.description} (${form.amount})`,
-        });
-      } else {
-        await dbAdd('expenses', { id: expenseId, ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-        notify.success('تم إضافة المصروف');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'create', entity: 'expense', entityId: expenseId,
-          details: `إضافة مصروف: ${form.description} (${form.amount})`,
-        });
-      }
+    await task.run(async () => {
+      await saveExpense(user, form, editing?.id);
+      notify.success(editing ? 'تم تحديث المصروف' : 'تم إضافة المصروف');
       setShowModal(false);
-      load();
-    } catch { notify.error('حدث خطأ'); }
+      await load();
+    });
   }
 
   // Pie data
@@ -110,6 +82,8 @@ export default function ExpensesPage() {
   const thisMonth = allExpenses.filter(e => e.date.startsWith(dayjs().format('YYYY-MM'))).reduce((s, e) => s + e.amount, 0);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  if (error) return <PageReadError title="المصروفات" onRetry={load} />;
 
   return (
     <Layout title="إدارة المصروفات">
@@ -203,8 +177,9 @@ export default function ExpensesPage() {
                       <td className="p-3 text-sm text-gray-500">{formatDate(expense.date)}</td>
                       <td className="p-3">
                         <div className="flex items-center justify-center gap-1">
-                          {canWrite && <button onClick={() => openEdit(expense)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600"><Edit2 size={14} /></button>}
-                          {canDelete && <button onClick={() => setDeleteId(expense.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600"><Trash2 size={14} /></button>}
+                          {expense.payrollId && can('payroll', 'view') && <Link to={`/payroll?teacher=${encodeURIComponent(expense.teacherId || '')}`} className="text-xs font-semibold text-indigo-600 hover:underline" title="سند صرف مرتبط بالمرتبات ولا يُعدّل يدوياً">كشف المرتب</Link>}
+                          {canWrite && !expense.payrollId && <button onClick={() => openEdit(expense)} className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600"><Edit2 size={14} /></button>}
+                          {canDelete && !expense.payrollId && <button onClick={() => setDeleteId(expense.id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-600"><Trash2 size={14} /></button>}
                         </div>
                       </td>
                     </tr>
@@ -221,32 +196,32 @@ export default function ExpensesPage() {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">الفئة</label>
-            <select value={form.category} onChange={e => setForm({...form, category: e.target.value as ExpenseCategory})}
+            <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value as ExpenseCategory })}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
               {Object.entries(CATEGORY_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">الوصف *</label>
-            <input type="text" value={form.description} onChange={e => setForm({...form, description: e.target.value})}
+            <input type="text" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder="وصف المصروف" />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">المبلغ *</label>
-              <input type="number" value={form.amount} onChange={e => setForm({...form, amount: +e.target.value})}
+              <input type="number" value={form.amount} onChange={e => setForm({ ...form, amount: +e.target.value })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" min="0" />
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">التاريخ</label>
-              <input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})}
+              <input type="date" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
             </div>
           </div>
         </div>
         <div className="flex gap-3 mt-5">
-          <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
+          <button onClick={handleSave} disabled={task.pending} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
             style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editing ? 'تحديث' : 'إضافة'}
           </button>
@@ -256,17 +231,8 @@ export default function ExpensesPage() {
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف المصروف" message="هل أنت متأكد؟"
         onConfirm={async () => {
-          if (deleteId) {
-            const exp = expenses.find(e => e.id === deleteId);
-            await dbSoftDelete('expenses', deleteId);
-            addAuditEntry({
-              userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-              action: 'delete', entity: 'expense', entityId: deleteId,
-              details: `حذف مصروف: ${exp?.description || deleteId}`,
-            });
-            notify.success('تم الحذف');
-            load();
-          }
+          if (!deleteId) return;
+          await task.run(async () => { await deleteExpense(user, deleteId); notify.success('تم الحذف'); await load(); });
           setDeleteId(null);
         }}
         onCancel={() => setDeleteId(null)} danger />

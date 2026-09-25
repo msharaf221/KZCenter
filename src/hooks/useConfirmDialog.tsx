@@ -20,7 +20,7 @@
  * return (<> ... {dialog} </>);
  * ```
  */
-import { useState, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 
 export interface ConfirmOptions {
@@ -36,17 +36,36 @@ export function useConfirmDialog() {
   // مرجع لدالة الحسم (resolve) الخاصة بالوعد الحالي
   const resolverRef = useRef<((value: boolean) => void) | null>(null);
 
-  const confirm = useCallback((opts: ConfirmOptions): Promise<boolean> => {
-    return new Promise<boolean>((resolve) => {
-      resolverRef.current = resolve;
-      setOptions(opts);
-    });
+  const mounted = useRef(false);
+  const cancelPending = useCallback(() => {
+    resolverRef.current?.(false);
+    resolverRef.current = null;
   }, []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      cancelPending();
+    };
+  }, [cancelPending]);
+
+  const confirm = useCallback(
+    (opts: ConfirmOptions): Promise<boolean> => {
+      if (!mounted.current) return Promise.resolve(false);
+      // Replacing a confirmation must settle the previous caller rather than orphan its promise.
+      cancelPending();
+      return new Promise<boolean>(resolve => {
+        resolverRef.current = resolve;
+        setOptions(opts);
+      });
+    },
+    [cancelPending],
+  );
 
   const settle = useCallback((value: boolean) => {
     resolverRef.current?.(value);
     resolverRef.current = null;
-    setOptions(null);
+    if (mounted.current) setOptions(null);
   }, []);
 
   const dialog = (

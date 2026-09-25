@@ -11,7 +11,7 @@
  *  - مصفوفة صلاحيات على مستوى (كيان × إجراء) — دالة نقية قابلة للاختبار
  *  - عزل بيانات المدرس: `visibleGroupIds()` بترجّع مجموعاته هو بس
  */
-import type { UserRole, Group } from './db';
+import type { Group, UserRole } from '../domain/models';
 
 export type Entity =
   | 'students' | 'teachers' | 'courses' | 'groups' | 'inventory'
@@ -163,4 +163,9 @@ export function filterByGroups<T extends { groupId?: string }>(
 ): T[] {
   if (!allowed) return rows;
   return rows.filter(r => !!r.groupId && allowed.has(r.groupId));
+}
+
+/** Runtime validation for persisted sessions; unknown/prototype keys are not roles. */
+export function isUserRole(value: unknown): value is UserRole {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(PERMISSIONS, value);
 }

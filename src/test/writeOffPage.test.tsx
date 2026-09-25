@@ -1,3 +1,4 @@
+import { seedSession as loginAs } from './helpers/session';
 /**
  * اختبار صفحة المديونيات من الواجهة للقاعدة:
  * زرار «تصفير المديونيات» → نافذة التأكيد → التنفيذ → سجل المراجعة + تحديث القايمة.
@@ -63,16 +64,13 @@ function renderPage() {
 }
 
 beforeEach(async () => {
-  // جلسة مسؤول — زرار التصفير والتحصيل بيظهروا حسب الصلاحيات (debtors.delete / payments.create)
-  sessionStorage.setItem('educenter_session', JSON.stringify({
-    id: 'admin-test', username: 'admin', role: 'admin', createdAt: NOW, updatedAt: NOW,
-  }));
-  sessionStorage.setItem('educenter_session_ts', Date.now().toString());
+  sessionStorage.clear();
   for (const store of [
-    'students', 'groups', 'courses', 'payments', 'enrollments', 'installments', 'audit_logs',
+    'students', 'groups', 'courses', 'payments', 'enrollments', 'installments', 'audit_logs', 'users',
   ] as const) {
     await dbClearStore(store);
   }
+  await loginAs('admin');
 });
 
 describe('زرار تصفير المديونيات في صفحة المديونيات', () => {
@@ -113,13 +111,6 @@ describe('زرار تصفير المديونيات في صفحة المديون�
 });
 
 describe('صلاحيات الأدوار على صفحة المديونيات', () => {
-  function loginAs(role: string) {
-    sessionStorage.setItem('educenter_session', JSON.stringify({
-      id: `${role}-test`, username: role, role, createdAt: NOW, updatedAt: NOW,
-    }));
-    sessionStorage.setItem('educenter_session_ts', Date.now().toString());
-  }
-
   /** نستنى الطالب يظهر والجلسة تتحمّل (اسم الدور بيظهر في السايدبار) قبل ما نفحص الأزرار */
   async function ready(studentName: string, role: keyof typeof ROLE_LABEL) {
     await waitFor(() => expect(screen.getByText(studentName)).toBeInTheDocument());
@@ -128,7 +119,7 @@ describe('صلاحيات الأدوار على صفحة المديونيات', (
 
   it('الاستقبال: يقدر يحصّل لكن ما يقدرش يصفّر المديونيات', async () => {
     await seedDebtor('سارة علي');
-    loginAs('secretary');
+    await loginAs('secretary');
     renderPage();
     await ready('سارة علي', 'secretary');
     expect(screen.getByTitle('تحصيل دفعة')).toBeInTheDocument();
@@ -137,7 +128,7 @@ describe('صلاحيات الأدوار على صفحة المديونيات', (
 
   it('المحاسب: يقدر يحصّل ويصفّر', async () => {
     await seedDebtor('منى حسن');
-    loginAs('accountant');
+    await loginAs('accountant');
     renderPage();
     await ready('منى حسن', 'accountant');
     expect(screen.getByTitle('تحصيل دفعة')).toBeInTheDocument();
@@ -146,7 +137,7 @@ describe('صلاحيات الأدوار على صفحة المديونيات', (
 
   it('المشرف الأكاديمي: عرض فقط — لا تحصيل ولا تصفير', async () => {
     await seedDebtor('خالد سعيد');
-    loginAs('supervisor');
+    await loginAs('supervisor');
     renderPage();
     await ready('خالد سعيد', 'supervisor');
     expect(screen.queryByTitle('تحصيل دفعة')).toBeNull();

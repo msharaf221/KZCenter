@@ -1,8 +1,9 @@
-import { Navigate } from 'react-router-dom';
+import type { ReactNode } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { ReactNode } from 'react';
-import { can, type Entity, type Action } from '../lib/permissions';
-import type { UserRole } from '../lib/db';
+import type { UserRole } from '../domain/models';
+import { can, type Action, type Entity } from '../lib/permissions';
+import PageLoader from './ui/PageLoader';
 
 interface ProtectedRouteProps {
   children: ReactNode;
@@ -36,21 +37,15 @@ export default function ProtectedRoute({
   roles,
 }: ProtectedRouteProps) {
   const { user, loading } = useAuth();
+  const location = useLocation();
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="animate-spin w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto mb-4" />
-          <p className="text-gray-500 font-medium">جاري التحميل...</p>
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <PageLoader />;
 
   if (!user) {
     return <Navigate to="/login" replace />;
   }
+
+  if (user.mustChangePassword && location.pathname !== '/login') return <Navigate to="/login" replace />;
 
   // 1) أدوار صريحة
   if (roles && roles.length > 0 && !roles.includes(user.role)) {

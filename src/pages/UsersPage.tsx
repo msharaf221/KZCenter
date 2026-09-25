@@ -1,29 +1,31 @@
-import { useEffect, useState } from 'react';
-import { Plus, Trash2, Key } from 'lucide-react';
+import { Key, Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 import Layout from '../components/layout/Layout';
-import Modal from '../components/ui/Modal';
-import ConfirmDialog from '../components/ui/ConfirmDialog';
+import PageReadError from '../components/layout/PageReadError';
 import Badge from '../components/ui/Badge';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import Modal from '../components/ui/Modal';
+import ResourceError from '../components/ui/ResourceError';
+import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import { dbGetAll, Teacher, User, UserRole } from '../lib/db';
+import { readAll } from '../data/readers';
+import type { User, UserRole } from '../domain/models';
+import { useAsyncResource } from '../hooks/useAsyncResource';
+import { notify } from '../lib/notifications';
 import { ROLE_LABEL } from '../lib/permissions';
 import { formatDate, getContrastColor } from '../lib/utils';
-import { useApp } from '../contexts/AppContext';
-import { notify } from '../lib/notifications';
+
+const loadTeacherChoices = () => readAll('teachers');
 
 export default function UsersPage() {
-  const { allUsers, addUser, deleteUser, resetPassword, user: currentUser } = useAuth();
+  const { allUsers, usersError, usersLoading, refreshUsers, addUser, deleteUser, resetPassword, user: currentUser } = useAuth();
   const { settings } = useApp();
   const [showModal, setShowModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [form, setForm] = useState({ username: '', password: '', confirmPassword: '', role: 'teacher' as UserRole, teacherId: '' });
-  const [teachers, setTeachers] = useState<Teacher[]>([]);
-
-  useEffect(() => {
-    dbGetAll<Teacher>('teachers').then(ts => setTeachers(ts.filter(t => !t.deleted))).catch(() => setTeachers([]));
-  }, [showModal]);
+  const { data: teachers, error: teacherError, loading: teachersLoading, reload: reloadTeachers } = useAsyncResource(loadTeacherChoices, [], { enabled: showModal });
   const [resetPassword_, setResetPassword_] = useState('');
   const [resetConfirm, setResetConfirm] = useState('');
   const [loading, setLoading] = useState(false);
@@ -65,6 +67,9 @@ export default function UsersPage() {
       notify.error(e instanceof Error ? e.message : 'لا يمكن حذف هذا المستخدم');
     }
   }
+
+  if (usersError) return <PageReadError title="إدارة المستخدمين" onRetry={refreshUsers} />;
+  if (usersLoading) return <Layout title="إدارة المستخدمين"><p role="status" className="p-6 text-center">جاري تحميل المستخدمين...</p></Layout>;
 
   const visibleUsers = allUsers.filter(u => !u.deleted);
 
@@ -138,6 +143,7 @@ export default function UsersPage() {
 
       {/* Add User Modal */}
       <Modal isOpen={showModal} onClose={() => setShowModal(false)} title="إضافة مستخدم جديد">
+        {teacherError && <ResourceError onRetry={reloadTeachers} message="تعذّر تحميل قائمة المدرسين لربط الحساب." />}
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">اسم المستخدم *</label>
@@ -180,7 +186,7 @@ export default function UsersPage() {
           </div>
         </div>
         <div className="flex gap-3 mt-5">
-          <button onClick={handleAddUser} disabled={loading}
+          <button onClick={handleAddUser} disabled={loading || (form.role === 'teacher' && (teachersLoading || !!teacherError))}
             className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm disabled:opacity-60"
             style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {loading ? 'جاري الإضافة...' : 'إضافة'}

@@ -24,7 +24,10 @@
     "electron:build:mac": "npm run build:electron && electron-builder --mac",
     "electron:build:linux": "npm run build:electron && electron-builder --linux",
     "electron:build:all": "npm run build:electron && electron-builder --win --mac --linux",
-    "verify:rls": "node scripts/verify-rls.mjs"
+    "verify:rls": "node scripts/verify-rls.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
+    "verify": "npm run typecheck && npm run lint -- --max-warnings=0 && npm run check:architecture && npm test && npm run check:pii && npm run build",
+    "check:pii": "node scripts/check-no-pii.mjs --all"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.115.0",

@@ -5,7 +5,8 @@
  * ممكن مدرس يتحط في مجموعتين في نفس الميعاد، أو قاعة تتحجز مرتين،
  * أو طالب يسجّل في مجموعتين متعارضتين — وكل ده يعدي من غير تنبيه.
  */
-import { dbGetAll, Group, ScheduleItem, Student, Enrollment } from './db';
+import { readAll } from '../data/readers';
+import type { Enrollment, Group, ScheduleItem, Student } from '../domain/models';
 
 export const DAY_KEYS = ['saturday', 'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday'] as const;
 export type DayKey = typeof DAY_KEYS[number];
@@ -317,11 +318,11 @@ export function todayKey(): DayKey {
 /** تحميل كل ما تحتاجه شاشة الجدول */
 export async function loadTimetableData() {
   const [groups, teachers, courses, students, enrollments] = await Promise.all([
-    dbGetAll<Group>('groups'),
-    dbGetAll<{ id: string; name: string }>('teachers'),
-    dbGetAll<{ id: string; name: string }>('courses'),
-    dbGetAll<Student>('students'),
-    dbGetAll<Enrollment>('enrollments'),
+    readAll<Group>('groups'),
+    readAll<{ id: string; name: string }>('teachers'),
+    readAll<{ id: string; name: string }>('courses'),
+    readAll<Student>('students'),
+    readAll<Enrollment>('enrollments'),
   ]);
 
   const teacherNames: Record<string, string> = {};

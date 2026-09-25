@@ -1,78 +1,46 @@
-import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, Clock, AlertCircle, LogOut, Save, MessageCircle, Printer } from 'lucide-react';
+import dayjs from 'dayjs';
+import { AlertCircle, CheckCircle, Clock, LogOut, MessageCircle, Printer, Save, XCircle } from 'lucide-react';
+import { useCallback, useEffect, useState, type SetStateAction } from 'react';
 import Layout from '../components/layout/Layout';
-import { dbGetAll, dbGetByIndex, dbAdd, dbPut, getGroupAttendanceForDate, getGroupStudents, generateId, Group, Student, Course, Attendance, AttendanceStatus, Enrollment } from '../lib/db';
-import { formatDate, getWhatsAppLink, getContrastColor } from '../lib/utils';
+import PageReadError from '../components/layout/PageReadError';
+import ResourceError from '../components/ui/ResourceError';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import { notify, notifyAttendanceSaved, notifyAbsence, notifyRepeatedAbsence } from '../lib/notifications';
-import { addAuditEntry } from '../lib/security';
-import { visibleGroupIds } from '../lib/permissions';
-import { printTable } from '../lib/printing';
+import type { AttendanceStatus } from '../domain/models';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { usePageResource } from '../hooks/usePageResource';
+import { useResourceDraft } from '../hooks/useResourceDraft';
 import { checkAbsenceAlertForStudent } from '../lib/absenceAlerts';
-import dayjs from 'dayjs';
+import { notify, notifyAbsence, notifyAttendanceSaved, notifyRepeatedAbsence } from '../lib/notifications';
+import { printTable } from '../lib/printing';
+import { formatDate, getContrastColor, getWhatsAppLink } from '../lib/utils';
+import { checkOutStudent, saveAttendance } from '../services/commands/academic';
+import { loadAttendanceCatalog, loadAttendanceRegister, type AttendanceRegister } from '../services/queries/attendance';
 
 export default function AttendancePage() {
+  const task = useCommandTask();
   const { settings } = useApp();
   const { user, can } = useAuth();
   const canRecord = can('attendance', 'create') || can('attendance', 'edit');
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
   const [selectedGroup, setSelectedGroup] = useState('');
   const [selectedDate, setSelectedDate] = useState(dayjs().format('YYYY-MM-DD'));
-  const [existingAttendance, setExistingAttendance] = useState<Attendance[]>([]);
-  const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceStatus>>({});
-  const [saving, setSaving] = useState(false);
-  const [groupStudents, setGroupStudents] = useState<Student[]>([]);
+  const saving = task.pending;
   /** الطلاب اللي التحقوا بالمجموعة بعد تاريخ الكشف — ماينفعش يتسجللهم غياب عن يوم قبل ما يدخلوا */
-  const [lateJoiners, setLateJoiners] = useState<Set<string>>(new Set());
 
+  const catalogQuery = useCallback(() => loadAttendanceCatalog(user?.role, user?.teacherId), [user?.role, user?.teacherId]);
+  const { data: { groups, courses }, loading: catalogLoading, error: catalogError, reload: reloadCatalog } = usePageResource(catalogQuery, { groups: [], courses: [] });
   useEffect(() => {
-    loadData();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- إعادة التحميل عند تغيّر المستخدم/نطاقه فقط
-  }, [user?.role, user?.teacherId]);
-
-  useEffect(() => {
-    if (selectedGroup && selectedDate) {
-      loadAttendance();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- مقصود: إعادة التحميل مربوطة بالـ deps المكتوبة بس
-  }, [selectedGroup, selectedDate]);
-
-  async function loadData() {
-    const [allGroups, c] = await Promise.all([
-      dbGetAll<Group>('groups'),
-      dbGetAll<Course>('courses'),
-    ]);
-    // المدرس يشوف مجموعاته هو بس
-    const allowed = visibleGroupIds({ role: user?.role, teacherId: user?.teacherId, groups: allGroups });
-    const g = allowed ? allGroups.filter(x => allowed.has(x.id)) : allGroups;
-    setGroups(g);
-    setCourses(c);
-    if (g.length > 0) setSelectedGroup(g[0].id);
-  }
-
-  async function loadAttendance() {
-    const records = await getGroupAttendanceForDate(selectedGroup, selectedDate);
-    setExistingAttendance(records);
-    const map: Record<string, AttendanceStatus> = {};
-    records.forEach(r => { map[r.studentId] = r.status; });
-    setAttendanceMap(map);
-    // Load enrolled students via enrollments table (source of truth)
-    if (selectedGroup) {
-      const enrolled = await getGroupStudents(selectedGroup);
-      setGroupStudents(enrolled);
-
-      // طالب التحق بعد تاريخ الكشف؟ يطلع من حساب الغياب (مكانش موجود أصلاً)
-      const enrollments = await dbGetByIndex<Enrollment>('enrollments', 'by-groupId', selectedGroup);
-      const late = new Set<string>();
-      const day = selectedDate.slice(0, 10);
-      for (const e of enrollments) {
-        if (e.status !== 'active' || e.deleted) continue;
-        if ((e.enrolledAt || '').slice(0, 10) > day) late.add(e.studentId);
-      }
-      setLateJoiners(late);
-    }
+    if (!catalogLoading && !groups.some(group => group.id === selectedGroup)) setSelectedGroup(groups[0]?.id || '');
+  }, [catalogLoading, groups, selectedGroup]);
+  const registerQuery = useCallback(() => loadAttendanceRegister(selectedGroup, selectedDate), [selectedGroup, selectedDate]);
+  const { value: register, setValue: setRegister, ready: registerReady, error: registerError, reload: loadAttendance } = useResourceDraft<AttendanceRegister>(
+    `${selectedGroup}:${selectedDate}`, registerQuery,
+    { records: [], students: [], statuses: {}, lateJoiners: new Set() },
+    !catalogLoading && !catalogError && !!selectedDate && groups.some(group => group.id === selectedGroup),
+  );
+  const { records: existingAttendance, students: groupStudents, statuses: attendanceMap, lateJoiners } = register;
+  function setAttendanceMap(action: SetStateAction<Record<string, AttendanceStatus>>) {
+    setRegister(current => ({ ...current, statuses: typeof action === 'function' ? action(current.statuses) : action }));
   }
 
   const group = groups.find(g => g.id === selectedGroup);
@@ -94,74 +62,30 @@ export default function AttendancePage() {
   }
 
   async function handleSave() {
-    if (!selectedGroup) { notify.error('اختر مجموعة أولاً'); return; }
-    setSaving(true);
-    try {
-      let savedCount = 0;
-      for (const student of groupStudents) {
-        // طالب التحق بعد تاريخ الكشف ولا سجل قديم له؟ مايتسجلش غياب غلط عن يوم قبل ما يدخل
-        const existing = existingAttendance.find(r => r.studentId === student.id);
-        if (lateJoiners.has(student.id) && !existing) continue;
-
-        const status = attendanceMap[student.id] || 'absent';
-        savedCount++;
-
-        const wasAbsent = existing ? existing.status === 'absent' : false;
-
-        if (status === 'absent' && !wasAbsent) {
-          notifyAbsence(student.name, group?.name || '');
-        }
-
-        if (existing) {
-          await dbPut('attendance', {
-            ...existing, status, updatedAt: new Date().toISOString(),
-          });
-        } else {
-          const record: Attendance = {
-            id: generateId(), studentId: student.id, groupId: selectedGroup,
-            date: selectedDate, status,
-            checkInTime: status === 'present' ? dayjs().format('HH:mm') : undefined,
-            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-          };
-          await dbAdd('attendance', record);
-        }
-
-        // تنبيه الغياب المتكرر (3+ متتالية) — بعد الحفظ، للطلاب اللي حالتهم غائب
-        if (status === 'absent') {
-          try {
-            const alert = await checkAbsenceAlertForStudent(student.id, selectedGroup);
-            if (alert) notifyRepeatedAbsence(student.name, group?.name || '', alert.streak);
-          } catch (e) {
-            console.error('absence alert check error:', e);
-          }
-        }
+    if (!registerReady) return;
+    await task.run(async () => {
+      const saved = await saveAttendance(user, { groupId: selectedGroup, date: selectedDate, studentIds: groupStudents.map(student => student.id), statuses: attendanceMap });
+      for (const student of saved.newlyAbsent) notifyAbsence(student.name, saved.group.name);
+      for (const student of saved.absent) {
+        try {
+          const alert = await checkAbsenceAlertForStudent(student.id, saved.group.id);
+          if (alert) notifyRepeatedAbsence(student.name, saved.group.name, alert.streak);
+        } catch (error) { console.error('absence alert check error:', error); }
       }
-      notifyAttendanceSaved(group?.name || '', savedCount);
-      addAuditEntry({
-        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-        action: 'update', entity: 'attendance', entityId: selectedGroup,
-        details: `تسجيل حضور: ${group?.name || ''} - ${formatDate(selectedDate)} (${savedCount} طالب)`,
-      });
-      loadAttendance();
-    } catch { notify.error('حدث خطأ أثناء الحفظ'); }
-    finally { setSaving(false); }
+      notifyAttendanceSaved(saved.group.name, saved.savedCount);
+      await loadAttendance();
+    });
   }
 
   async function handleCheckOut(studentId: string) {
-    const existing = existingAttendance.find(r => r.studentId === studentId);
-    if (!existing) { notify.error('يجب تسجيل الحضور أولاً'); return; }
-    try {
-      await dbPut('attendance', {
-        ...existing, checkOutTime: dayjs().format('HH:mm'), updatedAt: new Date().toISOString(),
-      });
-      notify.success('تم تسجيل وقت الخروج');
-      loadAttendance();
-    } catch { notify.error('حدث خطأ'); }
+    const record = existingAttendance.find(row => row.studentId === studentId);
+    if (!record) { notify.error('يجب تسجيل الحضور أولاً'); return; }
+    await task.run(async () => { await checkOutStudent(user, record.id); notify.success('تم تسجيل وقت الخروج'); await loadAttendance(); });
   }
 
   /** ورقة حضور قابلة للطباعة (RTL) للقائمة والحالة الحالية */
   function handlePrintSheet() {
-    if (!selectedGroup) { notify.error('اختر مجموعة الأول'); return; }
+    if (!selectedGroup || !registerReady) { notify.error('انتظر تحميل كشف الحضور أولاً'); return; }
     const group = groups.find(g => g.id === selectedGroup);
     const course = courses.find(c => c.id === group?.courseId);
     const statusLabel: Record<AttendanceStatus, string> = {
@@ -212,9 +136,12 @@ export default function AttendancePage() {
     excused: eligibleStudents.filter(s => attendanceMap[s.id] === 'excused').length,
   };
 
+  if (catalogError) return <PageReadError title="تسجيل الحضور" onRetry={reloadCatalog} />;
+
   return (
     <Layout title="تسجيل الحضور">
       <div className="space-y-5">
+        {registerError && <ResourceError onRetry={loadAttendance} />}
         {/* Controls */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
@@ -234,7 +161,7 @@ export default function AttendancePage() {
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
             </div>
             <div className="flex items-end gap-2">
-              <button onClick={handlePrintSheet} title="طباعة ورقة الحضور"
+              <button onClick={handlePrintSheet} disabled={!registerReady} title="طباعة ورقة الحضور"
                 className="py-2.5 px-3 bg-gray-50 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-100 transition-colors no-print">
                 <Printer size={16} />
               </button>
@@ -258,7 +185,7 @@ export default function AttendancePage() {
               { label: 'مستأذن', count: counts.excused, color: 'text-blue-600 bg-blue-50' },
             ].map(item => (
               <div key={item.label} className={`p-3 rounded-xl text-center ${item.color}`}>
-                <p className="text-2xl font-bold">{item.count}</p>
+                <p className="text-2xl font-bold">{registerReady ? item.count : '—'}</p>
                 <p className="text-xs font-medium">{item.label}</p>
               </div>
             ))}
@@ -333,7 +260,7 @@ export default function AttendancePage() {
               })}
             </div>
             <div className="p-4 border-t border-gray-100">
-              <button onClick={handleSave} disabled={saving || !canRecord}
+              <button onClick={handleSave} disabled={saving || !canRecord || !registerReady}
                 title={canRecord ? '' : 'ليس لديك صلاحية تسجيل الحضور'}
                 className="w-full flex items-center justify-center gap-2 py-3 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-60"
                 style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>

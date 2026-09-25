@@ -129,5 +129,32 @@ await asUser('authenticated', A, async (q) => {
   ok('tenant_id يبقى = A بعد محاولة تغييره إلى B', r.ok && r.rows[0].t === A);
 });
 
+// ترحيل المرتبات مستقل وقابل لإعادة التنفيذ، ولا يغيّر سياسات RLS.
+console.log('\n[7] أعمدة المرتبات ونسب المدرسين وسندات الصرف');
+const payrollMigration = readFileSync('./docs/migrations/20260924_teacher_payroll.sql', 'utf8');
+await db.exec(payrollMigration);
+await db.exec(payrollMigration);
+ok('ترحيل المرتبات قابل لإعادة التنفيذ', true);
+await seed('authenticated', A, [
+  "INSERT INTO teachers (id, name, specialization, phone, pay_model, pay_rate, pay_notes) VALUES ('aaaaaaaa-0000-0000-0000-000000000010', 'مدرس تجريبي', 'رياضيات', '010', 'subscription_percentage', 60, 'نسبة الاشتراك')",
+  `INSERT INTO payroll (id, teacher_id, teacher_name, period, model, rate, base, gross, net, paid_amount, status, lines)
+    VALUES ('payroll-test', 'aaaaaaaa-0000-0000-0000-000000000010', 'مدرس تجريبي', '2026-09', 'subscription_percentage', 60, 200, 120, 120, 50, 'partial',
+      '[{"groupId":"g1","amount":120,"students":[{"studentId":"s1","subscriptionAmount":200,"rate":60,"amount":120}]}]'::jsonb)`,
+  "INSERT INTO expenses (category, amount, description, date, teacher_id, payroll_id, user_id, username, method) VALUES ('salaries', 50, 'صرف جزئي', '2026-09-24', 'aaaaaaaa-0000-0000-0000-000000000010', 'payroll-test', 'admin-test', 'admin', 'cash')",
+]);
+await asUser('authenticated', A, async (q) => {
+  const teacher = await q("SELECT pay_model, pay_rate FROM teachers WHERE id='aaaaaaaa-0000-0000-0000-000000000010'");
+  ok('نسبة المدرس محفوظة في السحابة', teacher.ok && Number(teacher.rows[0]?.pay_rate) === 60 && teacher.rows[0]?.pay_model === 'subscription_percentage');
+  const record = await q("SELECT rate, lines, tenant_id::text AS tenant FROM payroll WHERE id='payroll-test'");
+  ok('الكشف يحفظ النسبة وتفصيل الطلاب داخل مركزه', record.ok && record.rows[0]?.tenant === A && Number(record.rows[0]?.rate) === 60 && record.rows[0]?.lines[0].students[0].amount === 120);
+  const expense = await q("SELECT amount, method FROM expenses WHERE payroll_id='payroll-test'");
+  ok('سند الصرف مرتبط بالكشف', expense.ok && Number(expense.rows[0]?.amount) === 50 && expense.rows[0]?.method === 'cash');
+});
+await asUser('authenticated', B, async (q) => {
+  const record = await q("SELECT count(*)::int AS c FROM payroll WHERE id='payroll-test'");
+  const expense = await q("SELECT count(*)::int AS c FROM expenses WHERE payroll_id='payroll-test'");
+  ok('مركز آخر لا يرى كشف الراتب أو سند صرفه', record.ok && expense.ok && record.rows[0].c === 0 && expense.rows[0].c === 0);
+});
+
 console.log(`\nالنتيجة: ${pass} نجح، ${fail} فشل`);
 process.exit(fail ? 1 : 0);

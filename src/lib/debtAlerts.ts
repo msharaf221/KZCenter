@@ -2,16 +2,18 @@
  * تنبيهات المديونيات — كاش مشترك + اشتراك،
  * عشان السايدبار والداشبورد يوروا نفس الرقم من غير ما كل واحد يحسب من الصفر.
  */
-import { getDebtors } from './db';
+import { getDebtors } from '../services/balanceService';
 
 export interface DebtAlert {
   debtorsCount: number;
   totalRemaining: number;
   overdueCount: number;
   overdueAmount: number;
+  unavailable?: boolean;
+  loading?: boolean;
 }
 
-const EMPTY: DebtAlert = { debtorsCount: 0, totalRemaining: 0, overdueCount: 0, overdueAmount: 0 };
+const EMPTY: DebtAlert = { debtorsCount: 0, totalRemaining: 0, overdueCount: 0, overdueAmount: 0, loading: true };
 
 let cache: DebtAlert = EMPTY;
 let lastRefreshAt = 0;
@@ -42,7 +44,7 @@ function publish(next: DebtAlert) {
  * @param force تجاهل الـ throttle (بعد تحصيل دفعة مثلاً)
  */
 export async function refreshDebtAlert(force = false): Promise<DebtAlert> {
-  if (!force && Date.now() - lastRefreshAt < THROTTLE_MS) return cache;
+  if (!force && !cache.loading && !cache.unavailable && Date.now() - lastRefreshAt < THROTTLE_MS) return cache;
   if (inFlight) return inFlight;
 
   inFlight = (async () => {
@@ -58,6 +60,8 @@ export async function refreshDebtAlert(force = false): Promise<DebtAlert> {
       return next;
     } catch (e) {
       console.error('refreshDebtAlert error:', e);
+      cache = { ...cache, loading: false, unavailable: true };
+      listeners.forEach(listener => listener(cache));
       return cache;
     } finally {
       inFlight = null;

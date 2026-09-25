@@ -1,47 +1,12 @@
-import { NavLink } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import {
-  LayoutDashboard, Users, GraduationCap, BookOpen,
-  Users2, CreditCard, ClipboardCheck, BarChart3,
-  Settings, LogOut, ChevronRight, ChevronLeft,
-  Wallet, FileText, UserCog, CalendarDays, Archive, Shield, AlertTriangle,
-} from 'lucide-react';
-import { useAuth } from '../../contexts/AuthContext';
+import { NavLink } from 'react-router-dom';
+import { getVisibleNavigation } from '../../app/routes';
 import { useApp } from '../../contexts/AppContext';
+import { useAuth } from '../../contexts/AuthContext';
+import { DebtAlert, refreshDebtAlert, subscribeDebtAlert } from '../../lib/debtAlerts';
+import { ROLE_LABEL } from '../../lib/permissions';
 import { getContrastColor } from '../../lib/utils';
-import { subscribeDebtAlert, refreshDebtAlert, DebtAlert } from '../../lib/debtAlerts';
-import { visiblePages, ROLE_LABEL } from '../../lib/permissions';
-import type { PageKey } from '../../lib/permissions';
-
-interface NavItem {
-  path: string;
-  label: string;
-  icon: React.ReactNode;
-  /** مفتاح الصلاحية في permissions.ts — من غيره العنصر ظاهر للكل */
-  page?: PageKey;
-  /** يعرض عدّاد تنبيه المديونيات جنب العنصر */
-  debtBadge?: boolean;
-}
-
-const navItems: NavItem[] = [
-  { path: '/', label: 'لوحة التحكم', icon: <LayoutDashboard size={20} /> },
-  { path: '/students', label: 'الطلاب', icon: <GraduationCap size={20} />, page: 'students' },
-  { path: '/teachers', label: 'المدرسون', icon: <Users size={20} />, page: 'teachers' },
-  { path: '/courses', label: 'الكورسات', icon: <BookOpen size={20} />, page: 'courses' },
-  { path: '/inventory', label: 'الملازم والمخزن', icon: <Archive size={20} />, page: 'inventory' },
-  { path: '/groups', label: 'المجموعات', icon: <Users2 size={20} />, page: 'groups' },
-  { path: '/payments', label: 'المدفوعات', icon: <CreditCard size={20} />, page: 'payments' },
-  { path: '/debtors', label: 'المديونيات', icon: <AlertTriangle size={20} />, page: 'debtors', debtBadge: true },
-  { path: '/expenses', label: 'المصروفات', icon: <Wallet size={20} />, page: 'expenses' },
-  { path: '/attendance', label: 'الحضور', icon: <ClipboardCheck size={20} />, page: 'attendance' },
-  { path: '/exams', label: 'الاختبارات', icon: <FileText size={20} />, page: 'exams' },
-  { path: '/daily-reports', label: 'التقرير اليومي', icon: <CalendarDays size={20} />, page: 'dailyReports' },
-  { path: '/reports', label: 'التقارير', icon: <BarChart3 size={20} />, page: 'reports' },
-  { path: '/users', label: 'المستخدمون', icon: <UserCog size={20} />, page: 'users' },
-  { path: '/audit-log', label: 'سجل المراجعة', icon: <Shield size={20} />, page: 'auditLog' },
-  { path: '/settings', label: 'الإعدادات', icon: <Settings size={20} />, page: 'settings' },
-];
-
 
 export default function Sidebar() {
   const { user, logout, can } = useAuth();
@@ -57,11 +22,7 @@ export default function Sidebar() {
     return unsubscribe;
   }, [canSeeDebtors]);
 
-  const pages = visiblePages(user?.role);
-  const visibleItems = navItems.filter(item => {
-    if (item.page && !pages.includes(item.page)) return false;
-    return true;
-  });
+  const visibleItems = getVisibleNavigation(user?.role);
 
   return (
     <aside
@@ -78,19 +39,23 @@ export default function Sidebar() {
           <div className="flex items-center gap-2">
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}
+              style={{
+                backgroundColor: settings?.primaryColor || '#6366f1',
+                color: getContrastColor(settings?.primaryColor || '#6366f1'),
+              }}
             >
               E
             </div>
-            <span className="font-bold text-gray-900 truncate text-sm">
-              {settings?.centerName || 'EduCenter Pro'}
-            </span>
+            <span className="font-bold text-gray-900 truncate text-sm">{settings?.centerName || 'EduCenter Pro'}</span>
           </div>
         )}
         {!sidebarOpen && (
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm mx-auto"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}
+            style={{
+              backgroundColor: settings?.primaryColor || '#6366f1',
+              color: getContrastColor(settings?.primaryColor || '#6366f1'),
+            }}
           >
             E
           </div>
@@ -105,7 +70,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-4 px-2">
-        {visibleItems.map((item) => (
+        {visibleItems.map(item => (
           <NavLink
             key={item.path}
             to={item.path}
@@ -113,33 +78,37 @@ export default function Sidebar() {
             className={({ isActive }) => `
               flex items-center gap-3 px-3 py-2.5 rounded-xl mb-1
               transition-all duration-200 group relative
-              ${isActive
-                ? 'text-white shadow-md'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-              }
+              ${isActive ? 'text-white shadow-md' : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'}
               ${!sidebarOpen ? 'justify-center' : ''}
             `}
-            style={({ isActive }) => isActive ? {
-              backgroundColor: settings?.primaryColor || '#6366f1',
-              color: getContrastColor(settings?.primaryColor || '#6366f1'),
-            } : {}}
+            style={({ isActive }) =>
+              isActive
+                ? {
+                    backgroundColor: settings?.primaryColor || '#6366f1',
+                    color: getContrastColor(settings?.primaryColor || '#6366f1'),
+                  }
+                : {}
+            }
           >
-            <span className="flex-shrink-0">{item.icon}</span>
-            {sidebarOpen && (
-              <span className="font-medium text-sm truncate">{item.label}</span>
-            )}
-            {item.debtBadge && debtAlert && debtAlert.debtorsCount > 0 && (
-              sidebarOpen ? (
+            <span className="flex-shrink-0">
+              <item.icon size={20} />
+            </span>
+            {sidebarOpen && <span className="font-medium text-sm truncate">{item.label}</span>}
+            {item.debtBadge &&
+              debtAlert &&
+              debtAlert.debtorsCount > 0 &&
+              (sidebarOpen ? (
                 <span className="mr-auto bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center">
                   {debtAlert.debtorsCount}
                 </span>
               ) : (
                 <span className="absolute top-1 left-1 w-2 h-2 bg-red-500 rounded-full" />
-              )
-            )}
+              ))}
             {!sidebarOpen && (
-              <div className="absolute right-full mr-2 bg-gray-900 text-white text-xs px-2 py-1 rounded
-                opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50">
+              <div
+                className="absolute right-full mr-2 bg-gray-900 text-white text-xs px-2 py-1 rounded
+                opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50"
+              >
                 {item.label}
               </div>
             )}
@@ -153,7 +122,10 @@ export default function Sidebar() {
           <div className="flex items-center gap-3">
             <div
               className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0"
-              style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}
+              style={{
+                backgroundColor: settings?.primaryColor || '#6366f1',
+                color: getContrastColor(settings?.primaryColor || '#6366f1'),
+              }}
             >
               {user?.username?.[0]?.toUpperCase() || 'A'}
             </div>

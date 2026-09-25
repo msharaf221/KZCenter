@@ -9,26 +9,12 @@
  *
  * السجل القديم في localStorage بيتنقل مرة واحدة تلقائياً (`migrateAuditFromLocalStorage`).
  */
-import { dbAdd, dbGetAll, dbGetById, generateId } from './db';
+import { readAll, readById } from '../data/readers';
+import { dbAdd } from '../data/records';
+import { generateId } from './ids';
 
-export type AuditAction =
-  | 'create' | 'update' | 'delete' | 'login' | 'logout'
-  | 'export' | 'import' | 'backup' | 'restore'
-  | 'void' | 'refund' | 'payment' | 'payroll' | 'sync'
-  /** تصفير المديونيات (إبراء ذمة) — إلغاء أقساط غير مسددة */
-  | 'writeoff';
-
-export interface AuditEntry {
-  id: string;
-  userId: string;
-  username: string;
-  action: AuditAction | string;
-  entity: string;
-  entityId?: string;
-  details?: string;
-  timestamp: string;
-  ip?: string;
-}
+import type { AuditEntry } from '../domain/audit';
+export type { AuditAction, AuditEntry } from '../domain/audit';
 
 const LEGACY_KEY = 'educenter_audit_log';
 const MIGRATION_FLAG = 'audit_migration_v1';
@@ -40,7 +26,7 @@ let migratePromise: Promise<number> | null = null;
 /** كل السجلات (الأحدث أولاً) */
 export async function getAuditEntries(limit?: number): Promise<AuditEntry[]> {
   try {
-    const rows = await dbGetAll<AuditEntry>('audit_logs');
+    const rows = await readAll<AuditEntry>('audit_logs');
     const sorted = rows.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
     return typeof limit === 'number' && limit > 0 ? sorted.slice(0, limit) : sorted;
   } catch {
@@ -49,7 +35,7 @@ export async function getAuditEntries(limit?: number): Promise<AuditEntry[]> {
 }
 
 export async function getAuditEntry(id: string): Promise<AuditEntry | undefined> {
-  return dbGetById<AuditEntry>('audit_logs', id);
+  return readById<AuditEntry>('audit_logs', id);
 }
 
 /**
@@ -76,7 +62,7 @@ export function addAuditEntry(entry: Omit<AuditEntry, 'id' | 'timestamp'>): void
 
 /** مسح السجل (للمسؤول فقط — وبيسجّل نفسه كحدث) */
 export async function clearAuditLog(by?: { userId: string; username: string }): Promise<void> {
-  const db = await (await import('./db')).getDB();
+  const db = await (await import('../data/database')).getDB();
   await db.clear('audit_logs');
   if (by) {
     await dbAdd('audit_logs', {
@@ -94,7 +80,7 @@ export async function clearAuditLog(by?: { userId: string; username: string }): 
 
 /** قصّ السجل لو عدّى الحد (بيشال الأقدم) */
 async function trimAuditLog(): Promise<void> {
-  const db = await (await import('./db')).getDB();
+  const db = await (await import('../data/database')).getDB();
   const all = (await db.getAll('audit_logs')) as AuditEntry[];
   if (all.length <= MAX_ENTRIES) return;
 

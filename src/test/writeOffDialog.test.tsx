@@ -8,6 +8,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import dayjs from 'dayjs';
 import WriteOffDebtsDialog from '../components/WriteOffDebtsDialog';
+import { AuthProvider } from '../contexts/AuthContext';
+import { seedSession } from './helpers/session';
 import {
   dbAdd, dbGetById, dbClearStore, generateId,
   Student, Group, Course, Installment, Enrollment,
@@ -64,6 +66,7 @@ function digits(value: string): string {
 const amountText = () => digits(screen.getByTestId('writeoff-amount').textContent || '');
 
 beforeEach(async () => {
+  await seedSession('admin');
   for (const store of ['students', 'groups', 'courses', 'payments', 'enrollments', 'installments'] as const) {
     await dbClearStore(store);
   }
@@ -72,7 +75,7 @@ beforeEach(async () => {
 describe('نافذة تصفير المديونيات', () => {
   it('بتعرض ملخص بالأرقام من قاعدة البيانات (النطاق الافتراضي: المستحق والمتأخر)', async () => {
     await seedDebts();
-    render(<WriteOffDebtsDialog isOpen onClose={() => {}} onDone={() => {}} currency="جنيه" />);
+    render(<AuthProvider><WriteOffDebtsDialog isOpen onClose={() => {}} onDone={() => {}} currency="جنيه" /></AuthProvider>);
 
     // النطاق الافتراضي due → القسط المتأخر بس
     await waitFor(() => expect(screen.getByTestId('writeoff-installments')).toHaveTextContent('1'));
@@ -85,7 +88,7 @@ describe('نافذة تصفير المديونيات', () => {
   it('تغيير النطاق لكل المتبقي بيحدّث الملخص', async () => {
     await seedDebts();
     const user = userEvent.setup();
-    render(<WriteOffDebtsDialog isOpen onClose={() => {}} onDone={() => {}} currency="جنيه" />);
+    render(<AuthProvider><WriteOffDebtsDialog isOpen onClose={() => {}} onDone={() => {}} currency="جنيه" /></AuthProvider>);
 
     await waitFor(() => expect(amountText()).toContain('500'));
     await user.click(screen.getByText('كل المتبقي'));
@@ -98,7 +101,7 @@ describe('نافذة تصفير المديونيات', () => {
     await seedDebts();
     const user = userEvent.setup();
     const onDone = vi.fn();
-    render(<WriteOffDebtsDialog isOpen onClose={() => {}} onDone={onDone} currency="جنيه" />);
+    render(<AuthProvider><WriteOffDebtsDialog isOpen onClose={() => {}} onDone={onDone} currency="جنيه" /></AuthProvider>);
 
     const confirmBtn = await screen.findByRole('button', { name: 'تأكيد التصفير' });
     expect(confirmBtn).toBeDisabled();
@@ -122,7 +125,7 @@ describe('نافذة تصفير المديونيات', () => {
     const { overdueId, upcomingId } = await seedDebts();
     const user = userEvent.setup();
     const onDone = vi.fn();
-    render(<WriteOffDebtsDialog isOpen onClose={() => {}} onDone={onDone} currency="جنيه" />);
+    render(<AuthProvider><WriteOffDebtsDialog isOpen onClose={() => {}} onDone={onDone} currency="جنيه" /></AuthProvider>);
 
     const inputs = await screen.findAllByRole('textbox');
     await user.type(inputs[0], 'إبراء ذمة قبل التجديدات');
@@ -145,7 +148,7 @@ describe('نافذة تصفير المديونيات', () => {
   });
 
   it('لو مفيش مديونيات: الملخص بيوضّح كده والتأكيد متعطل', async () => {
-    render(<WriteOffDebtsDialog isOpen onClose={() => {}} onDone={() => {}} currency="جنيه" />);
+    render(<AuthProvider><WriteOffDebtsDialog isOpen onClose={() => {}} onDone={() => {}} currency="جنيه" /></AuthProvider>);
 
     await waitFor(() =>
       expect(screen.getByText(/لا توجد مديونيات مطابقة لهذا النطاق/)).toBeInTheDocument()
@@ -157,7 +160,7 @@ describe('نافذة تصفير المديونيات', () => {
     await seedDebts();
     const user = userEvent.setup();
     const onDone = vi.fn();
-    render(<WriteOffDebtsDialog isOpen onClose={() => {}} onDone={onDone} currency="جنيه" />);
+    render(<AuthProvider><WriteOffDebtsDialog isOpen onClose={() => {}} onDone={onDone} currency="جنيه" /></AuthProvider>);
 
     const inputs = await screen.findAllByRole('textbox');
     await user.type(inputs[0], 'إبراء ذمة');

@@ -1,21 +1,23 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowRight, BookOpen, CreditCard, Phone, PhoneCall, ClipboardCheck, GraduationCap, Receipt, ArrowLeftRight, MessageCircle, RefreshCw, User, School, Megaphone, CalendarDays, StickyNote, Users } from 'lucide-react';
+import dayjs from 'dayjs';
+import { ArrowLeftRight, ArrowRight, BookOpen, CalendarDays, ClipboardCheck, CreditCard, GraduationCap, Megaphone, MessageCircle, Phone, PhoneCall, Receipt, RefreshCw, School, StickyNote, User, Users } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
-import Modal from '../components/ui/Modal';
-import {
-  dbGetById, dbGetAll, dbGetByIndex, getStudentBalance, recordInstallmentPayment, getTransferHistory,
-  Student, Group, Course, Payment, Attendance, Exam, Grade, Teacher, StudentBalance, TransferRecord, Enrollment, RenewalInfo,
-} from '../lib/db';
-import { RENEWAL_STATE_LABEL, renewalInfo } from '../lib/billing';
-import TransferDialog from '../components/TransferDialog';
+import PageReadError from '../components/layout/PageReadError';
 import RenewDialog from '../components/RenewDialog';
+import TransferDialog from '../components/TransferDialog';
 import Badge from '../components/ui/Badge';
-import { formatDate, formatCurrency, getWhatsAppLink, getContrastColor } from '../lib/utils';
+import Modal from '../components/ui/Modal';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { usePageResource } from '../hooks/usePageResource';
+import type { RenewalInfo } from '../lib/billing';
+import { RENEWAL_STATE_LABEL } from '../lib/billing';
 import { notify } from '../lib/notifications';
-import dayjs from 'dayjs';
+import { formatCurrency, formatDate, getContrastColor, getWhatsAppLink } from '../lib/utils';
+import { collectStudentPayment } from '../services/commands/studentFinance';
+import { emptyStudentProfile, loadStudentProfile } from '../services/queries/studentProfile';
 
 const RENEWAL_STYLE: Record<RenewalInfo['state'], string> = {
   active: 'bg-green-50 text-green-700',
@@ -41,107 +43,34 @@ function InfoItem({ icon, label, value, dir }: { icon: React.ReactNode; label: s
 
 export default function StudentProfilePage() {
   const { id } = useParams<{ id: string }>();
+  return <StudentProfileContent key={id} id={id} />;
+}
+
+function StudentProfileContent({ id }: { id?: string }) {
+  const task = useCommandTask();
   const navigate = useNavigate();
   const { settings } = useApp();
   const { can, user } = useAuth();
   const canCollect = can('payments', 'create');
   const showMoney = can('payments', 'view'); // الأرقام المالية لمن عنده صلاحية المدفوعات
   const primaryColor = settings?.primaryColor || '#6366f1';
+  const query = useCallback(() => loadStudentProfile(id || '', settings?.upcomingDueDays, { role: user?.role, teacherId: user?.teacherId }), [id, settings?.upcomingDueDays, user?.role, user?.teacherId]);
+  const { data, loading, error, reload } = usePageResource(query, emptyStudentProfile());
+  const { student, allGroups, allCourses, allTeachers, groups, payments, balance, renewalByGroup, enrollmentByGroup, transfers, attendance, examResults } = data;
+  const loadData = useCallback(async () => { await reload(); }, [reload]);
+  useEffect(() => {
+    if (!loading && !error && data.requestedId === id && !data.student) navigate('/students');
+  }, [loading, error, data, id, navigate]);
 
-  const [student, setStudent] = useState<Student | null>(null);
-  const [groups, setGroups] = useState<(Group & { courseName: string, teacherName: string })[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [attendance, setAttendance] = useState<Attendance[]>([]);
-  const [examResults, setExamResults] = useState<(Grade & { examName: string; maxGrade: number; examDate: string })[]>([]);
-  const [balance, setBalance] = useState<StudentBalance | null>(null);
-  const [transfers, setTransfers] = useState<TransferRecord[]>([]);
-  const [allGroups, setAllGroups] = useState<Group[]>([]);
-  const [allCourses, setAllCourses] = useState<Course[]>([]);
-  const [allTeachers, setAllTeachers] = useState<Teacher[]>([]);
   const [transferFrom, setTransferFrom] = useState<{ groupId: string; groupName: string } | null>(null);
   const [renewTarget, setRenewTarget] = useState<{ groupId: string } | null>(null);
-  const [renewalByGroup, setRenewalByGroup] = useState<Record<string, RenewalInfo>>({});
-  const [enrollmentByGroup, setEnrollmentByGroup] = useState<Record<string, Enrollment>>({});
-  const [loading, setLoading] = useState(true);
 
   // نافذة تحصيل دفعة (كاملة أو جزئية)
   const [payTarget, setPayTarget] = useState<{ groupId?: string; label: string; remaining: number } | null>(null);
   const [payAmount, setPayAmount] = useState<number>(0);
   const [payDate, setPayDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [payNotes, setPayNotes] = useState('');
-  const [savingPayment, setSavingPayment] = useState(false);
-
-  const loadData = useCallback(async () => {
-    if (!id) return;
-    try {
-      const s = await dbGetById<Student>('students', id);
-      if (!s) { navigate('/students'); return; }
-      setStudent(s);
-
-      const allGroups = await dbGetAll<Group>('groups');
-      const allCourses = await dbGetAll<Course>('courses');
-      const allTeachers = await dbGetAll<Teacher>('teachers');
-      setAllGroups(allGroups);
-      setAllCourses(allCourses);
-      setAllTeachers(allTeachers);
-      
-      const studentGroups = allGroups.filter(g => s.enrolledGroups?.includes(g.id));
-      const enrichedGroups = studentGroups.map(g => ({
-        ...g,
-        courseName: allCourses.find(c => c.id === g.courseId)?.name || 'غير معروف',
-        teacherName: allTeachers.find(t => t.id === g.teacherId)?.name || 'غير معروف'
-      }));
-      setGroups(enrichedGroups);
-
-      const studentPayments = await dbGetByIndex<Payment>('payments', 'by-studentId', id);
-      setPayments(studentPayments.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-
-      // الحساب (شهر بشهر)
-      const b = await getStudentBalance(id);
-      setBalance(b);
-
-      // حالة الاشتراك (ساري/قرب ينتهي/منتهي) لكل مجموعة
-      const today = dayjs().format('YYYY-MM-DD');
-      const ahead = settings?.upcomingDueDays ?? 7;
-      const rmap: Record<string, RenewalInfo> = {};
-      for (const g of studentGroups) {
-        const gb = b?.groups.find(x => x.groupId === g.id);
-        rmap[g.id] = renewalInfo(gb?.installments || [], today, ahead);
-      }
-      setRenewalByGroup(rmap);
-
-      const ens = await dbGetByIndex<Enrollment>('enrollments', 'by-studentId', id);
-      const emap: Record<string, Enrollment> = {};
-      for (const e of ens) if (e.status === 'active') emap[e.groupId] = e;
-      setEnrollmentByGroup(emap);
-
-      // سجل التحويلات
-      setTransfers(await getTransferHistory(id));
-
-      // سجل الحضور (using index for efficiency)
-      const studentAttendance = await dbGetByIndex<Attendance>('attendance', 'by-studentId', id);
-      setAttendance(studentAttendance.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-
-      // نتائج الامتحانات (امتحانات مجموعات الطالب + درجة الطالب فيها)
-      const allExams = await dbGetAll<Exam>('exams');
-      const allGrades = await dbGetAll<Grade>('grades');
-      const studentGrades = allGrades.filter(g => g.studentId === id);
-      const results = studentGrades
-        .map(g => {
-          const exam = allExams.find(e => e.id === g.examId);
-          if (!exam) return null;
-          return { ...g, examName: exam.name, maxGrade: exam.maxGrade, examDate: exam.date };
-        })
-        .filter((r): r is Grade & { examName: string; maxGrade: number; examDate: string } => r !== null)
-        .sort((a, b) => new Date(b.examDate).getTime() - new Date(a.examDate).getTime());
-      setExamResults(results);
-
-    } finally {
-      setLoading(false);
-    }
-  }, [id, navigate, settings?.upcomingDueDays]);
-
-  useEffect(() => { loadData(); }, [loadData]);
+  const savingPayment = task.pending;
 
   function openPay(groupId: string | undefined, label: string, remainingAmount: number) {
     setPayTarget({ groupId, label, remaining: remainingAmount });
@@ -158,9 +87,8 @@ export default function StudentProfilePage() {
       notify.error(`المبلغ أكبر من المتبقي (${formatCurrency(payTarget.remaining, settings?.currency)})`);
       return;
     }
-    setSavingPayment(true);
-    try {
-      const result = await recordInstallmentPayment({
+    await task.run(async () => {
+      const result = await collectStudentPayment(user, {
         studentId: id,
         groupId: payTarget.groupId,
         amount: payAmount,
@@ -175,14 +103,12 @@ export default function StudentProfilePage() {
       );
       setPayTarget(null);
       await loadData();
-    } catch {
-      notify.error('حدث خطأ أثناء التحصيل');
-    } finally {
-      setSavingPayment(false);
-    }
+    });
   }
 
-  if (loading) return <Layout title="جاري التحميل..."><div className="p-8 text-center animate-pulse">جاري التحميل...</div></Layout>;
+  if (error) return <PageReadError title="ملف الطالب" onRetry={reload} />;
+
+  if (loading || data.requestedId !== id) return <Layout title="جاري التحميل..."><div className="p-8 text-center animate-pulse">جاري التحميل...</div></Layout>;
   if (!student) return null;
 
   const remaining = balance ? balance.remaining : (student.totalOwed || 0) - student.totalPaid;
@@ -295,170 +221,169 @@ export default function StudentProfilePage() {
                 <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المجموعة</th><th className="pb-3 font-semibold">الكورس</th><th className="pb-3 font-semibold text-center">المدرس</th><th className="pb-3 font-semibold text-center">الاشتراك</th>{canCollect && <th className="pb-3 font-semibold text-center">إجراءات</th>}</tr></thead>
                 <tbody className="divide-y divide-gray-50 text-sm">
                   {groups.length === 0 ? <tr><td colSpan={canCollect ? 5 : 4} className="py-4 text-center text-gray-400">لا توجد مجموعات</td></tr> :
-                   groups.map(g => {
-                    const r = renewalByGroup[g.id];
-                    const en = enrollmentByGroup[g.id];
-                    const hasPlan = !!r && r.periods > 0;
-                    return (
-                    <tr key={g.id} className="hover:bg-gray-50">
-                      <td className="py-3 font-medium">
-                        {g.name}
-                        {en?.renewalCount ? <span className="block text-[10px] text-gray-400">اتجدد {en.renewalCount} مرة</span> : null}
-                      </td>
-                      <td className="py-3 text-gray-600">{g.courseName}</td>
-                      <td className="py-3 text-center text-indigo-600 font-medium hover:underline cursor-pointer" onClick={() => navigate(`/teachers/${g.teacherId}`)}>{g.teacherName}</td>
-                      <td className="py-3 text-center">
-                        {hasPlan ? (
-                          <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${RENEWAL_STYLE[r.state]}`}
-                            title={r.endDate ? `ينتهي ${formatDate(r.endDate)}` : ''}>
-                            {RENEWAL_STATE_LABEL[r.state]}
-                            {r.endDate && <span className="block font-normal text-[10px] opacity-80">حتى {formatDate(r.endDate)}</span>}
-                          </span>
-                        ) : <span className="text-xs text-gray-300">—</span>}
-                      </td>
-                      {canCollect && (
-                        <td className="py-3 text-center">
-                          <div className="flex items-center justify-center gap-1 flex-wrap">
-                            <button onClick={() => setRenewTarget({ groupId: g.id })}
-                              className={`text-xs px-2 py-1 rounded-lg transition-colors flex items-center gap-1 ${r?.state === 'expired' ? 'text-white bg-red-500 hover:bg-red-600' : r?.state === 'expiring' ? 'text-yellow-800 bg-yellow-100 hover:bg-yellow-200' : 'text-green-700 bg-green-50 hover:bg-green-100'}`}
-                              title="تجديد الاشتراك في نفس المجموعة">
-                              <RefreshCw size={12} /> تجديد
-                            </button>
-                            <button onClick={() => setTransferFrom({ groupId: g.id, groupName: g.name })}
-                              className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
-                              تحويل
-                            </button>
-                          </div>
-                        </td>
-                      )}
-                    </tr>
-                    );
-                  })}
+                    groups.map(g => {
+                      const r = renewalByGroup[g.id];
+                      const en = enrollmentByGroup[g.id];
+                      const hasPlan = !!r && r.periods > 0;
+                      return (
+                        <tr key={g.id} className="hover:bg-gray-50">
+                          <td className="py-3 font-medium">
+                            {g.name}
+                            {en?.renewalCount ? <span className="block text-[10px] text-gray-400">اتجدد {en.renewalCount} مرة</span> : null}
+                          </td>
+                          <td className="py-3 text-gray-600">{g.courseName}</td>
+                          <td className="py-3 text-center text-indigo-600 font-medium hover:underline cursor-pointer" onClick={() => navigate(`/teachers/${g.teacherId}`)}>{g.teacherName}</td>
+                          <td className="py-3 text-center">
+                            {hasPlan ? (
+                              <span className={`inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold ${RENEWAL_STYLE[r.state]}`}
+                                title={r.endDate ? `ينتهي ${formatDate(r.endDate)}` : ''}>
+                                {RENEWAL_STATE_LABEL[r.state]}
+                                {r.endDate && <span className="block font-normal text-[10px] opacity-80">حتى {formatDate(r.endDate)}</span>}
+                              </span>
+                            ) : <span className="text-xs text-gray-300">—</span>}
+                          </td>
+                          {canCollect && (
+                            <td className="py-3 text-center">
+                              <div className="flex items-center justify-center gap-1 flex-wrap">
+                                <button onClick={() => setRenewTarget({ groupId: g.id })}
+                                  className={`text-xs px-2 py-1 rounded-lg transition-colors flex items-center gap-1 ${r?.state === 'expired' ? 'text-white bg-red-500 hover:bg-red-600' : r?.state === 'expiring' ? 'text-yellow-800 bg-yellow-100 hover:bg-yellow-200' : 'text-green-700 bg-green-50 hover:bg-green-100'}`}
+                                  title="تجديد الاشتراك في نفس المجموعة">
+                                  <RefreshCw size={12} /> تجديد
+                                </button>
+                                <button disabled={!can('students', 'edit')} onClick={() => setTransferFrom({ groupId: g.id, groupName: g.name })}
+                                  className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
+                                  تحويل
+                                </button>
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>
           </div>
 
           {showMoney && (
-          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden flex flex-col">
-            <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><CreditCard className="text-indigo-500" /> سجل المدفوعات</h2>
-            <div className="overflow-auto flex-1 max-h-[300px]">
-              <table className="w-full text-right">
-                <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المبلغ</th><th className="pb-3 font-semibold">النوع</th><th className="pb-3 font-semibold text-center">التاريخ</th></tr></thead>
-                <tbody className="divide-y divide-gray-50 text-sm">
-                  {payments.length === 0 ? <tr><td colSpan={3} className="py-4 text-center text-gray-400">لا يوجد مدفوعات</td></tr> :
-                   payments.map(p => (
-                    <tr key={p.id} className="hover:bg-gray-50">
-                      <td className="py-3 font-bold text-green-600">{formatCurrency(p.amount, settings?.currency)}</td>
-                      <td className="py-3 text-gray-600">{p.type === 'subscription' ? 'اشتراك' : p.type === 'books' ? 'كتب' : 'أخرى'}</td>
-                      <td className="py-3 text-center">{formatDate(p.date)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden flex flex-col">
+              <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><CreditCard className="text-indigo-500" /> سجل المدفوعات</h2>
+              <div className="overflow-auto flex-1 max-h-[300px]">
+                <table className="w-full text-right">
+                  <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">المبلغ</th><th className="pb-3 font-semibold">النوع</th><th className="pb-3 font-semibold text-center">التاريخ</th></tr></thead>
+                  <tbody className="divide-y divide-gray-50 text-sm">
+                    {payments.length === 0 ? <tr><td colSpan={3} className="py-4 text-center text-gray-400">لا يوجد مدفوعات</td></tr> :
+                      payments.map(p => (
+                        <tr key={p.id} className="hover:bg-gray-50">
+                          <td className="py-3 font-bold text-green-600">{formatCurrency(p.amount, settings?.currency)}</td>
+                          <td className="py-3 text-gray-600">{p.type === 'subscription' ? 'اشتراك' : p.type === 'books' ? 'كتب' : 'أخرى'}</td>
+                          <td className="py-3 text-center">{formatDate(p.date)}</td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
           )}
         </div>
 
         {/* الحساب — شهر بشهر */}
         {showMoney && (
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
-          <div className="flex flex-wrap items-center gap-2 mb-4">
-            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-              <Receipt className="text-indigo-500" /> الحساب
-            </h2>
-            {balance && (
-              <span className={`mr-auto text-sm font-bold px-3 py-1 rounded-full ${
-                balance.remaining > 0 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'
-              }`}>
-                {balance.remaining > 0
-                  ? `باقي عليه: ${formatCurrency(balance.remaining, settings?.currency)}`
-                  : 'خالص'}
-              </span>
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6">
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <Receipt className="text-indigo-500" /> الحساب
+              </h2>
+              {balance && (
+                <span className={`mr-auto text-sm font-bold px-3 py-1 rounded-full ${balance.remaining > 0 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'
+                  }`}>
+                  {balance.remaining > 0
+                    ? `باقي عليه: ${formatCurrency(balance.remaining, settings?.currency)}`
+                    : 'خالص'}
+                </span>
+              )}
+            </div>
+
+            {!balance || balance.groups.length === 0 ? (
+              <p className="py-4 text-center text-gray-400 text-sm">الطالب مش مسجل في أي مجموعة لسه</p>
+            ) : (
+              <div className="space-y-4">
+                {balance.groups.map(g => {
+                  const r = renewalByGroup[g.groupId];
+                  const months = g.installments
+                    .slice()
+                    .sort((a, b) => b.dueDate.localeCompare(a.dueDate) || b.periodIndex - a.periodIndex);
+                  return (
+                    <div key={g.groupId} className="rounded-2xl border border-gray-100 overflow-hidden">
+                      {/* رأس المجموعة */}
+                      <div className="flex flex-wrap items-center gap-3 p-3 bg-gray-50">
+                        <div className="flex-1 min-w-[150px]">
+                          <p className="text-sm font-bold text-gray-900">{g.groupName}</p>
+                          <p className="text-xs text-gray-500">
+                            {g.courseName}
+                            {r && r.periods > 0 && r.endDate && (
+                              <> • <span className={r.state === 'expired' ? 'text-red-600 font-semibold' : r.state === 'expiring' ? 'text-yellow-700 font-semibold' : ''}>
+                                {r.state === 'expired' ? `انتهى ${formatDate(r.endDate)}` : `مدفوع حتى ${formatDate(r.endDate)}`}
+                              </span></>
+                            )}
+                          </p>
+                        </div>
+                        <div className="text-xs text-center">
+                          <p className="text-gray-400">مدفوع</p>
+                          <p className="font-bold text-green-600">{formatCurrency(g.paid, settings?.currency)}</p>
+                        </div>
+                        <div className="text-xs text-center">
+                          <p className="text-gray-400">باقي</p>
+                          <p className={`font-bold ${g.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                            {g.remaining > 0 ? formatCurrency(g.remaining, settings?.currency) : 'خالص'}
+                          </p>
+                        </div>
+                        {canCollect && g.remaining > 0 && (
+                          <button onClick={() => openPay(g.groupId, g.groupName, g.remaining)}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+                            style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
+                            تحصيل
+                          </button>
+                        )}
+                        {canCollect && groups.some(x => x.id === g.groupId) && (
+                          <button onClick={() => setRenewTarget({ groupId: g.groupId })}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 flex items-center gap-1"
+                            title="تجديد">
+                            <RefreshCw size={12} /> تجديد
+                          </button>
+                        )}
+                      </div>
+                      {/* الشهور */}
+                      <table className="w-full text-right text-sm">
+                        <tbody className="divide-y divide-gray-50">
+                          {months.map(i => {
+                            const left = Math.max(0, i.amount - i.paidAmount);
+                            const label = i.status === 'paid' ? 'مدفوع'
+                              : i.paidAmount > 0 ? `باقي ${formatCurrency(left, settings?.currency)}`
+                                : 'لم يدفع';
+                            const cls = i.status === 'paid' ? 'bg-green-50 text-green-700'
+                              : i.paidAmount > 0 ? 'bg-yellow-50 text-yellow-700'
+                                : 'bg-red-50 text-red-600';
+                            return (
+                              <tr key={i.id} className="hover:bg-gray-50">
+                                <td className="py-2.5 px-3 font-medium text-gray-800">{i.periodLabel}</td>
+                                <td className="py-2.5 px-3 text-gray-500 text-xs">{formatDate(i.dueDate)}</td>
+                                <td className="py-2.5 px-3 text-center text-gray-700">{formatCurrency(i.amount, settings?.currency)}</td>
+                                <td className="py-2.5 px-3 text-center text-green-600">{formatCurrency(i.paidAmount, settings?.currency)}</td>
+                                <td className="py-2.5 px-3 text-left">
+                                  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${cls}`}>{label}</span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
-
-          {!balance || balance.groups.length === 0 ? (
-            <p className="py-4 text-center text-gray-400 text-sm">الطالب مش مسجل في أي مجموعة لسه</p>
-          ) : (
-            <div className="space-y-4">
-              {balance.groups.map(g => {
-                const r = renewalByGroup[g.groupId];
-                const months = g.installments
-                  .slice()
-                  .sort((a, b) => b.dueDate.localeCompare(a.dueDate) || b.periodIndex - a.periodIndex);
-                return (
-                  <div key={g.groupId} className="rounded-2xl border border-gray-100 overflow-hidden">
-                    {/* رأس المجموعة */}
-                    <div className="flex flex-wrap items-center gap-3 p-3 bg-gray-50">
-                      <div className="flex-1 min-w-[150px]">
-                        <p className="text-sm font-bold text-gray-900">{g.groupName}</p>
-                        <p className="text-xs text-gray-500">
-                          {g.courseName}
-                          {r && r.periods > 0 && r.endDate && (
-                            <> • <span className={r.state === 'expired' ? 'text-red-600 font-semibold' : r.state === 'expiring' ? 'text-yellow-700 font-semibold' : ''}>
-                              {r.state === 'expired' ? `انتهى ${formatDate(r.endDate)}` : `مدفوع حتى ${formatDate(r.endDate)}`}
-                            </span></>
-                          )}
-                        </p>
-                      </div>
-                      <div className="text-xs text-center">
-                        <p className="text-gray-400">مدفوع</p>
-                        <p className="font-bold text-green-600">{formatCurrency(g.paid, settings?.currency)}</p>
-                      </div>
-                      <div className="text-xs text-center">
-                        <p className="text-gray-400">باقي</p>
-                        <p className={`font-bold ${g.remaining > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                          {g.remaining > 0 ? formatCurrency(g.remaining, settings?.currency) : 'خالص'}
-                        </p>
-                      </div>
-                      {canCollect && g.remaining > 0 && (
-                        <button onClick={() => openPay(g.groupId, g.groupName, g.remaining)}
-                          className="px-3 py-1.5 rounded-lg text-xs font-semibold"
-                          style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
-                          تحصيل
-                        </button>
-                      )}
-                      {canCollect && groups.some(x => x.id === g.groupId) && (
-                        <button onClick={() => setRenewTarget({ groupId: g.groupId })}
-                          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-50 text-green-700 hover:bg-green-100 flex items-center gap-1"
-                          title="تجديد">
-                          <RefreshCw size={12} /> تجديد
-                        </button>
-                      )}
-                    </div>
-                    {/* الشهور */}
-                    <table className="w-full text-right text-sm">
-                      <tbody className="divide-y divide-gray-50">
-                        {months.map(i => {
-                          const left = Math.max(0, i.amount - i.paidAmount);
-                          const label = i.status === 'paid' ? 'مدفوع'
-                            : i.paidAmount > 0 ? `باقي ${formatCurrency(left, settings?.currency)}`
-                            : 'لم يدفع';
-                          const cls = i.status === 'paid' ? 'bg-green-50 text-green-700'
-                            : i.paidAmount > 0 ? 'bg-yellow-50 text-yellow-700'
-                            : 'bg-red-50 text-red-600';
-                          return (
-                            <tr key={i.id} className="hover:bg-gray-50">
-                              <td className="py-2.5 px-3 font-medium text-gray-800">{i.periodLabel}</td>
-                              <td className="py-2.5 px-3 text-gray-500 text-xs">{formatDate(i.dueDate)}</td>
-                              <td className="py-2.5 px-3 text-center text-gray-700">{formatCurrency(i.amount, settings?.currency)}</td>
-                              <td className="py-2.5 px-3 text-center text-green-600">{formatCurrency(i.paidAmount, settings?.currency)}</td>
-                              <td className="py-2.5 px-3 text-left">
-                                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${cls}`}>{label}</span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
         )}
 
         {/* سجل التحويلات */}
@@ -522,11 +447,10 @@ export default function StudentProfilePage() {
                         <tr key={a.id} className="hover:bg-gray-50">
                           <td className="py-2">{formatDate(a.date)}</td>
                           <td className="py-2 text-center">
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                              a.status === 'present' ? 'bg-green-50 text-green-600' :
-                              a.status === 'absent' ? 'bg-red-50 text-red-600' :
-                              a.status === 'late' ? 'bg-yellow-50 text-yellow-600' : 'bg-blue-50 text-blue-600'
-                            }`}>
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${a.status === 'present' ? 'bg-green-50 text-green-600' :
+                                a.status === 'absent' ? 'bg-red-50 text-red-600' :
+                                  a.status === 'late' ? 'bg-yellow-50 text-yellow-600' : 'bg-blue-50 text-blue-600'
+                              }`}>
                               {a.status === 'present' ? 'حاضر' : a.status === 'absent' ? 'غائب' : a.status === 'late' ? 'متأخر' : 'مستأذن'}
                             </span>
                           </td>
@@ -547,19 +471,19 @@ export default function StudentProfilePage() {
                 <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">الامتحان</th><th className="pb-3 font-semibold text-center">الدرجة</th><th className="pb-3 font-semibold text-center">النسبة</th><th className="pb-3 font-semibold text-center">التاريخ</th></tr></thead>
                 <tbody className="divide-y divide-gray-50 text-sm">
                   {examResults.length === 0 ? <tr><td colSpan={4} className="py-4 text-center text-gray-400">لا توجد نتائج بعد</td></tr> :
-                   examResults.map(r => {
-                    const pct = r.maxGrade > 0 ? Math.round((r.grade / r.maxGrade) * 100) : 0;
-                    return (
-                      <tr key={r.id} className="hover:bg-gray-50">
-                        <td className="py-3 font-medium">{r.examName}</td>
-                        <td className="py-3 text-center font-bold">{r.grade} / {r.maxGrade}</td>
-                        <td className="py-3 text-center">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${pct >= 75 ? 'bg-green-50 text-green-600' : pct >= 50 ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'}`}>{pct}%</span>
-                        </td>
-                        <td className="py-3 text-center text-gray-500">{formatDate(r.examDate)}</td>
-                      </tr>
-                    );
-                  })}
+                    examResults.map(r => {
+                      const pct = r.maxGrade > 0 ? Math.round((r.grade / r.maxGrade) * 100) : 0;
+                      return (
+                        <tr key={r.id} className="hover:bg-gray-50">
+                          <td className="py-3 font-medium">{r.examName}</td>
+                          <td className="py-3 text-center font-bold">{r.grade} / {r.maxGrade}</td>
+                          <td className="py-3 text-center">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${pct >= 75 ? 'bg-green-50 text-green-600' : pct >= 50 ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'}`}>{pct}%</span>
+                          </td>
+                          <td className="py-3 text-center text-gray-500">{formatDate(r.examDate)}</td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>
@@ -596,7 +520,7 @@ export default function StudentProfilePage() {
 
       {/* نافذة تحصيل دفعة (كاملة أو جزئية) */}
       {payTarget && (
-        <Modal isOpen={!!payTarget} onClose={() => setPayTarget(null)} title={`تحصيل دفعة — ${payTarget.label}`} size="md">
+        <Modal isOpen={!!payTarget} onClose={() => { if (!savingPayment) setPayTarget(null); }} title={`تحصيل دفعة — ${payTarget.label}`} size="md">
           <div className="space-y-4">
             <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 text-sm">
               <div className="flex justify-between mb-1">
@@ -648,7 +572,7 @@ export default function StudentProfilePage() {
               style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
               {savingPayment ? 'جاري الحفظ...' : 'تأكيد التحصيل'}
             </button>
-            <button onClick={() => setPayTarget(null)}
+            <button disabled={savingPayment} onClick={() => setPayTarget(null)}
               className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm hover:bg-gray-200">
               إلغاء
             </button>

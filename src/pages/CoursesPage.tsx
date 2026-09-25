@@ -1,33 +1,36 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Plus, Edit2, Trash2, Search, Wand2, Tag } from 'lucide-react';
+import { Edit2, Plus, Search, Tag, Trash2, Wand2 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import Layout from '../components/layout/Layout';
-import Modal from '../components/ui/Modal';
+import PageReadError from '../components/layout/PageReadError';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, recalculateStudentTotalPaid, Course, CourseLevel, Group, Student } from '../lib/db';
-import { formatCurrency, COLORS, getContrastColor } from '../lib/utils';
+import Modal from '../components/ui/Modal';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import type { Course, CourseLevel } from '../domain/models';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { usePageResource } from '../hooks/usePageResource';
+import { generateId } from '../lib/ids';
 import { notify } from '../lib/notifications';
 import { addAuditEntry } from '../lib/security';
 import { SUBJECTS, SUBJECT_CATEGORIES, getSubject, type SubjectId } from '../lib/subjects';
-import { syncSubjects, getSubjectPrices, type SubjectSyncReport } from '../lib/subjectSync';
+import { getSubjectPrices, syncSubjects, type SubjectSyncReport } from '../lib/subjectSync';
+import { COLORS, formatCurrency, getContrastColor } from '../lib/utils';
+import { deleteCatalogRecord, saveCourse } from '../services/commands/catalog';
+import { loadCoursesCatalog } from '../services/queries/courses';
 
 const EMOJIS = ['📚', '🔢', '🔬', '💻', '🎨', '🎵', '🌍', '⚽', '🧪', '📖', '✏️', '🎯', '🧮', '🕌'];
 const CATEGORIES = [...new Set([...SUBJECT_CATEGORIES, 'علوم', 'حاسوب', 'فنون', 'رياضة', 'أخرى'])];
 
 export default function CoursesPage() {
+  const task = useCommandTask();
   const { settings } = useApp();
   const { user, can } = useAuth();
   const canWrite = can('courses', 'create') || can('courses', 'edit');
   const canDelete = can('courses', 'delete');
-  const [courses, setCourses] = useState<Course[]>([]);
   const [search, setSearch] = useState('');
-  const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Course | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [groupCounts, setGroupCounts] = useState<Record<string, number>>({});
-  const [studentCounts, setStudentCounts] = useState<Record<string, number>>({});
   const [form, setForm] = useState({
     name: '', category: 'علوم', description: '', price: 0,
     subjectId: undefined as SubjectId | undefined,
@@ -39,27 +42,10 @@ export default function CoursesPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncReport, setSyncReport] = useState<SubjectSyncReport | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const allCourses = await dbGetAll<Course>('courses');
-      const filtered = search
-        ? allCourses.filter(c => c.name.toLowerCase().includes(search.toLowerCase()))
-        : allCourses;
-      setCourses(filtered);
-      const groups = await dbGetAll<Group>('groups');
-      const gc: Record<string, number> = {};
-      const sc: Record<string, number> = {};
-      groups.forEach(g => {
-        gc[g.courseId] = (gc[g.courseId] || 0) + 1;
-        sc[g.courseId] = (sc[g.courseId] || 0) + g.studentIds.length;
-      });
-      setGroupCounts(gc);
-      setStudentCounts(sc);
-    } finally { setLoading(false); }
-  }, [search]);
-
-  useEffect(() => { load(); }, [load]);
+  const query = useCallback(() => loadCoursesCatalog({ search }), [search]);
+  const { data: { courses, groupCounts, studentCounts }, loading, reload: load, error } = usePageResource(query, {
+    courses: [], groupCounts: {}, studentCounts: {},
+  });
   useEffect(() => { getSubjectPrices().then(setSubjectPrices); }, []);
 
   function openAdd() {
@@ -129,47 +115,16 @@ export default function CoursesPage() {
   }
 
   async function handleSave() {
-    if (!form.name.trim()) { notify.error('اسم الكورس مطلوب'); return; }
-    try {
-      const courseId = editing?.id || generateId();
-      if (editing) {
-        const priceChanged = editing.price !== form.price;
-        await dbPut('courses', { ...editing, ...form, updatedAt: new Date().toISOString() });
-        notify.success('تم تحديث الكورس');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'update', entity: 'course', entityId: courseId,
-          details: `تعديل الكورس: ${form.name}`,
-        });
-
-        // عند تغيير السعر: إعادة حساب مستحقات كل الطلاب المسجلين في مجموعات هذا الكورس
-        if (priceChanged) {
-          const allGroups = await dbGetAll<Group>('groups');
-          const courseGroupIds = new Set(allGroups.filter(g => g.courseId === editing.id).map(g => g.id));
-          if (courseGroupIds.size > 0) {
-            const allStudents = await dbGetAll<Student>('students');
-            const affected = allStudents.filter(s => s.enrolledGroups?.some(gid => courseGroupIds.has(gid)));
-            for (const st of affected) {
-              await recalculateStudentTotalPaid(st.id);
-            }
-            if (affected.length > 0) {
-              notify.info(`تم تحديث مستحقات ${affected.length} طالب بالسعر الجديد`);
-            }
-          }
-        }
-      } else {
-        await dbAdd('courses', { id: courseId, ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-        notify.success('تم إضافة الكورس');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'create', entity: 'course', entityId: courseId,
-          details: `إضافة كورس: ${form.name}`,
-        });
-      }
+    await task.run(async () => {
+      const result = await saveCourse(user, form, editing?.id);
+      notify.success(editing ? 'تم تحديث الكورس' : 'تمت الإضافة بنجاح');
+      if (result.recalculated) notify.info(`تم تحديث مستحقات ${result.recalculated} طالب بالسعر الجديد`);
       setShowModal(false);
-      load();
-    } catch { notify.error('حدث خطأ'); }
+      await load();
+    });
   }
+
+  if (error) return <PageReadError title="الكورسات" onRetry={load} />;
 
   return (
     <Layout title="إدارة الكورسات">
@@ -304,7 +259,7 @@ export default function CoursesPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="col-span-2">
               <label className="block text-sm font-semibold text-gray-700 mb-1">اسم الكورس *</label>
-              <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
+              <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
             </div>
             <div className="col-span-2">
@@ -324,14 +279,14 @@ export default function CoursesPage() {
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">التصنيف</label>
-              <select value={form.category} onChange={e => setForm({...form, category: e.target.value})}
+              <select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
                 {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">السعر الشهري</label>
-              <input type="number" min={0} value={form.price} onChange={e => setForm({...form, price: +e.target.value})}
+              <input type="number" min={0} value={form.price} onChange={e => setForm({ ...form, price: +e.target.value })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
               <p className="text-[11px] text-gray-400 mt-1">المبلغ المطلوب من الطالب كل شهر</p>
             </div>
@@ -339,7 +294,7 @@ export default function CoursesPage() {
               <label className="block text-sm font-semibold text-gray-700 mb-1">عدد الحصص في الشهر</label>
               <input type="number" min={1} max={40} placeholder="8"
                 value={form.sessionsPerMonth ?? ''}
-                onChange={e => setForm({...form, sessionsPerMonth: e.target.value === '' ? undefined : Math.max(1, +e.target.value)})}
+                onChange={e => setForm({ ...form, sessionsPerMonth: e.target.value === '' ? undefined : Math.max(1, +e.target.value) })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
               <p className="text-[11px] text-gray-400 mt-1">
                 {form.price > 0 && form.sessionsPerMonth
@@ -351,7 +306,7 @@ export default function CoursesPage() {
               <label className="block text-sm font-semibold text-gray-700 mb-1">الأيقونة</label>
               <div className="flex flex-wrap gap-2">
                 {EMOJIS.map(e => (
-                  <button key={e} onClick={() => setForm({...form, icon: e})}
+                  <button key={e} onClick={() => setForm({ ...form, icon: e })}
                     className={`text-xl p-1 rounded-lg border-2 ${form.icon === e ? 'border-indigo-500' : 'border-transparent'}`}>
                     {e}
                   </button>
@@ -362,7 +317,7 @@ export default function CoursesPage() {
               <label className="block text-sm font-semibold text-gray-700 mb-1">اللون</label>
               <div className="flex flex-wrap gap-2">
                 {COLORS.map(c => (
-                  <button key={c} onClick={() => setForm({...form, color: c})}
+                  <button key={c} onClick={() => setForm({ ...form, color: c })}
                     className={`w-7 h-7 rounded-full border-2 ${form.color === c ? 'border-gray-800 scale-110' : 'border-transparent'}`}
                     style={{ backgroundColor: c }} />
                 ))}
@@ -370,7 +325,7 @@ export default function CoursesPage() {
             </div>
             <div className="col-span-2">
               <label className="block text-sm font-semibold text-gray-700 mb-1">الوصف</label>
-              <textarea value={form.description} onChange={e => setForm({...form, description: e.target.value})}
+              <textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
                 rows={2} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none resize-none" />
             </div>
           </div>
@@ -396,7 +351,7 @@ export default function CoursesPage() {
           </div>
         </div>
         <div className="flex gap-3 mt-5">
-          <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
+          <button onClick={handleSave} disabled={task.pending} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
             style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editing ? 'تحديث' : 'إضافة'}
           </button>
@@ -406,23 +361,12 @@ export default function CoursesPage() {
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف الكورس" message="هل أنت متأكد؟"
         onConfirm={async () => {
-          if (deleteId) {
-            // حماية: منع حذف كورس مرتبط بمجموعات نشطة
-            const allGroups = await dbGetAll<Group>('groups');
-            const linkedGroups = allGroups.filter(g => g.courseId === deleteId && !g.deleted);
-            if (linkedGroups.length > 0) {
-              notify.error(`لا يمكن حذف الكورس - مرتبط بـ ${linkedGroups.length} مجموعة. احذف المجموعات أولاً`);
-            } else {
-              await dbSoftDelete('courses', deleteId);
-              addAuditEntry({
-                userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-                action: 'delete', entity: 'course', entityId: deleteId,
-                details: `حذف كورس: ${courses.find(c => c.id === deleteId)?.name || deleteId}`,
-              });
-              notify.success('تم الحذف');
-              load();
-            }
-          }
+          if (!deleteId) return;
+          await task.run(async () => {
+            await deleteCatalogRecord(user, 'courses', deleteId);
+            notify.success('تم الحذف');
+            await load();
+          });
           setDeleteId(null);
         }}
         onCancel={() => setDeleteId(null)} danger />

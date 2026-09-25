@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import './index.css';
 import App from './App';
+import './index.css';
 import { installFocusGuard } from './lib/focusGuard';
 
 // إصلاح باغ الفوكس في Electron على ويندوز (نافذة alert/confirm الأصلية

@@ -10,7 +10,7 @@
  *
  * كل الدوال هنا بتفتح نافذة طباعة منسّقة RTL بشعار المركز وألوانه.
  */
-import type { Settings } from './db';
+import type { Settings } from '../domain/models';
 import { formatCurrency, formatDate } from './utils';
 
 // قفل تاج <script> مبني بالتجميع مش حرفياً:

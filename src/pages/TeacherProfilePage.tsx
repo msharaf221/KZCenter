@@ -1,13 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { Users2, ArrowRight, GraduationCap, Phone, Mail, BookOpen, Wallet, CalendarDays, StickyNote, MessageCircle, PhoneCall } from 'lucide-react';
+import { ArrowRight, BookOpen, CalendarDays, GraduationCap, Mail, MessageCircle, Phone, PhoneCall, StickyNote, Users2, Wallet } from 'lucide-react';
+import { useCallback, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
+import PageReadError from '../components/layout/PageReadError';
 import Badge from '../components/ui/Badge';
-import { dbGetById, dbGetAll, getGroupStudents, Teacher, Group, Student, Course } from '../lib/db';
-import { PAY_MODEL_LABEL } from '../lib/payroll';
-import { formatCurrency, formatDate, getWhatsAppLink } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import { describeTeacherPay } from '../domain/payroll/settings';
+import { usePageResource } from '../hooks/usePageResource';
+import { formatCurrency, formatDate, getWhatsAppLink } from '../lib/utils';
+import { emptyTeacherProfile, loadTeacherProfile } from '../services/queries/teacherProfile';
 
 /** عنصر بيانات مكتوب (اسم الحقل + القيمة) */
 function InfoItem({ icon, label, value, dir }: { icon: React.ReactNode; label: string; value?: string | number | null; dir?: 'ltr' | 'rtl' }) {
@@ -25,18 +27,6 @@ function InfoItem({ icon, label, value, dir }: { icon: React.ReactNode; label: s
   );
 }
 
-/** وصف طريقة حساب مستحقات المدرس بشكل مقروء */
-function payDescription(t: Teacher, currency?: string): string {
-  const model = t.payModel || 'fixed';
-  const label = PAY_MODEL_LABEL[model];
-  switch (model) {
-    case 'per_session': return `${label} — ${formatCurrency(t.payRate || 0, currency)} / حصة`;
-    case 'percentage': return `${label} — ${t.payRate || 0}% من المحصّل`;
-    case 'per_group': return `${label} — ${formatCurrency(t.payRate || 0, currency)} / مجموعة / شهر`;
-    default: return `${label} — ${formatCurrency(t.salary || 0, currency)} / شهر`;
-  }
-}
-
 export default function TeacherProfilePage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -44,49 +34,17 @@ export default function TeacherProfilePage() {
   const { can } = useAuth();
   const showMoney = can('payroll', 'view');
   const primaryColor = settings?.primaryColor || '#6366f1';
+  const query = useCallback(() => loadTeacherProfile(id || ''), [id]);
+  const { data, loading, error, reload } = usePageResource(query, emptyTeacherProfile());
+  const { teacher, groups, students } = data;
+  useEffect(() => {
+    if (!loading && !error && data.requestedId === id && !data.teacher) navigate('/teachers');
+  }, [loading, error, data, id, navigate]);
 
-  const [teacher, setTeacher] = useState<Teacher | null>(null);
-  const [groups, setGroups] = useState<(Group & { courseName: string })[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [loading, setLoading] = useState(true);
 
-  const loadData = useCallback(async () => {
-    if (!id) return;
-    try {
-      const t = await dbGetById<Teacher>('teachers', id);
-      if (!t) { navigate('/teachers'); return; }
-      setTeacher(t);
+  if (error) return <PageReadError title="ملف المدرس" onRetry={reload} />;
 
-      const allGroups = await dbGetAll<Group>('groups');
-      const teacherGroups = allGroups.filter(g => g.teacherId === id && !g.deleted);
-      
-      const courses = await dbGetAll<Course>('courses');
-      const enrichedGroups = teacherGroups.map(g => ({
-        ...g,
-        courseName: courses.find(c => c.id === g.courseId)?.name || 'غير معروف'
-      }));
-      setGroups(enrichedGroups);
-
-      // Get enrolled students from enrollments table (source of truth)
-      const teacherStudents: Student[] = [];
-      for (const g of teacherGroups) {
-        const groupStudents = await getGroupStudents(g.id);
-        for (const s of groupStudents) {
-          if (!teacherStudents.some(ts => ts.id === s.id)) {
-            teacherStudents.push(s);
-          }
-        }
-      }
-      setStudents(teacherStudents);
-
-    } finally {
-      setLoading(false);
-    }
-  }, [id, navigate]);
-
-  useEffect(() => { loadData(); }, [loadData]);
-
-  if (loading) return <Layout title="جاري التحميل..."><div className="p-8 text-center animate-pulse">جاري التحميل...</div></Layout>;
+  if (loading || data.requestedId !== id) return <Layout title="جاري التحميل..."><div className="p-8 text-center animate-pulse">جاري التحميل...</div></Layout>;
   if (!teacher) return null;
 
   return (
@@ -115,7 +73,7 @@ export default function TeacherProfilePage() {
               <InfoItem icon={<Mail size={15} />} label="البريد الإلكتروني" value={teacher.email} dir="ltr" />
               <InfoItem icon={<BookOpen size={15} />} label="التخصص" value={teacher.specialization} />
               {showMoney && (
-                <InfoItem icon={<Wallet size={15} />} label="طريقة حساب المستحقات" value={payDescription(teacher, settings?.currency)} />
+                <InfoItem icon={<Wallet size={15} />} label="طريقة حساب المستحقات" value={describeTeacherPay(teacher, settings?.currency)} />
               )}
               <InfoItem icon={<CalendarDays size={15} />} label="تاريخ الانضمام" value={formatDate(teacher.createdAt)} />
               {showMoney && teacher.payNotes && (
@@ -129,6 +87,12 @@ export default function TeacherProfilePage() {
             </div>
 
             <div className="flex flex-wrap gap-2 text-xs font-medium">
+              {showMoney && (
+                <button onClick={() => navigate(`/payroll?teacher=${encodeURIComponent(teacher.id)}`)}
+                  className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-xl border border-indigo-100 hover:bg-indigo-100">
+                  <Wallet size={14} /> كشف المرتبات
+                </button>
+              )}
               <a href={getWhatsAppLink(teacher.phone)} target="_blank" rel="noreferrer" title={`واتساب ${teacher.phone}`}
                 className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100 hover:bg-green-50 hover:text-green-600 transition-colors">
                 <MessageCircle size={14} /> واتساب

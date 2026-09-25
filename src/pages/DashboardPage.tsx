@@ -1,32 +1,48 @@
-import { useState, useEffect } from 'react';
+import dayjs from 'dayjs';
 import {
-  GraduationCap, Users, BookOpen, Users2,
-  DollarSign, Clock, TrendingUp, AlertCircle, AlertTriangle, CalendarX, RefreshCw, MessageCircle,
+  AlertCircle, AlertTriangle,
+  BookOpen,
+  CalendarX,
+  Clock,
+  DollarSign,
+  GraduationCap,
+  MessageCircle,
+  RefreshCw,
+  TrendingUp,
+  Users,
+  Users2,
 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, PieChart, Pie, Cell, Legend,
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Cell, Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis, YAxis,
 } from 'recharts';
 import Layout from '../components/layout/Layout';
-import { StatCard } from '../components/ui/Card';
-import { dbGetAll, getGroupAttendanceForDate, getRefunds, recalculateStudentTotalPaid, migrateInstallments, markOverdueInstallments, getDebtors, getRenewalCandidates, Student, Teacher, Group, Course, Payment, Installment, Enrollment, DebtorRow, RenewalCandidate } from '../lib/db';
+import PageReadError from '../components/layout/PageReadError';
 import RenewDialog from '../components/RenewDialog';
-import { RENEWAL_STATE_LABEL } from '../lib/billing';
-import { upcomingDues, installmentRemaining, isCountedPayment } from '../lib/billing';
-import { findScheduleConflicts, type ScheduleConflict } from '../lib/schedule';
-import { formatDate, formatCurrency, getStatusLabel, getArabicDay } from '../lib/utils';
-import { requestNotificationPermission, showBrowserNotification } from '../lib/notifications';
-import { subscribeDebtAlert, refreshDebtAlert, DebtAlert } from '../lib/debtAlerts';
-import { getRepeatedAbsenceAlerts, type AbsenceAlert } from '../lib/absenceAlerts';
-import { visibleGroupIds } from '../lib/permissions';
+import { StatCard } from '../components/ui/Card';
+import ResourceError from '../components/ui/ResourceError';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import { getWhatsAppLink } from '../lib/utils';
+import { usePageResource } from '../hooks/usePageResource';
 import { showBackupReminder } from '../lib/autoBackup';
-import dayjs from 'dayjs';
-
-const TODAY_KEY = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][new Date().getDay()];
+import { installmentRemaining, RENEWAL_STATE_LABEL } from '../lib/billing';
+import { DebtAlert, refreshDebtAlert, subscribeDebtAlert } from '../lib/debtAlerts';
+import { requestNotificationPermission, showBrowserNotification } from '../lib/notifications';
+import { formatCurrency, formatDate, getArabicDay, getStatusLabel, getWhatsAppLink } from '../lib/utils';
+import type { DebtorRow } from '../services/balanceService';
+import { getDebtors } from '../services/balanceService';
+import { emptyDashboardData, loadDashboardData } from '../services/queries/dashboard';
+import type { RenewalCandidate } from '../services/renewalService';
+import { runStartupMaintenance } from '../services/startupMaintenance';
 
 export default function DashboardPage() {
   const { settings } = useApp();
@@ -37,40 +53,27 @@ export default function DashboardPage() {
   const showMoney = can('payments', 'view');
   const canSeeDebtors = can('debtors', 'view');
   const canRenew = can('payments', 'create');
-
-  const [stats, setStats] = useState({
-    activeStudents: 0,
-    teachers: 0,
-    courses: 0,
-    groups: 0,
-    totalRevenue: 0,
-    pendingPayments: 0,
-    pendingAmount: 0,
-    growthRate: 0,
-  });
-  const [revenueData, setRevenueData] = useState<{ month: string; revenue: number }[]>([]);
-  const [genderData, setGenderData] = useState<{ name: string; value: number }[]>([]);
-  const [todayGroups, setTodayGroups] = useState<(Group & { courseName: string; teacherName: string })[]>([]);
-  const [recentStudents, setRecentStudents] = useState<Student[]>([]);
   const [debtAlert, setDebtAlert] = useState<DebtAlert | null>(null);
   const [topDebtors, setTopDebtors] = useState<DebtorRow[]>([]);
-  const [upcoming, setUpcoming] = useState<ReturnType<typeof upcomingDues> | null>(null);
-  const [conflicts, setConflicts] = useState<ScheduleConflict[]>([]);
-  const [renewals, setRenewals] = useState<RenewalCandidate[]>([]);
   const [renewTarget, setRenewTarget] = useState<RenewalCandidate | null>(null);
-  const [absenceAlerts, setAbsenceAlerts] = useState<AbsenceAlert[]>([]);
-  const [todayAttendance, setTodayAttendance] = useState({ present: 0, absent: 0, late: 0, excused: 0, recordedGroups: 0 });
-  const [loading, setLoading] = useState(true);
+
+  const query = useCallback(() => loadDashboardData({
+    role: user?.role, teacherId: user?.teacherId, upcomingDueDays: settings?.upcomingDueDays,
+  }), [user?.role, user?.teacherId, settings?.upcomingDueDays]);
+  const { data: { todayKey: TODAY_KEY, stats, revenueData, genderData, todayGroups, recentStudents, upcoming, conflicts, renewals, absenceAlerts, todayAttendance }, loading, reload: loadDashboard, error } = usePageResource(query, emptyDashboardData());
 
   // تنبيهات المديونيات + إشعار المتأخرات (مرة واحدة في اليوم)
   useEffect(() => {
     if (!canSeeDebtors) return;
+    let active = true;
     const unsubscribe = subscribeDebtAlert(setDebtAlert);
     void (async () => {
       const alert = await refreshDebtAlert();
+      if (!active || alert.unavailable) return;
       if (alert.debtorsCount > 0) {
         try {
-          setTopDebtors((await getDebtors()).slice(0, 5));
+          const debtors = await getDebtors();
+          if (active) setTopDebtors(debtors.slice(0, 5));
         } catch (e) {
           console.error('top debtors error:', e);
         }
@@ -78,6 +81,7 @@ export default function DashboardPage() {
         setTopDebtors([]);
       }
 
+      if (!active) return;
       const key = `debt_alert_notified_${dayjs().format('YYYY-MM-DD')}`;
       if (alert.overdueCount > 0 && settings?.notifyLatePayment !== false && !localStorage.getItem(key)) {
         localStorage.setItem(key, 'true');
@@ -87,7 +91,7 @@ export default function DashboardPage() {
         );
       }
     })();
-    return unsubscribe;
+    return () => { active = false; unsubscribe(); };
   }, [canSeeDebtors, settings?.notifyLatePayment]);
 
   useEffect(() => {
@@ -96,207 +100,14 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    loadDashboard();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- مقصود: إعادة التحميل مربوطة بالـ deps المكتوبة بس
-  }, []);
+    let active = true;
+    void runStartupMaintenance()
+      .then(() => { if (active) void loadDashboard(); })
+      .catch(error => console.error('Migration failed', error));
+    return () => { active = false; };
+  }, [loadDashboard]);
 
-  async function loadDashboard() {
-    setLoading(true);
-    try {
-      const [allStudents, teachers, courses, allGroups, payments, allInstallments, allEnrollments, refunds] = await Promise.all([
-        dbGetAll<Student>('students'),
-        dbGetAll<Teacher>('teachers'),
-        dbGetAll<Course>('courses'),
-        dbGetAll<Group>('groups'),
-        dbGetAll<Payment>('payments'),
-        dbGetAll<Installment>('installments'),
-        dbGetAll<Enrollment>('enrollments'),
-        getRefunds(),
-      ]);
-
-      // عزل بيانات المدرس: مجموعاته وطلابه وأقساطهم بس
-      const allowed = visibleGroupIds({ role: user?.role, teacherId: user?.teacherId, groups: allGroups });
-      const groups = allowed ? allGroups.filter(g => allowed.has(g.id)) : allGroups;
-      const students = allowed
-        ? allStudents.filter(st => (st.enrolledGroups || []).some(gid => allowed.has(gid)))
-        : allStudents;
-      const installments = allowed ? allInstallments.filter(i => allowed.has(i.groupId)) : allInstallments;
-      const enrollments = allowed ? allEnrollments.filter(e => allowed.has(e.groupId)) : allEnrollments;
-
-      // الإيراد الفعلي = الدفعات المحسوبة (غير ملغاة/محذوفة) − الاستردادات
-      const validPayments = payments.filter(isCountedPayment);
-      const refundsByMonth = new Map<string, number>();
-      refunds.forEach(r => {
-        const k = (r.date || '').substring(0, 7);
-        refundsByMonth.set(k, (refundsByMonth.get(k) || 0) + (r.amount || 0));
-      });
-      const totalRefunds = refunds.filter(r => !r.deleted).reduce((s, r) => s + (r.amount || 0), 0);
-
-      // Stats
-      const activeStudents = students.filter(s => s.status === 'active').length;
-      const totalRevenue = Math.max(0, validPayments.reduce((s, p) => s + p.amount, 0) - totalRefunds);
-      const pendingPayments = payments.filter(p => p.status === 'pending' || p.status === 'late').length;
-      const pendingAmount = payments.filter(p => p.status === 'pending' || p.status === 'late').reduce((s, p) => s + p.amount, 0);
-
-      // Revenue last 6 months (net of refunds)
-      const monthlyRevenue: Record<string, number> = {};
-      for (let i = 5; i >= 0; i--) {
-        const m = dayjs().subtract(i, 'month');
-        monthlyRevenue[m.format('YYYY-MM')] = 0;
-      }
-      validPayments.forEach(p => {
-        const key = p.date.substring(0, 7);
-        if (key in monthlyRevenue) {
-          monthlyRevenue[key] = (monthlyRevenue[key] || 0) + p.amount;
-        }
-      });
-      // خصم الاستردادات من إيراد شهرها
-      refundsByMonth.forEach((amt, key) => {
-        if (key in monthlyRevenue) {
-          monthlyRevenue[key] = Math.max(0, monthlyRevenue[key] - amt);
-        }
-      });
-
-      const thisMonthKey = dayjs().format('YYYY-MM');
-      const lastMonthKey = dayjs().subtract(1, 'month').format('YYYY-MM');
-      const thisMonthRev = monthlyRevenue[thisMonthKey] || 0;
-      const lastMonthRev = monthlyRevenue[lastMonthKey] || 0;
-      
-      let growthRate = 0;
-      if (lastMonthRev > 0) {
-        growthRate = ((thisMonthRev - lastMonthRev) / lastMonthRev) * 100;
-      } else if (thisMonthRev > 0) {
-        growthRate = 100;
-      }
-
-      setStats({
-        activeStudents,
-        teachers: teachers.filter(t => t.status === 'active').length,
-        courses: courses.length,
-        groups: groups.filter(g => g.status === 'open').length,
-        totalRevenue,
-        pendingPayments,
-        pendingAmount,
-        growthRate,
-      });
-
-      setRevenueData(
-        Object.entries(monthlyRevenue).map(([key, revenue]) => ({
-          month: dayjs(key).format('MMM YYYY'),
-          revenue,
-        }))
-      );
-
-      // Gender distribution
-      const males = students.filter(s => s.gender === 'male').length;
-      const females = students.filter(s => s.gender === 'female').length;
-      setGenderData([
-        { name: 'أولاد', value: males },
-        { name: 'بنات', value: females },
-      ]);
-
-      // Today's groups
-      const todayG = groups
-        .filter(g => g.schedule.some(s => s.days.includes(TODAY_KEY)))
-        .map(g => ({
-          ...g,
-          courseName: courses.find(c => c.id === g.courseId)?.name || 'غير محدد',
-          teacherName: teachers.find(t => t.id === g.teacherId)?.name || 'غير محدد',
-        }));
-      setTodayGroups(todayG.slice(0, 8));
-
-      // Recent students
-      const sorted = [...students]
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-        .slice(0, 5);
-      setRecentStudents(sorted);
-
-      // الأقساط اللي استحقاقها قريب — التنبيه قبل التأخر بيرفع التحصيل
-      setUpcoming(upcomingDues(installments, settings?.upcomingDueDays ?? 3));
-
-      // اشتراكات قربت تنتهي / انتهت — عشان نجدد قبل ما الطالب يقطع
-      try {
-        const cands = await getRenewalCandidates(settings?.upcomingDueDays ?? 7);
-        setRenewals(allowed ? cands.filter(c => allowed.has(c.groupId)) : cands);
-      } catch (e) {
-        console.error('renewal candidates error:', e);
-      }
-
-      // تعارضات الجدول (مدرس/قاعة في مكانين، أو طالب في مجموعتين متعارضتين)
-      const teacherNames: Record<string, string> = {};
-      for (const t of teachers) teacherNames[t.id] = t.name;
-      const studentNames: Record<string, string> = {};
-      for (const st of students) studentNames[st.id] = st.name;
-      setConflicts(findScheduleConflicts({
-        groups,
-        enrollments: enrollments.filter(e => e.status === 'active'),
-        teacherNames,
-        studentNames,
-      }));
-
-      // ملخص حضور النهاردة + تنبيهات الغياب المتكرر
-      try {
-        const today = dayjs().format('YYYY-MM-DD');
-        let present = 0, absent = 0, late = 0, excused = 0;
-        const groupsWithRecords = new Set<string>();
-        for (const g of groups) {
-          const recs = await getGroupAttendanceForDate(g.id, today);
-          if (recs.length > 0) groupsWithRecords.add(g.id);
-          for (const r of recs) {
-            if (r.status === 'present') present++;
-            else if (r.status === 'absent') absent++;
-            else if (r.status === 'late') late++;
-            else if (r.status === 'excused') excused++;
-          }
-        }
-        setTodayAttendance({ present, absent, late, excused, recordedGroups: groupsWithRecords.size });
-
-        const alerts = await getRepeatedAbsenceAlerts();
-        setAbsenceAlerts(allowed ? alerts.filter(a => allowed.has(a.groupId)) : alerts);
-      } catch (e) {
-        console.error('attendance summary error:', e);
-      }
-    } catch (e) {
-      console.error('Dashboard load error:', e);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    const runMigration = async () => {
-      try {
-        // 1) توليد الأقساط للتسجيلات القديمة (مرة واحدة فقط)
-        if (!localStorage.getItem('migration_installments_v1')) {
-          await migrateInstallments();
-          localStorage.setItem('migration_installments_v1', 'true');
-        }
-
-        // 2) تحديث حالة الأقساط المتأخرة (مع كل فتح للتطبيق)
-        await markOverdueInstallments();
-
-        // 3) Migration: Recalculate balances for all students (runs once, non-blocking)
-        if (!localStorage.getItem('migration_balances_v1')) {
-          const students = await dbGetAll<Student>('students');
-          // Run sequentially in batches to avoid freezing the UI
-          for (let i = 0; i < students.length; i++) {
-            await recalculateStudentTotalPaid(students[i].id);
-            // Yield to the event loop every 10 records
-            if (i % 10 === 9) {
-              await new Promise(resolve => setTimeout(resolve, 0));
-            }
-          }
-          localStorage.setItem('migration_balances_v1', 'true');
-        }
-
-        loadDashboard();
-      } catch (e) {
-        console.error('Migration failed', e);
-      }
-    };
-    runMigration();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- مقصود: إعادة التحميل مربوطة بالـ deps المكتوبة بس
-  }, []);
+  if (error) return <PageReadError title="لوحة التحكم" onRetry={loadDashboard} />;
 
   if (loading) {
     return (
@@ -362,11 +173,11 @@ export default function DashboardPage() {
           {canSeeDebtors && (
             <StatCard
               title="طلاب عليهم مبالغ"
-              value={debtAlert?.debtorsCount ?? 0}
+              value={debtAlert && !debtAlert.loading && !debtAlert.unavailable ? debtAlert.debtorsCount : '—'}
               icon={<AlertTriangle size={24} />}
               color="#ef4444"
               subtitle={
-                debtAlert && debtAlert.debtorsCount > 0
+                !debtAlert || debtAlert.loading ? 'جاري تحديث أرصدة الطلاب' : debtAlert.unavailable ? 'تعذّر تأكيد أرصدة الطلاب' : debtAlert.debtorsCount > 0
                   ? `${formatCurrency(debtAlert.totalRemaining, settings?.currency)}${debtAlert.overdueCount > 0 ? ` • فيها متأخرات` : ''}`
                   : 'كل الطلاب مسددين'
               }
@@ -391,34 +202,36 @@ export default function DashboardPage() {
           )}
         </div>
 
+        {canSeeDebtors && debtAlert?.unavailable && <ResourceError onRetry={() => refreshDebtAlert(true)} message="تعذّر تحديث تنبيه المديونيات. الأرصدة السابقة ليست تأكيداً للحسابات الحالية." />}
+
         {/* Charts Row */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Revenue Chart */}
           {showMoney && (
-          <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-            <h3 className="text-base font-bold text-gray-900 mb-4">الإيرادات الشهرية</h3>
-            <ResponsiveContainer width="100%" height={240}>
-              <AreaChart data={revenueData}>
-                <defs>
-                  <linearGradient id="revenue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={primaryColor} stopOpacity={0.3} />
-                    <stop offset="95%" stopColor={primaryColor} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v) => [formatCurrency(Number(v), settings?.currency), 'الإيرادات']} />
-                <Area
-                  type="monotone"
-                  dataKey="revenue"
-                  stroke={primaryColor}
-                  fill="url(#revenue)"
-                  strokeWidth={2}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+            <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+              <h3 className="text-base font-bold text-gray-900 mb-4">الإيرادات الشهرية</h3>
+              <ResponsiveContainer width="100%" height={240}>
+                <AreaChart data={revenueData}>
+                  <defs>
+                    <linearGradient id="revenue" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={primaryColor} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={primaryColor} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v) => [formatCurrency(Number(v), settings?.currency), 'الإيرادات']} />
+                  <Area
+                    type="monotone"
+                    dataKey="revenue"
+                    stroke={primaryColor}
+                    fill="url(#revenue)"
+                    strokeWidth={2}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
           )}
 
           {/* Gender Pie */}
