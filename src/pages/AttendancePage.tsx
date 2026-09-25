@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { AlertCircle, CheckCircle, Clock, LogOut, MessageCircle, Printer, Save, XCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle, Clock, CreditCard, LogOut, MessageCircle, Printer, Save, XCircle } from 'lucide-react';
 import { useCallback, useEffect, useState, type SetStateAction } from 'react';
 import Layout from '../components/layout/Layout';
 import PageReadError from '../components/layout/PageReadError';
@@ -7,12 +7,13 @@ import ResourceError from '../components/ui/ResourceError';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { AttendanceStatus } from '../domain/models';
+import BarcodeScannerInput from '../features/attendance/BarcodeScannerInput';
 import { useCommandTask } from '../hooks/useCommandTask';
 import { usePageResource } from '../hooks/usePageResource';
 import { useResourceDraft } from '../hooks/useResourceDraft';
 import { checkAbsenceAlertForStudent } from '../lib/absenceAlerts';
 import { notify, notifyAbsence, notifyAttendanceSaved, notifyRepeatedAbsence } from '../lib/notifications';
-import { printTable } from '../lib/printing';
+import { printBatchStudentCards, printTable } from '../lib/printing';
 import { formatDate, getContrastColor, getWhatsAppLink } from '../lib/utils';
 import { checkOutStudent, saveAttendance } from '../services/commands/academic';
 import { loadAttendanceCatalog, loadAttendanceRegister, type AttendanceRegister } from '../services/queries/attendance';
@@ -119,6 +120,20 @@ export default function AttendancePage() {
     });
   }
 
+  function handlePrintCards() {
+    if (!selectedGroup || !registerReady || groupStudents.length === 0) {
+      notify.error('لا يوجد طلاب لطباعة الكارنيهات');
+      return;
+    }
+    const targetGroup = groups.find(g => g.id === selectedGroup);
+    const targetCourse = courses.find(c => c.id === targetGroup?.courseId);
+    printBatchStudentCards(groupStudents, {
+      settings,
+      groupName: targetGroup?.name,
+      courseName: targetCourse?.name,
+    });
+  }
+
   const statusButtons = [
     { status: 'present' as AttendanceStatus, label: 'حاضر', icon: <CheckCircle size={14} />, color: 'bg-green-100 text-green-700 border-green-200' },
     { status: 'absent' as AttendanceStatus, label: 'غائب', icon: <XCircle size={14} />, color: 'bg-red-100 text-red-700 border-red-200' },
@@ -165,6 +180,10 @@ export default function AttendancePage() {
                 className="py-2.5 px-3 bg-gray-50 text-gray-700 rounded-xl text-sm font-medium hover:bg-gray-100 transition-colors no-print">
                 <Printer size={16} />
               </button>
+              <button onClick={handlePrintCards} disabled={!registerReady || groupStudents.length === 0} title="كارنيهات طلاب المجموعة مع الباركود"
+                className="py-2.5 px-3 bg-indigo-50 text-indigo-700 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors no-print">
+                <CreditCard size={16} />
+              </button>
               <button onClick={() => setAll('present')}
                 className="flex-1 py-2.5 bg-green-50 text-green-700 rounded-xl text-sm font-medium hover:bg-green-100 transition-colors">
                 ✓ الكل حاضر
@@ -191,6 +210,17 @@ export default function AttendancePage() {
             ))}
           </div>
         </div>
+
+        {/* شريط المسح السريع بالباركود و QR */}
+        {group && groupStudents.length > 0 && (
+          <BarcodeScannerInput
+            students={groupStudents}
+            currentStatuses={attendanceMap}
+            lateJoiners={lateJoiners}
+            onMarkAttendance={setStatus}
+            disabled={!registerReady || !canRecord}
+          />
+        )}
 
         {/* Students List */}
         {group && groupStudents.length > 0 ? (

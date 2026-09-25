@@ -5,6 +5,8 @@ node_modules/
 
 # Build
 dist/
+dist-electron/
+release/
 build/
 # أيقونات Electron مولّدة بس لازم تترفع (electron-builder بيقرأها من build/)
 !build/

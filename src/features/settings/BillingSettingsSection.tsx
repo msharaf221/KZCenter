@@ -1,5 +1,7 @@
-import { Image as ImageIcon, Receipt, Save, Trash2, Upload } from 'lucide-react';
+import { Image as ImageIcon, Printer, Receipt, Save, Trash2, Upload } from 'lucide-react';
+import type { Settings } from '../../domain/models';
 import { notify } from '../../lib/notifications';
+import { printReceipt } from '../../lib/printing';
 import { getContrastColor } from '../../lib/utils';
 import type { SettingsSectionProps } from './types';
 
@@ -62,6 +64,51 @@ export default function BillingSettingsSection({
             className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none font-mono"
           />
           <p className="text-[11px] text-gray-400 mt-1">الأرقام بتكمل تسلسلياً: KZ-202609-0001</p>
+        </div>
+        <div>
+          <label className="block text-sm font-semibold text-gray-700 mb-1">تخطيط ونوع طباعة الإيصال</label>
+          <div className="flex gap-2">
+            <select
+              value={form.receiptLayout || 'standard'}
+              onChange={e => setForm({ ...form, receiptLayout: e.target.value as 'standard' | 'thermal80' | 'thermal58' })}
+              className="flex-1 px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white font-medium"
+            >
+              <option value="standard">عادي (A4 / A5 - طابعات عادية)</option>
+              <option value="thermal80">حراري 80 مم (طابعات فواتير POS القياسية)</option>
+              <option value="thermal58">حراري 58 مم (طابعات فواتير POS المدمجة)</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => {
+                printReceipt({
+                  receiptNo: (form.receiptPrefix || 'KZ') + '-202609-0001',
+                  centerName: form.centerName || 'المركز التعليمي التجريبي',
+                  studentName: 'أحمد محمد علي',
+                  groupName: 'مجموعة الأوائل - رياضيات',
+                  courseName: 'رياضيات ثانوية عامة',
+                  amount: 350,
+                  amountInWords: 'ثلاثمئة وخمسون جنيه',
+                  method: 'نقدي',
+                  type: 'اشتراك شهري',
+                  date: new Date().toISOString(),
+                  collectorName: 'مسؤول الاستقبال',
+                  remainingBefore: 350,
+                  remainingAfter: 0,
+                  notes: 'دفعة تجريبية لاختبار الطابعة والتخطيط',
+                  settings: {
+                    id: 'settings',
+                    ...form,
+                    darkMode: false,
+                  } as unknown as Settings,
+                });
+              }}
+              title="معاينة طباعة الإيصال بالتخطيط الحالي"
+              className="px-3 py-2.5 border border-gray-200 text-gray-700 hover:bg-gray-50 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            >
+              <Printer size={15} /> معاينة
+            </button>
+          </div>
+          <p className="text-[11px] text-gray-400 mt-1">تنسيق مخصص لطابعات البلوتوث والـ USB الحرارية</p>
         </div>
         <div className="sm:col-span-2">
           <label className="block text-sm font-semibold text-gray-700 mb-1">تذييل الإيصال</label>

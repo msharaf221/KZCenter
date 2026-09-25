@@ -20,6 +20,7 @@ export type SettingsDraft = Required<
     | 'sessionsPerMonth'
     | 'receiptPrefix'
     | 'receiptFooter'
+    | 'receiptLayout'
     | 'logo'
     | 'notifyUpcomingDue'
     | 'upcomingDueDays'
@@ -27,7 +28,7 @@ export type SettingsDraft = Required<
     | 'subjectPrices'
   >
 > &
-  Pick<Settings, 'dueDayOfMonth'>;
+  Pick<Settings, 'dueDayOfMonth' | 'whatsappGateway'>;
 
 /** Only editable application settings enter the draft; never cloud credentials. */
 export function createSettingsDraft(settings?: Settings | null): SettingsDraft {
@@ -48,11 +49,13 @@ export function createSettingsDraft(settings?: Settings | null): SettingsDraft {
     sessionsPerMonth: settings?.sessionsPerMonth ?? 8,
     receiptPrefix: settings?.receiptPrefix || '',
     receiptFooter: settings?.receiptFooter || '',
+    receiptLayout: settings?.receiptLayout || 'standard',
     logo: settings?.logo || '',
     notifyUpcomingDue: settings?.notifyUpcomingDue ?? false,
     upcomingDueDays: settings?.upcomingDueDays ?? 3,
     lowStockThreshold: settings?.lowStockThreshold ?? 5,
     subjectPrices: settings?.subjectPrices ?? {},
+    whatsappGateway: settings?.whatsappGateway ? { ...settings.whatsappGateway } : { enabled: false, provider: 'ultramsg' },
   };
 }
 
@@ -69,6 +72,9 @@ export function validateSettingsDraft(form: SettingsDraft): string | null {
     if (v !== undefined && (!Number.isFinite(v) || v < 0)) {
       return `سعر ${s.name} لازم يكون رقم موجب`;
     }
+  }
+  if (form.whatsappGateway?.enabled && form.whatsappGateway.provider === 'custom' && !form.whatsappGateway.apiUrl?.trim()) {
+    return 'يرجى إدخال رابط API المخصص لبوابة واتساب';
   }
 
   return null;

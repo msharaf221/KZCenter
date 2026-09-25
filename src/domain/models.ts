@@ -71,6 +71,8 @@ export interface Student {
   source?: string;
   /** اسم ولي الأمر */
   parentName?: string;
+  /** كود أو رقم باركود الطالب */
+  code?: string;
   /** إخوة في نفس المركز (لخصم الإخوة) */
   siblingIds?: string[];
 
@@ -389,6 +391,8 @@ export interface Settings {
   receiptPrefix?: string;
   /** تذييل الإيصال المطبوع (مثال: «الاشتراك غير قابل للاسترداد بعد أول حصة») */
   receiptFooter?: string;
+  /** تخطيط طباعة الإيصال: عادي (A4/A5) أو حراري 80مم أو حراري 58مم */
+  receiptLayout?: 'standard' | 'thermal80' | 'thermal58';
   /** شعار المركز (data URL) للإيصالات والتقارير المطبوعة */
   logo?: string;
 
@@ -399,6 +403,16 @@ export interface Settings {
   upcomingDueDays?: number;
   /** حد المخزون المنخفض (تنبيه إعادة الطلب) */
   lowStockThreshold?: number;
+
+  // ==================== v9: بوابة واتساب التلقائية ====================
+  /** إعدادات بوابة واتساب للإرسال التلقائي المباشر عبر API */
+  whatsappGateway?: {
+    enabled?: boolean;
+    provider?: 'ultramsg' | 'greenapi' | 'custom';
+    instanceId?: string;
+    token?: string;
+    apiUrl?: string;
+  };
 }
 
 /** رسالة لولي أمر (سجل مراسلات) */

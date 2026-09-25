@@ -15,9 +15,13 @@ const APP_NAME = 'EduCenter Pro';
 const BACKUP_DIR = join(homedir(), 'Documents', 'EduCenter Backups');
 const BACKUP_RETENTION_DAYS = 30;
 
-// Ensure backup directory exists
-if (!existsSync(BACKUP_DIR)) {
-  mkdirSync(BACKUP_DIR, { recursive: true });
+// Ensure backup directory exists safely
+try {
+  if (!existsSync(BACKUP_DIR)) {
+    mkdirSync(BACKUP_DIR, { recursive: true });
+  }
+} catch (error) {
+  console.error('Failed to create backup directory on startup:', error);
 }
 
 // ==================== MAIN WINDOW ====================

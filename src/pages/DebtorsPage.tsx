@@ -1,4 +1,3 @@
-import dayjs from 'dayjs';
 import {
   AlertTriangle,
   Clock, DollarSign,
@@ -15,16 +14,14 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import PageReadError from '../components/layout/PageReadError';
-import Modal from '../components/ui/Modal';
 import WriteOffDebtsDialog from '../components/WriteOffDebtsDialog';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useCommandTask } from '../hooks/useCommandTask';
+import QuickCollectDialog from '../features/payments/QuickCollectDialog';
 import { usePageResource } from '../hooks/usePageResource';
 import { notify } from '../lib/notifications';
 import { downloadCSV, formatCurrency, formatDate, getContrastColor, getWhatsAppLink, toCSV } from '../lib/utils';
 import type { DebtorRow } from '../services/balanceService';
-import { collectStudentPayment } from '../services/commands/studentFinance';
 import type { WriteOffResult, WriteOffScope } from '../services/debtWriteOffService';
 import { loadDebtors } from '../services/queries/debtors';
 
@@ -32,10 +29,9 @@ type FilterKey = 'all' | 'overdue' | 'neverPaid' | 'suspended';
 type SortKey = 'remaining' | 'overdue' | 'oldestPayment' | 'name';
 
 export default function DebtorsPage() {
-  const task = useCommandTask();
   const navigate = useNavigate();
   const { settings } = useApp();
-  const { user, can } = useAuth();
+  const { can } = useAuth();
   const canCollect = can('payments', 'create');
   const canWriteOff = can('debtors', 'delete'); // إبراء الذمة = إلغاء أقساط → صلاحية حذف
   const primaryColor = settings?.primaryColor || '#6366f1';
@@ -46,10 +42,6 @@ export default function DebtorsPage() {
   const [sort, setSort] = useState<SortKey>('remaining');
 
   const [payTarget, setPayTarget] = useState<DebtorRow | null>(null);
-  const [payAmount, setPayAmount] = useState(0);
-  const [payDate, setPayDate] = useState(dayjs().format('YYYY-MM-DD'));
-  const [payNotes, setPayNotes] = useState('');
-  const saving = task.pending;
 
   const { data: debtors, loading, reload: load, error } = usePageResource(loadDebtors, []);
 
@@ -120,34 +112,6 @@ export default function DebtorsPage() {
 
   function openPay(d: DebtorRow) {
     setPayTarget(d);
-    setPayAmount(d.remaining);
-    setPayDate(dayjs().format('YYYY-MM-DD'));
-    setPayNotes('');
-  }
-
-  async function handleCollect() {
-    if (!payTarget) return;
-    if (!(payAmount > 0)) { notify.error('المبلغ يجب أن يكون أكبر من صفر'); return; }
-    if (payAmount > payTarget.remaining) {
-      notify.error(`المبلغ أكبر من المتبقي (${formatCurrency(payTarget.remaining, settings?.currency)})`);
-      return;
-    }
-    await task.run(async () => {
-      const result = await collectStudentPayment(user, {
-        studentId: payTarget.studentId,
-        amount: payAmount,
-        date: payDate,
-        notes: payNotes.trim() || `تحصيل من صفحة المديونيات — ${payTarget.name}`,
-        method: 'cash',
-        collectedBy: user?.id, collectedByName: user?.username,
-      });
-      if (!result.success) { notify.error(result.error || 'حدث خطأ'); return; }
-      notify.success(
-        `تم تحصيل ${formatCurrency(payAmount, settings?.currency)} من ${payTarget.name} — المتبقي ${formatCurrency(result.remainingAfter ?? 0, settings?.currency)}`
-      );
-      setPayTarget(null);
-      await load();
-    });
   }
 
   async function handleWriteOff(info: { scope: WriteOffScope; reason: string; result: WriteOffResult }) {
@@ -337,75 +301,18 @@ export default function DebtorsPage() {
       </div>
 
       {/* نافذة التحصيل */}
-      {payTarget && (
-        <Modal isOpen={!!payTarget} onClose={() => { if (!saving) setPayTarget(null); }} title={`تحصيل دفعة — ${payTarget.name}`} size="md">
-          <div className="space-y-4">
-            <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 text-sm space-y-1">
-              <div className="flex justify-between">
-                <span className="text-gray-500">المطلوب</span>
-                <span className="font-bold">{formatCurrency(payTarget.owed, settings?.currency)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">المدفوع</span>
-                <span className="font-bold text-green-600">{formatCurrency(payTarget.paid, settings?.currency)}</span>
-              </div>
-              <div className="flex justify-between border-t border-gray-200 pt-1">
-                <span className="text-gray-500">المتبقي</span>
-                <span className="font-bold text-red-600">{formatCurrency(payTarget.remaining, settings?.currency)}</span>
-              </div>
-              {payTarget.groups.length > 0 && (
-                <p className="text-xs text-gray-400 pt-1">{payTarget.groups.map(g => g.groupName).join('، ')}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">المبلغ المحصّل *</label>
-              <input type="number" min={0} max={payTarget.remaining} value={payAmount || ''}
-                onChange={e => setPayAmount(+e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              <div className="flex gap-2 mt-2">
-                <button type="button" onClick={() => setPayAmount(payTarget.remaining)}
-                  className="px-3 py-1 text-xs rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200">المتبقي كله</button>
-                <button type="button" onClick={() => setPayAmount(Math.round(payTarget.remaining / 2))}
-                  className="px-3 py-1 text-xs rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200">نص المتبقي</button>
-                <button type="button" onClick={() => setPayAmount(payTarget.overdueAmount)}
-                  className="px-3 py-1 text-xs rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200">قيمة المتأخرات</button>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">التاريخ</label>
-              <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">ملاحظات</label>
-              <input type="text" value={payNotes} onChange={e => setPayNotes(e.target.value)} placeholder="اختياري"
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-            </div>
-
-            <p className="text-xs text-gray-500">
-              المتبقي بعد التحصيل:{' '}
-              <strong className="text-gray-800">
-                {formatCurrency(Math.max(0, payTarget.remaining - (payAmount || 0)), settings?.currency)}
-              </strong>
-            </p>
-          </div>
-
-          <div className="flex gap-3 mt-5">
-            <button onClick={handleCollect} disabled={saving}
-              className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm disabled:opacity-60"
-              style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
-              {saving ? 'جاري الحفظ...' : 'تأكيد التحصيل'}
-            </button>
-            <button disabled={saving} onClick={() => setPayTarget(null)}
-              className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm hover:bg-gray-200">
-              إلغاء
-            </button>
-          </div>
-        </Modal>
-      )}
+      <QuickCollectDialog
+        isOpen={!!payTarget}
+        target={payTarget ? {
+          studentId: payTarget.studentId,
+          studentName: payTarget.name,
+          remaining: payTarget.remaining,
+          groupName: payTarget.groups.map(g => g.groupName).join('، ') || undefined,
+          overdueAmount: payTarget.overdueAmount,
+        } : null}
+        onClose={() => setPayTarget(null)}
+        onSuccess={load}
+      />
 
       {/* نافذة تصفير المديونيات */}
       <WriteOffDebtsDialog

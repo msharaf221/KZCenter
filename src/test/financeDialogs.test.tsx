@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, afterEach, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import * as database from '../data/database';
 import { dbPut } from '../data/records';
 import { readAll } from '../data/readers';
@@ -14,6 +14,7 @@ import { formatCurrency } from '../lib/utils';
 import RenewDialog from '../components/RenewDialog';
 import TransferDialog from '../components/TransferDialog';
 import WriteOffDebtsDialog from '../components/WriteOffDebtsDialog';
+import QuickCollectDialog from '../features/payments/QuickCollectDialog';
 import { payrollStudent, payrollGroup, PAYROLL_NOW } from './helpers/payroll';
 
 vi.mock('../contexts/AppContext', () => ({ useApp: () => ({ settings: DEFAULT_SETTINGS_VALUES }) }));
@@ -124,3 +125,77 @@ it('does not silently replace a deliberately cleared renewal date with an automa
   expect(await readAll('installments')).toHaveLength(1);
   expect(props.onDone).not.toHaveBeenCalled();
 });
+
+describe('QuickCollectDialog', () => {
+  const collectTarget = {
+    studentId: 'student-1',
+    studentName: 'Synthetic student',
+    remaining: 100,
+    overdueAmount: 40,
+    groupName: 'Synthetic group',
+  };
+
+  it('sets amounts via shortcuts and rejects amounts exceeding remaining', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const onSuccess = vi.fn();
+
+    render(
+      <QuickCollectDialog
+        isOpen
+        target={collectTarget}
+        onClose={onClose}
+        onSuccess={onSuccess}
+      />
+    );
+
+    expect(screen.getByText('المتبقي على المجموعة')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('100')).toBeInTheDocument();
+
+    // Click "نص المتبقي"
+    await user.click(screen.getByRole('button', { name: 'نص المتبقي' }));
+    expect(screen.getByDisplayValue('50')).toBeInTheDocument();
+
+    // Click "قيمة المتأخرات"
+    await user.click(screen.getByRole('button', { name: 'قيمة المتأخرات' }));
+    expect(screen.getByDisplayValue('40')).toBeInTheDocument();
+
+    // Click "المتبقي كله"
+    await user.click(screen.getByRole('button', { name: 'المتبقي كله' }));
+    expect(screen.getByDisplayValue('100')).toBeInTheDocument();
+
+    // Try typing an excessive amount
+    const amountInput = screen.getByDisplayValue('100');
+    await user.clear(amountInput);
+    await user.type(amountInput, '150');
+
+    await user.click(screen.getByRole('button', { name: 'تأكيد التحصيل' }));
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('successfully collects payment, notifies and invokes callbacks', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const onSuccess = vi.fn();
+
+    vi.spyOn(commands, 'collectStudentPayment').mockResolvedValue({
+      success: true,
+      remainingAfter: 0,
+    } as unknown as Awaited<ReturnType<typeof commands.collectStudentPayment>>);
+
+    render(
+      <QuickCollectDialog
+        isOpen
+        target={collectTarget}
+        onClose={onClose}
+        onSuccess={onSuccess}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'تأكيد التحصيل' }));
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledOnce());
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+});
+

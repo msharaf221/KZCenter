@@ -1,4 +1,3 @@
-import dayjs from 'dayjs';
 import { ArrowLeftRight, ArrowRight, BookOpen, CalendarDays, ClipboardCheck, CreditCard, GraduationCap, Megaphone, MessageCircle, Phone, PhoneCall, Receipt, RefreshCw, School, StickyNote, User, Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -7,16 +6,14 @@ import PageReadError from '../components/layout/PageReadError';
 import RenewDialog from '../components/RenewDialog';
 import TransferDialog from '../components/TransferDialog';
 import Badge from '../components/ui/Badge';
-import Modal from '../components/ui/Modal';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useCommandTask } from '../hooks/useCommandTask';
+import QuickCollectDialog from '../features/payments/QuickCollectDialog';
 import { usePageResource } from '../hooks/usePageResource';
 import type { RenewalInfo } from '../lib/billing';
 import { RENEWAL_STATE_LABEL } from '../lib/billing';
-import { notify } from '../lib/notifications';
+import { printStudentCard } from '../lib/printing';
 import { formatCurrency, formatDate, getContrastColor, getWhatsAppLink } from '../lib/utils';
-import { collectStudentPayment } from '../services/commands/studentFinance';
 import { emptyStudentProfile, loadStudentProfile } from '../services/queries/studentProfile';
 
 const RENEWAL_STYLE: Record<RenewalInfo['state'], string> = {
@@ -47,7 +44,6 @@ export default function StudentProfilePage() {
 }
 
 function StudentProfileContent({ id }: { id?: string }) {
-  const task = useCommandTask();
   const navigate = useNavigate();
   const { settings } = useApp();
   const { can, user } = useAuth();
@@ -67,43 +63,9 @@ function StudentProfileContent({ id }: { id?: string }) {
 
   // نافذة تحصيل دفعة (كاملة أو جزئية)
   const [payTarget, setPayTarget] = useState<{ groupId?: string; label: string; remaining: number } | null>(null);
-  const [payAmount, setPayAmount] = useState<number>(0);
-  const [payDate, setPayDate] = useState(dayjs().format('YYYY-MM-DD'));
-  const [payNotes, setPayNotes] = useState('');
-  const savingPayment = task.pending;
 
   function openPay(groupId: string | undefined, label: string, remainingAmount: number) {
     setPayTarget({ groupId, label, remaining: remainingAmount });
-    setPayAmount(remainingAmount);
-    setPayDate(dayjs().format('YYYY-MM-DD'));
-    setPayNotes('');
-  }
-
-  /** تحصيل دفعة — كاملة (المتبقي) أو جزئية (مبلغ أقل) */
-  async function handleCollect() {
-    if (!id || !payTarget) return;
-    if (!(payAmount > 0)) { notify.error('المبلغ يجب أن يكون أكبر من صفر'); return; }
-    if (payAmount > payTarget.remaining) {
-      notify.error(`المبلغ أكبر من المتبقي (${formatCurrency(payTarget.remaining, settings?.currency)})`);
-      return;
-    }
-    await task.run(async () => {
-      const result = await collectStudentPayment(user, {
-        studentId: id,
-        groupId: payTarget.groupId,
-        amount: payAmount,
-        date: payDate,
-        notes: payNotes.trim() || undefined,
-        method: 'cash',
-        collectedBy: user?.id, collectedByName: user?.username,
-      });
-      if (!result.success) { notify.error(result.error || 'حدث خطأ'); return; }
-      notify.success(
-        `تم تحصيل ${formatCurrency(payAmount, settings?.currency)} — المتبقي ${formatCurrency(result.remainingAfter ?? 0, settings?.currency)}`
-      );
-      setPayTarget(null);
-      await loadData();
-    });
   }
 
   if (error) return <PageReadError title="ملف الطالب" onRetry={reload} />;
@@ -174,6 +136,14 @@ function StudentProfileContent({ id }: { id?: string }) {
               <a href={`tel:${student.parentPhone}`} className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100 hover:bg-indigo-50 hover:text-indigo-600 transition-colors text-xs">
                 <PhoneCall size={14} /> اتصال بولي الأمر
               </a>
+              <button
+                type="button"
+                onClick={() => printStudentCard(student, { settings, groupName: groups[0]?.name })}
+                className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 px-3 py-1.5 rounded-xl border border-indigo-200 transition-colors text-xs font-semibold cursor-pointer"
+                title="طباعة كارنيه الطالب مع الباركود"
+              >
+                <CreditCard size={14} /> طباعة الكارنيه
+              </button>
               <div className="flex items-center gap-1.5 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100 text-xs"><Users size={14} /> {groups.length} مجموعة</div>
               {showMoney && (
                 <div className={`px-3 py-1.5 rounded-xl font-bold border text-xs ${remaining > 0 ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-600 border-green-100'}`}>
@@ -519,66 +489,18 @@ function StudentProfileContent({ id }: { id?: string }) {
       )}
 
       {/* نافذة تحصيل دفعة (كاملة أو جزئية) */}
-      {payTarget && (
-        <Modal isOpen={!!payTarget} onClose={() => { if (!savingPayment) setPayTarget(null); }} title={`تحصيل دفعة — ${payTarget.label}`} size="md">
-          <div className="space-y-4">
-            <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 text-sm">
-              <div className="flex justify-between mb-1">
-                <span className="text-gray-500">المتبقي على {payTarget.groupId ? 'المجموعة' : 'الطالب'}</span>
-                <span className="font-bold text-red-600">{formatCurrency(payTarget.remaining, settings?.currency)}</span>
-              </div>
-              <p className="text-xs text-gray-400">تقدر تحصّل الباقي كله أو جزء منه — والباقي يفضل ظاهر لحد ما يجيبه.</p>
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">المبلغ المحصّل *</label>
-              <input type="number" min={0} max={payTarget.remaining} value={payAmount || ''}
-                onChange={e => setPayAmount(+e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-              <div className="flex gap-2 mt-2">
-                <button type="button" onClick={() => setPayAmount(payTarget.remaining)}
-                  className="px-3 py-1 text-xs rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200">المتبقي كله</button>
-                <button type="button" onClick={() => setPayAmount(Math.round(payTarget.remaining / 2))}
-                  className="px-3 py-1 text-xs rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200">نص المتبقي</button>
-                <button type="button" onClick={() => setPayAmount(0)}
-                  className="px-3 py-1 text-xs rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200">تصفير</button>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">التاريخ</label>
-              <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1">ملاحظات</label>
-              <input type="text" value={payNotes} onChange={e => setPayNotes(e.target.value)}
-                placeholder="اختياري"
-                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-            </div>
-
-            <p className="text-xs text-gray-500">
-              المتبقي بعد التحصيل:{' '}
-              <strong className="text-gray-800">
-                {formatCurrency(Math.max(0, payTarget.remaining - (payAmount || 0)), settings?.currency)}
-              </strong>
-            </p>
-          </div>
-
-          <div className="flex gap-3 mt-5">
-            <button onClick={handleCollect} disabled={savingPayment}
-              className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm disabled:opacity-60"
-              style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
-              {savingPayment ? 'جاري الحفظ...' : 'تأكيد التحصيل'}
-            </button>
-            <button disabled={savingPayment} onClick={() => setPayTarget(null)}
-              className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm hover:bg-gray-200">
-              إلغاء
-            </button>
-          </div>
-        </Modal>
-      )}
+      <QuickCollectDialog
+        isOpen={!!payTarget}
+        target={payTarget ? {
+          studentId: id || '',
+          studentName: student.name,
+          remaining: payTarget.remaining,
+          groupId: payTarget.groupId,
+          groupName: payTarget.label,
+        } : null}
+        onClose={() => setPayTarget(null)}
+        onSuccess={loadData}
+      />
     </Layout>
   );
 }

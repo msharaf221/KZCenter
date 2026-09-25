@@ -10,7 +10,8 @@
  *
  * كل الدوال هنا بتفتح نافذة طباعة منسّقة RTL بشعار المركز وألوانه.
  */
-import type { Settings } from '../domain/models';
+import type { Settings, Student } from '../domain/models';
+import { generateBarcodeSvg, generateQrSvg, getStudentCode } from './barcode';
 import { formatCurrency, formatDate } from './utils';
 
 // قفل تاج <script> مبني بالتجميع مش حرفياً:
@@ -217,12 +218,87 @@ export interface ReceiptData {
 }
 
 /**
- * بناء HTML إيصال الاستلام — دالة نقية قابلة للاختبار.
- * رقم مسلسل + شعار + طريقة دفع + مين قبض + رصيد بعد الدفع
- * (النسخة القديمة كانت رقم عشوائي من UUID ومن غير طريقة دفع ولا اسم موظف).
+ * بناء HTML إيصال حراري (POS Thermal Printer 80mm أو 58mm)
+ */
+export function buildThermalReceiptHtml(
+  opts: ReceiptData & { settings?: Settings | null },
+  widthMm: 80 | 58 = 80,
+): string {
+  const { settings } = opts;
+  const barcode = opts.receiptNo ? generateBarcodeSvg(opts.receiptNo, { height: 32, showText: false }) : '';
+  const maxWidth = widthMm === 80 ? '76mm' : '52mm';
+  const fontSize = widthMm === 80 ? '12px' : '11px';
+
+  return `
+    ${fontLink()}
+    <style>
+      @page { margin: 0; size: ${widthMm}mm auto; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 2mm 3mm; width: ${maxWidth};
+        font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
+        direction: rtl; color: #000; background: #fff; font-size: ${fontSize}; line-height: 1.35;
+      }
+      .center-name { text-align: center; font-size: 15px; font-weight: 800; margin-bottom: 2px; }
+      .center-sub { text-align: center; font-size: 10px; color: #444; margin-bottom: 4px; }
+      .divider { border-top: 1px dashed #000; margin: 4px 0; }
+      .double-divider { border-top: 2px solid #000; margin: 5px 0; }
+      .title { text-align: center; font-weight: 700; font-size: 13px; margin: 3px 0; }
+      .row { display: flex; justify-content: space-between; margin: 2px 0; font-size: ${fontSize}; }
+      .row .label { color: #333; }
+      .row .val { font-weight: 700; text-align: left; }
+      .amount-box { text-align: center; padding: 6px; margin: 5px 0; border: 1px dashed #000; }
+      .amount-val { font-size: 17px; font-weight: 800; }
+      .amount-words { font-size: 10px; margin-top: 2px; }
+      .footer { text-align: center; font-size: 9px; color: #333; margin-top: 6px; }
+      .barcode-box { text-align: center; margin: 4px 0; }
+      @media print {
+        body { width: 100%; margin: 0; padding: 1mm 2mm; }
+        .no-print { display: none !important; }
+      }
+    </style>
+    <div class="thermal-ticket">
+      <div class="center-name">${escapeHtml(settings?.centerName || opts.centerName)}</div>
+      ${settings?.phone ? `<div class="center-sub">هاتف: ${escapeHtml(settings.phone)}</div>` : ''}
+      <div class="divider"></div>
+      <div class="title">إيصال استلام نقدية</div>
+      <div class="row"><span class="label">رقم الإيصال:</span><span class="val font-mono">${escapeHtml(opts.receiptNo || '—')}</span></div>
+      <div class="row"><span class="label">التاريخ:</span><span class="val">${formatDate(opts.date, 'YYYY/MM/DD HH:mm')}</span></div>
+      <div class="divider"></div>
+      <div class="row"><span class="label">الطالب:</span><span class="val">${escapeHtml(opts.studentName)}</span></div>
+      ${opts.groupName ? `<div class="row"><span class="label">المجموعة:</span><span class="val">${escapeHtml(opts.groupName)}</span></div>` : ''}
+      ${opts.courseName ? `<div class="row"><span class="label">الكورس:</span><span class="val">${escapeHtml(opts.courseName)}</span></div>` : ''}
+      <div class="row"><span class="label">البند:</span><span class="val">${escapeHtml(opts.type || 'اشتراك')}</span></div>
+      <div class="row"><span class="label">طريقة الدفع:</span><span class="val">${escapeHtml(opts.method || 'نقدي')}</span></div>
+      <div class="double-divider"></div>
+      <div class="amount-box">
+        <div class="amount-val">${escapeHtml(formatCurrency(opts.amount, settings?.currency))}</div>
+        ${opts.amountInWords ? `<div class="amount-words">${escapeHtml(opts.amountInWords)}</div>` : ''}
+      </div>
+      ${opts.remainingAfter !== undefined ? `
+        <div class="row"><span class="label">المتبقي بعد الدفعة:</span><span class="val">${formatCurrency(opts.remainingAfter, settings?.currency)}</span></div>
+      ` : ''}
+      ${opts.collectorName ? `<div class="row"><span class="label">المستلم:</span><span class="val">${escapeHtml(opts.collectorName)}</span></div>` : ''}
+      ${barcode ? `<div class="barcode-box">${barcode}</div>` : ''}
+      <div class="divider"></div>
+      <div class="footer">${escapeHtml(settings?.receiptFooter || 'شكراً لتعاملكم معنا · المركز التعليمي')}</div>
+    </div>
+    <script>window.onload = function () { setTimeout(function () { window.print(); }, 250); };${SCRIPT_CLOSE}
+  `;
+}
+
+/**
+ * بناء HTML إيصال الاستلام — يدعم التخطيط العادي والتخطيط الحراري (80 مم / 58 مم)
  */
 export function buildReceiptHtml(opts: ReceiptData & { settings?: Settings | null }): string {
   const { settings } = opts;
+  if (settings?.receiptLayout === 'thermal80') {
+    return buildThermalReceiptHtml(opts, 80);
+  }
+  if (settings?.receiptLayout === 'thermal58') {
+    return buildThermalReceiptHtml(opts, 58);
+  }
+
   const row = (label: string, value: string) =>
     `<div class="row"><span>${escapeHtml(label)}</span><b>${escapeHtml(value || '—')}</b></div>`;
 
@@ -279,12 +355,206 @@ export function buildReceiptHtml(opts: ReceiptData & { settings?: Settings | nul
 
 /**
  * إيصال استلام رسمي: رقم مسلسل + شعار + طريقة دفع + مين قبض + رصيد بعد الدفع.
- * (النسخة القديمة كانت رقم عشوائي من UUID ومن غير طريقة دفع ولا اسم موظف.)
  */
 export function printReceipt(opts: ReceiptData & { settings?: Settings | null }): string {
   const html = buildReceiptHtml(opts);
   openPrintWindow(html, `إيصال ${opts.receiptNo || ''}`.trim());
   return html;
+}
+
+export interface StudentCardPrintOptions {
+  settings?: Settings | null;
+  groupName?: string;
+  courseName?: string;
+}
+
+/**
+ * بناء قالب بطاقة/كارنيه الطالب المطبوع (CR80 Badge Format) مع باركود و QR
+ */
+export function buildStudentCardHtml(student: Student, opts: StudentCardPrintOptions = {}): string {
+  const { settings, groupName, courseName } = opts;
+  const primary = settings?.primaryColor || '#6366f1';
+  const code = getStudentCode(student);
+  const barcodeSvg = generateBarcodeSvg(code, { height: 38, showText: true });
+  const qrSvg = generateQrSvg(code, { size: 68 });
+  const centerName = settings?.centerName || 'المركز التعليمي';
+
+  return `
+    ${fontLink()}
+    <style>
+      @page { margin: 6mm; size: auto; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 16px;
+        font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
+        direction: rtl; background: #fff;
+      }
+      .card-wrap {
+        width: 340px; height: 215px; border-radius: 14px;
+        border: 2px solid ${primary}; overflow: hidden;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.08); background: #ffffff;
+        display: flex; flex-direction: column; justify-content: space-between;
+        margin: 0 auto 16px; page-break-inside: avoid; position: relative;
+      }
+      .card-header {
+        background: ${primary}; color: #fff; padding: 8px 12px;
+        display: flex; align-items: center; justify-content: space-between;
+      }
+      .card-header .title { font-size: 13px; font-weight: 800; }
+      .card-header .badge { font-size: 10px; background: rgba(255,255,255,0.2); padding: 2px 6px; border-radius: 6px; }
+      .card-body {
+        padding: 8px 12px; display: flex; gap: 10px; align-items: center; flex: 1;
+      }
+      .avatar-box {
+        width: 62px; height: 62px; border-radius: 12px; background: #f1f5f9;
+        border: 1.5px solid #cbd5e1; display: flex; align-items: center; justify-content: center;
+        overflow: hidden; font-size: 26px; flex-shrink: 0;
+      }
+      .avatar-box img { width: 100%; height: 100%; object-fit: cover; }
+      .info-box { flex: 1; min-width: 0; font-size: 11px; }
+      .student-name { font-size: 14px; font-weight: 800; color: #0f172a; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .info-line { color: #475569; margin: 1px 0; display: flex; gap: 4px; }
+      .info-line b { color: #0f172a; }
+      .card-footer {
+        background: #f8fafc; border-top: 1px dashed #cbd5e1; padding: 6px 10px;
+        display: flex; align-items: center; justify-content: space-between; gap: 6px;
+      }
+      .barcode-area { flex: 1; overflow: hidden; }
+      .qr-area { width: 68px; height: 68px; flex-shrink: 0; }
+      @media print {
+        body { padding: 0; }
+        .no-print { display: none !important; }
+      }
+    </style>
+    <div class="card-wrap">
+      <div class="card-header">
+        <span class="title">${escapeHtml(centerName)}</span>
+        <span class="badge">بطاقة طالب</span>
+      </div>
+      <div class="card-body">
+        <div class="avatar-box">
+          ${student.avatar ? `<img src="${escapeHtml(student.avatar)}" alt="avatar" />` : (student.gender === 'female' ? '👧' : '👦')}
+        </div>
+        <div class="info-box">
+          <div class="student-name">${escapeHtml(student.name)}</div>
+          <div class="info-line"><span>الكود:</span><b class="font-mono text-indigo-700">${escapeHtml(code)}</b></div>
+          ${student.gradeLevel ? `<div class="info-line"><span>الصف:</span><b>${escapeHtml(student.gradeLevel)}</b></div>` : ''}
+          ${groupName ? `<div class="info-line"><span>المجموعة:</span><b>${escapeHtml(groupName)}</b></div>` : ''}
+          ${courseName ? `<div class="info-line"><span>الكورس:</span><b>${escapeHtml(courseName)}</b></div>` : ''}
+          <div class="info-line"><span>ولي الأمر:</span><b>${escapeHtml(student.parentPhone)}</b></div>
+        </div>
+      </div>
+      <div class="card-footer">
+        <div class="barcode-area">${barcodeSvg}</div>
+        <div class="qr-area">${qrSvg}</div>
+      </div>
+    </div>
+    <script>window.onload = function () { setTimeout(function () { window.print(); }, 250); };${SCRIPT_CLOSE}
+  `;
+}
+
+/**
+ * طباعة كارنيه طالب فردي
+ */
+export function printStudentCard(student: Student, opts: StudentCardPrintOptions = {}): void {
+  const html = buildStudentCardHtml(student, opts);
+  openPrintWindow(html, `كارنيه — ${student.name}`);
+}
+
+/**
+ * طباعة كارنيهات مجموعة من الطلاب في ورقة A4
+ */
+export function printBatchStudentCards(students: Student[], opts: StudentCardPrintOptions = {}): void {
+  const { settings, groupName, courseName } = opts;
+  const primary = settings?.primaryColor || '#6366f1';
+  const centerName = settings?.centerName || 'المركز التعليمي';
+
+  const cardsHtml = students.map(student => {
+    const code = getStudentCode(student);
+    const barcodeSvg = generateBarcodeSvg(code, { height: 34, showText: true });
+    const qrSvg = generateQrSvg(code, { size: 60 });
+    return `
+      <div class="card-wrap">
+        <div class="card-header">
+          <span class="title">${escapeHtml(centerName)}</span>
+          <span class="badge">بطاقة طالب</span>
+        </div>
+        <div class="card-body">
+          <div class="avatar-box">
+            ${student.avatar ? `<img src="${escapeHtml(student.avatar)}" alt="avatar" />` : (student.gender === 'female' ? '👧' : '👦')}
+          </div>
+          <div class="info-box">
+            <div class="student-name">${escapeHtml(student.name)}</div>
+            <div class="info-line"><span>الكود:</span><b class="font-mono">${escapeHtml(code)}</b></div>
+            ${student.gradeLevel ? `<div class="info-line"><span>الصف:</span><b>${escapeHtml(student.gradeLevel)}</b></div>` : ''}
+            ${groupName ? `<div class="info-line"><span>المجموعة:</span><b>${escapeHtml(groupName)}</b></div>` : ''}
+            ${courseName ? `<div class="info-line"><span>الكورس:</span><b>${escapeHtml(courseName)}</b></div>` : ''}
+            <div class="info-line"><span>ولي الأمر:</span><b>${escapeHtml(student.parentPhone)}</b></div>
+          </div>
+        </div>
+        <div class="card-footer">
+          <div class="barcode-area">${barcodeSvg}</div>
+          <div class="qr-area">${qrSvg}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const fullHtml = `
+    ${fontLink()}
+    <style>
+      @page { margin: 8mm; size: A4; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 12px;
+        font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
+        direction: rtl; background: #fff;
+      }
+      .grid-container {
+        display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px;
+      }
+      .card-wrap {
+        border-radius: 12px; border: 1.5px solid ${primary}; overflow: hidden;
+        background: #ffffff; display: flex; flex-direction: column; justify-content: space-between;
+        page-break-inside: avoid; height: 200px;
+      }
+      .card-header {
+        background: ${primary}; color: #fff; padding: 6px 10px;
+        display: flex; align-items: center; justify-content: space-between;
+      }
+      .card-header .title { font-size: 12px; font-weight: 800; }
+      .card-header .badge { font-size: 9px; background: rgba(255,255,255,0.2); padding: 1px 5px; border-radius: 5px; }
+      .card-body {
+        padding: 6px 10px; display: flex; gap: 8px; align-items: center; flex: 1;
+      }
+      .avatar-box {
+        width: 52px; height: 52px; border-radius: 10px; background: #f1f5f9;
+        border: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: center;
+        overflow: hidden; font-size: 22px; flex-shrink: 0;
+      }
+      .avatar-box img { width: 100%; height: 100%; object-fit: cover; }
+      .info-box { flex: 1; min-width: 0; font-size: 10.5px; }
+      .student-name { font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .info-line { color: #475569; margin: 1px 0; display: flex; gap: 4px; }
+      .info-line b { color: #0f172a; }
+      .card-footer {
+        background: #f8fafc; border-top: 1px dashed #cbd5e1; padding: 4px 8px;
+        display: flex; align-items: center; justify-content: space-between; gap: 4px;
+      }
+      .barcode-area { flex: 1; overflow: hidden; }
+      .qr-area { width: 60px; height: 60px; flex-shrink: 0; }
+      @media print {
+        body { padding: 0; }
+        .no-print { display: none !important; }
+      }
+    </style>
+    <div class="grid-container">
+      ${cardsHtml}
+    </div>
+    <script>window.onload = function () { setTimeout(function () { window.print(); }, 350); };${SCRIPT_CLOSE}
+  `;
+
+  openPrintWindow(fullHtml, `كارنيهات الطلاب (${students.length})`);
 }
 
 /**

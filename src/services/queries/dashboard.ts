@@ -37,6 +37,8 @@ export function emptyDashboardData() {
   };
 }
 
+export type DashboardData = ReturnType<typeof emptyDashboardData>;
+
 export async function loadDashboardData({
   role,
   teacherId,
