@@ -1,4 +1,4 @@
-import { ChevronRight, ChevronLeft } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
 import { getContrastColor } from '../../lib/utils';
 

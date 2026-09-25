@@ -5,10 +5,11 @@
  * بيفشل لو فيه ملفات بيانات حقيقية متتبعة في git (شيتات/تصدير/نسخ احتياطية)
  * خارج المسارات المسموحة. بيتشغّل في CI ومن pre-commit hook.
  *
- * الاستخدام: node scripts/check-no-pii.mjs
+ * الاستخدام: node scripts/check-no-pii.mjs [--all]
+ * --all يفحص كمان الملفات الجديدة غير المتتبعة (مع احترام .gitignore).
  * الخروج: 0 = سليم · 1 = فيه مشكلة
  */
-import { execSync } from 'child_process';
+import { execFileSync } from 'node:child_process';
 
 const ALLOWED = [
   /^docs\/samples\//,   // عينات بأسماء وهمية
@@ -20,14 +21,12 @@ const ALLOWED = [
 const BLOCKED_EXT = /\.(xlsx|xls|csv|tsv|db|sqlite|sqlite3|sql\.gz|bak)$/i;
 const BLOCKED_NAME = /(backup|export|نسخة|شيت|sheet|students|students_data|kids ?zone)/i;
 
-function trackedFiles() {
-  return execSync('git ls-files', { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-    .split('\n')
-    .map(s => s.trim())
-    .filter(Boolean);
-}
-
-const files = trackedFiles();
+const includeUntracked = process.argv.includes('--all');
+const gitArgs = ['ls-files', '-z', '--cached'];
+if (includeUntracked) gitArgs.push('--others', '--exclude-standard');
+const files = [...new Set(execFileSync('git', gitArgs, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  .split('\0')
+  .filter(Boolean))];
 const violations = [];
 
 for (const f of files) {
@@ -49,4 +48,4 @@ if (violations.length > 0) {
   process.exit(1);
 }
 
-console.log(`✅ فحص PII سليم (${files.length} ملف متتبَّع، مفيش ملفات بيانات حقيقية).`);
+console.log(`✅ فحص PII سليم (${files.length} ملف${includeUntracked ? ' متتبّع وجديد' : ' متتبَّع'}، مفيش ملفات بيانات محظورة).`);

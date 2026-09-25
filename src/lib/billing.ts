@@ -1,3 +1,4 @@
+import { round2 } from './money';
 /**
  * Billing — منطق المستحقات والأقساط
  *
@@ -616,9 +617,7 @@ export function renewalInfo(
   };
 }
 
-function round2(n: number): number {
-  return Math.round((n || 0) * 100) / 100;
-}
+
 
 export const INSTALLMENT_STATUS_LABEL: Record<InstallmentStatus, string> = {
   paid: 'مسدد',

@@ -1,3 +1,10 @@
+import { useAuth } from '../contexts/AuthContext';
+import { userErrorMessage } from '../domain/errors';
+import { useAsyncResource } from '../hooks/useAsyncResource';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { confirmDebtWriteOff } from '../services/commands/studentFinance';
+import { reviewWriteOff } from '../services/debtWriteOffService';
+import ResourceError from './ui/ResourceError';
 /**
  * نافذة «تصفير المديونيات» — إبراء ذمة لبداية شهر جديد قبل التجديدات.
  *
@@ -7,20 +14,12 @@
  *  2) بتخيّر نطاق: كل المتبقي / المستحق والمتأخر بس.
  *  3) السبب إلزامي، ولازم كتابة كلمة «تصفير» للتأكيد.
  */
-import { useState, useEffect, useCallback } from 'react';
 import { AlertTriangle, Eraser, Loader2, Receipt, Users, Wallet } from 'lucide-react';
-import Modal from './ui/Modal';
-import {
-  previewWriteOff,
-  writeOffDebts,
-  WRITE_OFF_SCOPE_LABEL,
-  WRITE_OFF_SCOPE_HINT,
-  WRITE_OFF_CONFIRM_WORD,
-  WriteOffPreview,
-  WriteOffResult,
-  WriteOffScope,
-} from '../lib/db';
+import { useCallback, useState } from 'react';
 import { formatCurrency } from '../lib/utils';
+import type { WriteOffResult, WriteOffScope } from '../services/debtWriteOffService';
+import { WRITE_OFF_CONFIRM_WORD, WRITE_OFF_SCOPE_HINT, WRITE_OFF_SCOPE_LABEL } from '../services/debtWriteOffService';
+import Modal from './ui/Modal';
 
 const SCOPES: WriteOffScope[] = ['due', 'all'];
 
@@ -32,80 +31,58 @@ function normalizeWord(value: string): string {
 interface WriteOffDebtsDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  /** بيتنادى بعد التنفيذ الناجح — الصفحة هي اللي بتسجّل في السجل وتحدّث القايمة */
+  /** بيتنادى بعد التنفيذ الناجح — الأمر يسجّل أثر المراجعة والصفحة تحدّث القايمة */
   onDone: (info: { scope: WriteOffScope; reason: string; result: WriteOffResult }) => void;
   currency?: string;
 }
 
-export default function WriteOffDebtsDialog({
+export default function WriteOffDebtsDialog(props: WriteOffDebtsDialogProps) {
+  return props.isOpen ? <WriteOffForm {...props} /> : null;
+}
+
+function WriteOffForm({
   isOpen,
   onClose,
   onDone,
   currency = 'EGP',
 }: WriteOffDebtsDialogProps) {
+  const { user } = useAuth();
+  const task = useCommandTask();
   const [scope, setScope] = useState<WriteOffScope>('due');
   const [reason, setReason] = useState('');
   const [confirmWord, setConfirmWord] = useState('');
-  const [preview, setPreview] = useState<WriteOffPreview | null>(null);
-  const [loadingPreview, setLoadingPreview] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const loadPreview = useCallback(async (nextScope: WriteOffScope) => {
-    setLoadingPreview(true);
-    setError(null);
-    try {
-      setPreview(await previewWriteOff(nextScope));
-    } catch (e) {
-      console.error('previewWriteOff error:', e);
-      setPreview(null);
-      setError('تعذّر حساب ملخص التصفير');
-    } finally {
-      setLoadingPreview(false);
-    }
-  }, []);
-
-  // إعادة ضبط الحقول مع كل فتح (تغيير النطاق ما يمسحش اللي المستخدم كتبه)
-  useEffect(() => {
-    if (!isOpen) return;
-    setReason('');
-    setConfirmWord('');
-    setError(null);
-  }, [isOpen]);
-
-  // معاينة النطاق المختار عند الفتح ومع كل تغيير نطاق
-  useEffect(() => {
-    if (!isOpen) return;
-    void loadPreview(scope);
-  }, [isOpen, scope, loadPreview]);
+  const query = useCallback(() => reviewWriteOff(scope), [scope]);
+  const resource = useAsyncResource(query, null);
+  const loadingPreview = resource.loading || resource.data?.scope !== scope;
+  const preview = !loadingPreview && !resource.error ? resource.data?.preview : null;
+  const saving = task.pending;
 
   const wordOk = normalizeWord(confirmWord) === normalizeWord(WRITE_OFF_CONFIRM_WORD);
   const hasTargets = (preview?.installmentsCount ?? 0) > 0;
   const canConfirm = hasTargets && reason.trim().length > 0 && wordOk && !saving && !loadingPreview;
 
   async function handleConfirm() {
-    if (!canConfirm) return;
-    setSaving(true);
+    if (!canConfirm || !resource.data) return;
     setError(null);
-    try {
-      const result = await writeOffDebts(scope, reason.trim());
-      if (!result.success) {
-        setError(result.error || 'تعذّر تنفيذ التصفير');
-        return;
+    const result = await task.run(async () => {
+      try { return await confirmDebtWriteOff(user, scope, reason.trim(), confirmWord, resource.data!); }
+      catch (cause) {
+        if (task.isActive()) {
+          setError(userErrorMessage(cause, 'حدث خطأ أثناء التصفير. لم يتم حفظ تغييرات جزئية.'));
+          setConfirmWord('');
+          void resource.reload();
+        }
+        return undefined;
       }
-      onDone({ scope, reason: reason.trim(), result });
-      // تحديث الملخص للوضع الجديد (الصفحة هي اللي بتقفل النافذة)
-      void loadPreview(scope);
-    } catch (e) {
-      console.error('writeOffDebts error:', e);
-      setError('حدث خطأ أثناء التصفير');
-    } finally {
-      setSaving(false);
-    }
+    });
+    if (!result || !task.isActive()) return;
+    onDone({ scope, reason: reason.trim(), result });
+    void resource.reload();
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={saving ? () => {} : onClose} title="تصفير المديونيات (إبراء ذمة)" size="md">
+    <Modal isOpen={isOpen} onClose={saving ? () => { } : onClose} title="تصفير المديونيات (إبراء ذمة)" size="md">
       <div className="space-y-5">
         {/* تحذير */}
         <div className="flex gap-3 p-3 rounded-xl bg-red-50 border border-red-100">
@@ -129,11 +106,10 @@ export default function WriteOffDebtsDialog({
                 key={s}
                 type="button"
                 onClick={() => setScope(s)}
-                className={`text-right p-3 rounded-xl border transition-colors ${
-                  scope === s
+                className={`text-right p-3 rounded-xl border transition-colors ${scope === s
                     ? 'border-indigo-500 bg-indigo-50'
                     : 'border-gray-200 hover:bg-gray-50'
-                }`}
+                  }`}
               >
                 <p className={`text-sm font-semibold ${scope === s ? 'text-indigo-700' : 'text-gray-800'}`}>
                   {WRITE_OFF_SCOPE_LABEL[s]}
@@ -146,7 +122,7 @@ export default function WriteOffDebtsDialog({
 
         {/* ملخص */}
         <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
-          {loadingPreview || !preview ? (
+          {resource.error ? <ResourceError onRetry={resource.reload} /> : loadingPreview || !preview ? (
             <div className="flex items-center justify-center gap-2 py-4 text-sm text-gray-500">
               <Loader2 size={16} className="animate-spin" /> جاري حساب الملخص...
             </div>
@@ -215,7 +191,7 @@ export default function WriteOffDebtsDialog({
         </div>
 
         {error && (
-          <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg p-2">{error}</p>
+          <p role="alert" className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg p-2">{error}</p>
         )}
       </div>
 

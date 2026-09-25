@@ -1,77 +1,53 @@
-import { useState, useEffect, useCallback } from 'react';
+import { Plus, Search, Wallet } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Search } from 'lucide-react';
 import Layout from '../components/layout/Layout';
-import Modal from '../components/ui/Modal';
-import ConfirmDialog from '../components/ui/ConfirmDialog';
+import PageReadError from '../components/layout/PageReadError';
+import TeacherPayFields from '../components/TeacherPayFields';
 import Badge from '../components/ui/Badge';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import Modal from '../components/ui/Modal';
 import Pagination from '../components/ui/Pagination';
-import { dbGetPaginated, dbPut, dbSoftDelete, dbAdd, dbGetAll, generateId, Teacher, TeacherStatus, Group } from '../lib/db';
-import { formatCurrency, validatePhone, validateEmail, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import type { Teacher, TeacherStatus } from '../domain/models';
+import { describeTeacherPay } from '../domain/payroll/settings';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { usePageResource } from '../hooks/usePageResource';
 import { notify } from '../lib/notifications';
-import { addAuditEntry } from '../lib/security';
 import { SUBJECTS, getSubject, type SubjectId } from '../lib/subjects';
+import { getContrastColor } from '../lib/utils';
+import { deleteCatalogRecord, saveTeacher } from '../services/commands/catalog';
+import { loadTeachersList } from '../services/queries/teachers';
 
 const PAGE_SIZE = 20;
 
 const INITIAL_FORM: Omit<Teacher, 'id' | 'createdAt' | 'updatedAt'> = {
   name: '', specialization: '', subjectIds: [], phone: '', email: '',
-  salary: 0, status: 'active', avatar: '', notes: '',
+  salary: 0, payModel: 'subscription_percentage', payRate: undefined, payNotes: '',
+  status: 'active', avatar: '', notes: '',
 };
 
 export default function TeachersPage() {
+  const task = useCommandTask();
   const navigate = useNavigate();
   const { settings } = useApp();
   const { user, can } = useAuth();
   const canWrite = can('teachers', 'create') || can('teachers', 'edit');
   const canDelete = can('teachers', 'delete');
   const showMoney = can('payroll', 'view');
-  const [teachers, setTeachers] = useState<Teacher[]>([]);
-  const [total, setTotal] = useState(0);
+  const canManagePay = can('payroll', 'edit');
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingTeacher, setEditingTeacher] = useState<Teacher | null>(null);
   const [form, setForm] = useState<Omit<Teacher, 'id' | 'createdAt' | 'updatedAt'>>(INITIAL_FORM);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [groupCounts, setGroupCounts] = useState<Record<string, number>>({});
-  const [studentCounts, setStudentCounts] = useState<Record<string, number>>({});
 
-  const loadTeachers = useCallback(async () => {
-    setLoading(true);
-    try {
-      const result = await dbGetPaginated<Teacher>('teachers', page, PAGE_SIZE, (t: Teacher) => {
-        const q = search.toLowerCase();
-        if (!q) return true;
-        const subjectNames = (t.subjectIds || [])
-          .map(id => getSubject(id)?.name || '')
-          .join(' ')
-          .toLowerCase();
-        return t.name.toLowerCase().includes(q)
-          || t.specialization.toLowerCase().includes(q)
-          || subjectNames.includes(q);
-      });
-      setTeachers(result.items);
-      setTotal(result.total);
-
-      const groups = await dbGetAll<Group>('groups');
-      const gc: Record<string, number> = {};
-      const sc: Record<string, number> = {};
-      groups.forEach(g => {
-        gc[g.teacherId] = (gc[g.teacherId] || 0) + 1;
-        sc[g.teacherId] = (sc[g.teacherId] || 0) + g.studentIds.length;
-      });
-      setGroupCounts(gc);
-      setStudentCounts(sc);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, search]);
-
-  useEffect(() => { loadTeachers(); }, [loadTeachers]);
+  const query = useCallback(() => loadTeachersList({ page, pageSize: PAGE_SIZE, search }), [page, search]);
+  const { data: { teachers, total, groupCounts, studentCounts }, loading, reload: loadTeachers, error } = usePageResource(query, {
+    teachers: [], total: 0, groupCounts: {}, studentCounts: {},
+  });
   useEffect(() => { setPage(1); }, [search]);
 
   function openAdd() {
@@ -82,52 +58,43 @@ export default function TeachersPage() {
 
   function openEdit(t: Teacher) {
     setEditingTeacher(t);
-    setForm({ name: t.name, specialization: t.specialization, subjectIds: t.subjectIds || [], phone: t.phone, email: t.email || '', salary: t.salary, status: t.status, avatar: t.avatar || '', notes: t.notes || '' });
+    setForm({ name: t.name, specialization: t.specialization, subjectIds: t.subjectIds || [], phone: t.phone, email: t.email || '', salary: t.salary, payModel: t.payModel || 'fixed', payRate: t.payRate, payNotes: t.payNotes || '', status: t.status, avatar: t.avatar || '', notes: t.notes || '' });
     setShowModal(true);
   }
 
   async function handleSave() {
-    if (!form.name.trim()) { notify.error('الاسم مطلوب'); return; }
-    if (!form.phone.trim()) { notify.error('الهاتف مطلوب'); return; }
-    if (!validatePhone(form.phone)) { notify.error('رقم الهاتف غير صحيح'); return; }
-    if (form.email && !validateEmail(form.email)) { notify.error('البريد الإلكتروني غير صحيح'); return; }
-    try {
-      const teacherId = editingTeacher?.id || generateId();
-      if (editingTeacher) {
-        await dbPut('teachers', { ...editingTeacher, ...form, updatedAt: new Date().toISOString() });
-        notify.success('تم تحديث بيانات المدرس');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'update', entity: 'teacher', entityId: teacherId,
-          details: `تعديل بيانات المدرس: ${form.name}`,
-        });
-      } else {
-        await dbAdd('teachers', { id: teacherId, ...form, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-        notify.success('تم إضافة المدرس بنجاح');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'create', entity: 'teacher', entityId: teacherId,
-          details: `إضافة مدرس جديد: ${form.name}`,
-        });
-      }
+    await task.run(async () => {
+      const payChanged = !editingTeacher || form.salary !== editingTeacher.salary
+        || (form.payModel || 'fixed') !== (editingTeacher.payModel || 'fixed')
+        || form.payRate !== editingTeacher.payRate || (form.payNotes || '') !== (editingTeacher.payNotes || '');
+      await saveTeacher(user, form, editingTeacher?.id, payChanged);
+      notify.success(editingTeacher ? 'تم تحديث بيانات المدرس' : 'تمت الإضافة بنجاح');
+
       setShowModal(false);
-      loadTeachers();
-    } catch { notify.error('حدث خطأ أثناء الحفظ'); }
+      await loadTeachers();
+    });
   }
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  if (error) return <PageReadError title="المدرسون" onRetry={loadTeachers} />;
 
   return (
     <Layout title="إدارة المدرسين">
       <div className="space-y-5">
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex-1 relative">
               <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input type="text" value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="بحث بالاسم أو التخصص..."
                 className="w-full pr-9 pl-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
             </div>
+            {showMoney && (
+              <button onClick={() => navigate('/payroll')} className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100">
+                <Wallet size={16} /> مرتبات المدرسين
+              </button>
+            )}
             {canWrite && (
               <button onClick={openAdd}
                 className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium"
@@ -183,7 +150,7 @@ export default function TeachersPage() {
                 <div className="text-xs text-gray-500 mb-3">
                   <p>📱 {teacher.phone}</p>
                   {teacher.email && <p>📧 {teacher.email}</p>}
-                  {showMoney && <p className="text-green-600 font-medium mt-1">💰 {formatCurrency(teacher.salary, settings?.currency)} / شهر</p>}
+                  {showMoney && <p className="text-green-600 font-medium mt-1">💰 {describeTeacherPay(teacher, settings?.currency)}</p>}
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => navigate(`/teachers/${teacher.id}`)} className="flex-1 py-1.5 text-xs bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors">عرض</button>
@@ -209,13 +176,13 @@ export default function TeachersPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="sm:col-span-2">
             <label className="block text-sm font-semibold text-gray-700 mb-1">الاسم الكامل *</label>
-            <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
+            <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder="اسم المدرس" />
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">التخصص *</label>
-            <input type="text" value={form.specialization} onChange={e => setForm({...form, specialization: e.target.value})}
+            <input type="text" value={form.specialization} onChange={e => setForm({ ...form, specialization: e.target.value })}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               placeholder="مثال: رياضيات، لغة عربية" />
           </div>
@@ -244,22 +211,23 @@ export default function TeachersPage() {
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">رقم الهاتف *</label>
-            <input type="tel" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})}
+            <input type="tel" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">البريد الإلكتروني</label>
-            <input type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})}
+            <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
           </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">الراتب الشهري</label>
-            <input type="number" value={form.salary} onChange={e => setForm({...form, salary: +e.target.value})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-          </div>
+          {canManagePay && (
+            <div className="sm:col-span-2">
+              <TeacherPayFields value={form} onChange={pay => setForm(current => ({ ...current, ...pay }))} />
+              <p className="text-xs text-gray-500 mt-2">تعديل النسبة يؤثر على الكشوف غير المعتمدة فقط؛ الكشوف المعتمدة تحتفظ بنسبتها وتفاصيلها.</p>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">الحالة</label>
-            <select value={form.status} onChange={e => setForm({...form, status: e.target.value as TeacherStatus})}
+            <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value as TeacherStatus })}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
               <option value="active">نشط</option>
               <option value="vacation">إجازة</option>
@@ -268,12 +236,12 @@ export default function TeachersPage() {
           </div>
           <div className="sm:col-span-2">
             <label className="block text-sm font-semibold text-gray-700 mb-1">ملاحظات</label>
-            <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})}
+            <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })}
               rows={2} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none" />
           </div>
         </div>
         <div className="flex gap-3 mt-5">
-          <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
+          <button onClick={handleSave} disabled={task.pending} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
             style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editingTeacher ? 'تحديث' : 'إضافة'}
           </button>
@@ -283,23 +251,12 @@ export default function TeachersPage() {
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف المدرس" message="هل أنت متأكد من حذف هذا المدرس؟"
         onConfirm={async () => {
-          if (deleteId) {
-            // حماية: منع حذف مدرس مرتبط بمجموعات نشطة
-            const allGroups = await dbGetAll<Group>('groups');
-            const linkedGroups = allGroups.filter(g => g.teacherId === deleteId && !g.deleted);
-            if (linkedGroups.length > 0) {
-              notify.error(`لا يمكن حذف المدرس - مسؤول عن ${linkedGroups.length} مجموعة. انقل المجموعات لمدرس آخر أولاً`);
-            } else {
-              await dbSoftDelete('teachers', deleteId);
-              addAuditEntry({
-                userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-                action: 'delete', entity: 'teacher', entityId: deleteId,
-                details: `حذف مدرس: ${teachers.find(t => t.id === deleteId)?.name || deleteId}`,
-              });
-              notify.success('تم الحذف');
-              loadTeachers();
-            }
-          }
+          if (!deleteId) return;
+          await task.run(async () => {
+            await deleteCatalogRecord(user, 'teachers', deleteId);
+            notify.success('تم الحذف');
+            await loadTeachers();
+          });
           setDeleteId(null);
         }}
         onCancel={() => setDeleteId(null)} danger />

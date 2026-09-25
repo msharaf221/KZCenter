@@ -1,14 +1,18 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Plus, Search, Edit2, Trash2 } from 'lucide-react';
+import { Edit2, Plus, Search, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 import Layout from '../components/layout/Layout';
-import Modal from '../components/ui/Modal';
+import PageReadError from '../components/layout/PageReadError';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import { dbGetAll, dbAdd, dbPut, dbSoftDelete, generateId, InventoryItem, Course } from '../lib/db';
-import { formatCurrency, formatDate, getContrastColor } from '../lib/utils';
-import { notify } from '../lib/notifications';
+import Modal from '../components/ui/Modal';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import { addAuditEntry } from '../lib/security';
+import type { InventoryItem } from '../domain/models';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { usePageResource } from '../hooks/usePageResource';
+import { notify } from '../lib/notifications';
+import { formatCurrency, formatDate, getContrastColor } from '../lib/utils';
+import { deleteCatalogRecord, saveInventoryItem } from '../services/commands/catalog';
+import { loadInventoryCatalog } from '../services/queries/inventory';
 
 const INITIAL_FORM = {
   name: '',
@@ -20,9 +24,7 @@ const INITIAL_FORM = {
 };
 
 export default function InventoryPage() {
-  const [items, setItems] = useState<InventoryItem[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [loading, setLoading] = useState(true);
+  const task = useCommandTask();
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState(INITIAL_FORM);
   const [editId, setEditId] = useState<string | null>(null);
@@ -33,76 +35,22 @@ export default function InventoryPage() {
   const canWrite = can('inventory', 'create') || can('inventory', 'edit');
   const canDelete = can('inventory', 'delete');
 
-  const load = useCallback(async () => {
-    try {
-      const [invData, coursesData] = await Promise.all([
-        dbGetAll<InventoryItem>('inventory'),
-        dbGetAll<Course>('courses')
-      ]);
-      setItems(invData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
-      setCourses(coursesData);
-    } catch {
-      notify.error('حدث خطأ أثناء تحميل المخزن');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
+  const { data: { items, courses }, loading, reload: load, error } = usePageResource(loadInventoryCatalog, {
+    items: [], courses: [],
+  });
 
   async function handleSave() {
-    if (!form.name.trim()) { notify.error('يرجى إدخال اسم الملزمة/الكتاب'); return; }
-    if (form.costPrice < 0 || form.sellPrice < 0) { notify.error('الأسعار غير صحيحة'); return; }
+    await task.run(async () => {
+      await saveInventoryItem(user, form, editId || undefined);
+      notify.success(editId ? 'تم التعديل بنجاح' : 'تمت الإضافة بنجاح');
 
-    try {
-      const itemId = editId || generateId();
-      if (editId) {
-        const existing = items.find(i => i.id === editId);
-        if (existing) {
-          await dbPut('inventory', { ...existing, ...form, updatedAt: new Date().toISOString() });
-          notify.success('تم التعديل بنجاح');
-          addAuditEntry({
-            userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-            action: 'update', entity: 'inventory', entityId: itemId,
-            details: `تعديل عنصر في المخزن: ${form.name}`,
-          });
-        }
-      } else {
-        const item: InventoryItem = {
-          id: itemId,
-          ...form,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        await dbAdd('inventory', item);
-        notify.success('تمت الإضافة بنجاح');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'create', entity: 'inventory', entityId: itemId,
-          details: `إضافة عنصر للمخزن: ${form.name}`,
-        });
-      }
       setShowModal(false);
-      load();
-    } catch {
-      notify.error('حدث خطأ أثناء الحفظ');
-    }
+      await load();
+    });
   }
 
   async function handleDelete(id: string) {
-    try {
-      const item = items.find(i => i.id === id);
-      await dbSoftDelete('inventory', id);
-      addAuditEntry({
-        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-        action: 'delete', entity: 'inventory', entityId: id,
-        details: `حذف عنصر من المخزن: ${item?.name || id}`,
-      });
-      notify.success('تم الحذف بنجاح');
-      load();
-    } catch {
-      notify.error('حدث خطأ أثناء الحذف');
-    }
+    await task.run(async () => { await deleteCatalogRecord(user, 'inventory', id); notify.success('تم الحذف بنجاح'); await load(); });
   }
 
   function openEdit(item: InventoryItem) {
@@ -129,6 +77,8 @@ export default function InventoryPage() {
   // حد تنبيه نقص المخزون من الإعدادات (افتراضي 5)
   const lowThreshold = settings?.lowStockThreshold ?? 5;
   const lowStockItems = items.filter(i => !i.deleted && i.stock <= lowThreshold);
+
+  if (error) return <PageReadError title="المخزون" onRetry={load} />;
 
   return (
     <Layout title="الملازم والمخزن">
@@ -225,13 +175,13 @@ export default function InventoryPage() {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-1">اسم الملزمة/الكتاب *</label>
-            <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
+            <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
               className="w-full px-3 py-2 border border-gray-200 rounded-xl focus:outline-none focus:border-indigo-500" />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">النوع</label>
-              <select value={form.type} onChange={e => setForm({...form, type: e.target.value as InventoryItem['type']})}
+              <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value as InventoryItem['type'] })}
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white focus:outline-none">
                 <option value="handout">ملزمة</option>
                 <option value="book">كتاب</option>
@@ -240,7 +190,7 @@ export default function InventoryPage() {
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">مرتبط بكورس (اختياري)</label>
-              <select value={form.courseId} onChange={e => setForm({...form, courseId: e.target.value})}
+              <select value={form.courseId} onChange={e => setForm({ ...form, courseId: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl bg-white focus:outline-none">
                 <option value="">غير مرتبط</option>
                 {courses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -248,21 +198,21 @@ export default function InventoryPage() {
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">التكلفة (سعر الشراء)</label>
-              <input type="number" min="0" value={form.costPrice} onChange={e => setForm({...form, costPrice: +e.target.value})}
+              <input type="number" min="0" value={form.costPrice} onChange={e => setForm({ ...form, costPrice: +e.target.value })}
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl focus:outline-none" />
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">سعر البيع للطالب</label>
-              <input type="number" min="0" value={form.sellPrice} onChange={e => setForm({...form, sellPrice: +e.target.value})}
+              <input type="number" min="0" value={form.sellPrice} onChange={e => setForm({ ...form, sellPrice: +e.target.value })}
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl focus:outline-none" />
             </div>
             <div className="col-span-2">
               <label className="block text-sm font-semibold text-gray-700 mb-1">الكمية المتوفرة حالياً</label>
-              <input type="number" min="0" value={form.stock} onChange={e => setForm({...form, stock: +e.target.value})}
+              <input type="number" min="0" value={form.stock} onChange={e => setForm({ ...form, stock: +e.target.value })}
                 className="w-full px-3 py-2 border border-gray-200 rounded-xl focus:outline-none" />
             </div>
           </div>
-          <button onClick={handleSave} className="w-full py-2.5 text-white rounded-xl font-semibold" style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
+          <button onClick={handleSave} disabled={task.pending} className="w-full py-2.5 text-white rounded-xl font-semibold" style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             حفظ
           </button>
         </div>

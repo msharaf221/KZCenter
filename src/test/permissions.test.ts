@@ -1,3 +1,4 @@
+import { APP_ROUTES } from '../app/routes';
 /**
  * اختبارات مصفوفة الصلاحيات — دوال نقية في src/lib/permissions.ts
  *
@@ -351,9 +352,9 @@ describe('توافق المسارات مع المصفوفة', () => {
     expect(can('admin', 'dailyReports', 'view')).toBe(true);
   });
 
-  it('كل كيان مستخدم في App.tsx كـ entity موجود في مصفوفة المسؤول', async () => {
+  it('كل كيان في سجل المسارات موجود في مصفوفة المسؤول', async () => {
     const src = (await import('../App.tsx?raw')).default as string;
-    const used = [...src.matchAll(/entity="([a-zA-Z]+)"/g)].map(m => m[1]);
+    const used = APP_ROUTES.flatMap(route => route.entity ? [route.entity] : []);
     expect(used.length).toBeGreaterThan(10);
     for (const e of used) {
       expect(PERMISSIONS.admin[e as Entity], `entity "${e}" مش موجود في المصفوفة`).toBeDefined();

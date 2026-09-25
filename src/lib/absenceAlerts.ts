@@ -5,8 +5,8 @@
  * واتصال/رسالة لولي الأمر. المنطق نقي وقابل للاختبار، وطبقة قاعدة البيانات تجمّع
  * السجلات وتستدعيه.
  */
-import type { Attendance, Student, Group } from './db';
-import { dbGetAll, dbGetByIndex, dbGetById } from './db';
+import { readAll, readById, readByIndex } from '../data/readers';
+import type { Attendance, Group, Student } from '../domain/models';
 
 /** عدد الغيابات المتتالية الذي يبدأ عنده التنبيه */
 export const ABSENCE_ALERT_THRESHOLD = 3;
@@ -102,9 +102,9 @@ export async function getRepeatedAbsenceAlerts(
   threshold: number = ABSENCE_ALERT_THRESHOLD,
 ): Promise<AbsenceAlert[]> {
   const [attendance, students, groups] = await Promise.all([
-    dbGetAll<Attendance>('attendance'),
-    dbGetAll<Student>('students'),
-    dbGetAll<Group>('groups'),
+    readAll<Attendance>('attendance'),
+    readAll<Student>('students'),
+    readAll<Group>('groups'),
   ]);
 
   const studentMap = new Map(students.map(s => [s.id, s]));
@@ -145,13 +145,13 @@ export async function checkAbsenceAlertForStudent(
   groupId: string,
   threshold: number = ABSENCE_ALERT_THRESHOLD,
 ): Promise<AbsenceAlert | null> {
-  const records = await dbGetByIndex<Attendance>('attendance', 'by-studentGroup', [studentId, groupId]);
+  const records = await readByIndex<Attendance>('attendance', 'by-studentGroup', [studentId, groupId]);
   const streak = currentAbsenceStreak(records);
   if (streak !== threshold) return null; // ننبّه عند عبور الحد بالظبط (مرة واحدة)
 
   const [student, group] = await Promise.all([
-    dbGetById<Student>('students', studentId),
-    dbGetById<Group>('groups', groupId),
+    readById<Student>('students', studentId),
+    readById<Group>('groups', groupId),
   ]);
   if (!student || !group) return null;
   const lastDate = records.map(r => r.date).sort().pop() || '';

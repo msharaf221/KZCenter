@@ -1,21 +1,26 @@
-import { useState, useEffect, useCallback } from 'react';
+import { Plus, Search, Users } from 'lucide-react';
+import { useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Users, Search } from 'lucide-react';
 import Layout from '../components/layout/Layout';
-import Modal from '../components/ui/Modal';
-import ConfirmDialog from '../components/ui/ConfirmDialog';
-import Badge from '../components/ui/Badge';
-import TransferDialog from '../components/TransferDialog';
+import PageReadError from '../components/layout/PageReadError';
 import RenewDialog from '../components/RenewDialog';
-import { dbGetAll, dbPut, dbSoftDelete, dbAdd, generateId, enrollStudent, unenrollStudent, Group, Course, Teacher, Student, GroupStatus, ScheduleItem } from '../lib/db';
+import SessionPicker from '../components/SessionPicker';
+import TransferDialog from '../components/TransferDialog';
+import Badge from '../components/ui/Badge';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import Modal from '../components/ui/Modal';
+import { useApp } from '../contexts/AppContext';
+import { useAuth } from '../contexts/AuthContext';
+import type { Group, GroupStatus, ScheduleItem } from '../domain/models';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { usePageResource } from '../hooks/usePageResource';
+import { resolveSessionsPerMonth } from '../lib/billing';
+import { notify } from '../lib/notifications';
 import { SUBJECTS, getSubject, type SubjectId } from '../lib/subjects';
 import { getContrastColor } from '../lib/utils';
-import { useApp } from '../contexts/AppContext';
-import { resolveSessionsPerMonth } from '../lib/billing';
-import SessionPicker from '../components/SessionPicker';
-import { useAuth } from '../contexts/AuthContext';
-import { notify } from '../lib/notifications';
-import { addAuditEntry } from '../lib/security';
+import { deleteCatalogRecord, saveGroup } from '../services/commands/catalog';
+import { enrollGroupStudent, removeGroupStudent } from '../services/commands/studentFinance';
+import { loadGroupsCatalog } from '../services/queries/groups';
 
 const DAYS = [
   { key: 'sunday', label: 'الأحد' },
@@ -28,19 +33,15 @@ const DAYS = [
 ];
 
 export default function GroupsPage() {
+  const task = useCommandTask();
   const navigate = useNavigate();
   const { settings } = useApp();
   const { user, can } = useAuth();
   const canWrite = can('groups', 'create') || can('groups', 'edit');
   const canDelete = can('groups', 'delete');
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [teachers, setTeachers] = useState<Teacher[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
   const [search, setSearch] = useState('');
   /** فلتر بالمادة ('' = الكل) */
   const [subjectFilter, setSubjectFilter] = useState<SubjectId | ''>('');
-  const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<Group | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -56,46 +57,10 @@ export default function GroupsPage() {
     schedule: [{ days: [], startTime: '09:00', endTime: '10:00', room: '' }] as ScheduleItem[],
   });
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [g, c, t, s] = await Promise.all([
-        dbGetAll<Group>('groups'),
-        dbGetAll<Course>('courses'),
-        dbGetAll<Teacher>('teachers'),
-        dbGetAll<Student>('students'),
-      ]);
-      const activeStudentIds = new Set(s.filter(st => !st.deleted).map(st => st.id));
-      const cleanupPromises: Promise<void>[] = [];
-      const cleanedGroups = g.map(gr => {
-        const originalCount = gr.studentIds.length;
-        const cleanedIds = gr.studentIds.filter(id => activeStudentIds.has(id));
-        if (cleanedIds.length !== originalCount) {
-          cleanupPromises.push(
-            dbPut('groups', { ...gr, studentIds: cleanedIds }).catch(console.error)
-          );
-          return { ...gr, studentIds: cleanedIds };
-        }
-        return gr;
-      });
-      // Await all cleanup writes before updating UI
-      if (cleanupPromises.length > 0) await Promise.all(cleanupPromises);
-
-      // مادة المجموعة: المخزّنة عليها، وإلا مادة كورسها (البيانات القديمة)
-      const subjectOf = (gr: Group): SubjectId | undefined =>
-        gr.subjectId ?? c.find(course => course.id === gr.courseId)?.subjectId;
-
-      setGroups(cleanedGroups.filter(gr =>
-        (!search || gr.name.toLowerCase().includes(search.toLowerCase()))
-        && (!subjectFilter || subjectOf(gr) === subjectFilter)
-      ));
-      setCourses(c);
-      setTeachers(t);
-      setStudents(s);
-    } finally { setLoading(false); }
-  }, [search, subjectFilter]);
-
-  useEffect(() => { load(); }, [load]);
+  const query = useCallback(() => loadGroupsCatalog({ search, subjectFilter, role: user?.role, teacherId: user?.teacherId }), [search, subjectFilter, user?.role, user?.teacherId]);
+  const { data: { groups, courses, teachers, students }, loading, reload: load, error } = usePageResource(query, {
+    groups: [], courses: [], teachers: [], students: [],
+  });
 
   function openAdd() {
     setEditing(null);
@@ -120,98 +85,48 @@ export default function GroupsPage() {
   }
 
   async function handleSave() {
-    if (!form.name.trim()) { notify.error('اسم المجموعة مطلوب'); return; }
-    if (!form.courseId) { notify.error('اختر كورساً'); return; }
-    if (!form.teacherId) { notify.error('اختر مدرساً'); return; }
-    try {
-      const groupId = editing?.id || generateId();
-      // المجموعة بتورث مادة كورسها عشان الفلترة والتقارير تفضل متسقة
-      const subjectId = courses.find(c => c.id === form.courseId)?.subjectId;
-      if (editing) {
-        await dbPut('groups', { ...editing, ...form, subjectId, updatedAt: new Date().toISOString() });
-        notify.success('تم تحديث المجموعة');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'update', entity: 'group', entityId: groupId,
-          details: `تعديل المجموعة: ${form.name}`,
-        });
-      } else {
-        await dbAdd('groups', { id: groupId, ...form, subjectId, studentIds: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-        notify.success('تم إضافة المجموعة');
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'create', entity: 'group', entityId: groupId,
-          details: `إضافة مجموعة: ${form.name}`,
-        });
-      }
+    await task.run(async () => {
+      await saveGroup(user, form, editing?.id);
+      notify.success(editing ? 'تم تحديث المجموعة' : 'تمت الإضافة بنجاح');
+
       setShowModal(false);
-      load();
-    } catch { notify.error('حدث خطأ'); }
+      await load();
+    });
   }
 
+  async function refreshViewedGroup(groupId: string) {
+    const result = await load();
+    const fresh = result?.groups.find(group => group.id === groupId);
+    if (task.isActive()) setViewGroup(current => current?.id === groupId ? fresh || null : current);
+  }
   async function removeStudentFromGroup(groupId: string, studentId: string) {
-    try {
-      const result = await unenrollStudent(studentId, groupId, 'إزالة يدوية من صفحة المجموعات');
-      if (!result.success) {
-        notify.error(result.error || 'حدث خطأ');
-        return;
-      }
+    await task.run(async () => {
+      await removeGroupStudent(user, studentId, groupId, 'إزالة يدوية من صفحة المجموعات');
       notify.success('تم إزالة الطالب من المجموعة');
-      load();
-      if (viewGroup) {
-        setViewGroup({ ...viewGroup, studentIds: viewGroup.studentIds.filter(id => id !== studentId) });
-      }
-    } catch (e) {
-      console.error('removeStudentFromGroup error:', e);
-      notify.error('حدث خطأ');
-    }
+      await refreshViewedGroup(groupId);
+    });
   }
-
   async function addStudentToGroup(groupId: string, studentId: string) {
     if (!studentId) return;
-    
-    try {
-      const result = await enrollStudent(
-        studentId,
-        groupId,
-        paymentAmountToAdd ? Number(paymentAmountToAdd) : undefined,
-        {
-          startSession: startSessionToAdd > 1 ? startSessionToAdd : undefined,
-          paymentMethod: 'cash',
-          collectedBy: user?.id,
-          collectedByName: user?.username,
-        }
-      );
-      if (!result.success) {
-        notify.error(result.error || 'حدث خطأ');
-        return;
-      }
+    await task.run(async () => {
+      await enrollGroupStudent(user, studentId, groupId, paymentAmountToAdd || undefined, { startSession: startSessionToAdd, paymentMethod: 'cash' });
       notify.success('تم إضافة الطالب إلى المجموعة');
-      addAuditEntry({
-        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-        action: 'update', entity: 'group', entityId: groupId,
-        details: `إضافة طالب إلى المجموعة${paymentAmountToAdd ? ` — دفعة ${paymentAmountToAdd}` : ''}`,
-      });
-      load();
-      const updatedGroup = await dbGetAll<Group>('groups').then(gs => gs.find(g => g.id === groupId));
-      if (viewGroup && updatedGroup) setViewGroup(updatedGroup);
-      setSelectedStudentToAdd('');
-      setPaymentAmountToAdd('');
-      setStartSessionToAdd(1);
-    } catch (e) {
-      console.error('addStudentToGroup error:', e);
-      notify.error('حدث خطأ');
-    }
+      await refreshViewedGroup(groupId);
+      if (!task.isActive()) return;
+      setSelectedStudentToAdd(''); setPaymentAmountToAdd(''); setStartSessionToAdd(1);
+    });
   }
 
   const selectedCourse = courses.find(c => c.id === form.courseId);
   const fillPercent = (group: Group) => group.maxStudents > 0 ? Math.round((group.studentIds.length / group.maxStudents) * 100) : 0;
 
+  if (error) return <PageReadError title="المجموعات" onRetry={load} />;
+
   return (
     <Layout title="إدارة المجموعات">
       <div className="space-y-5">
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
-          <div className="flex-1 relative">
+        <div role="group" aria-label="إجراءات المجموعات" className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-wrap items-center gap-3 max-w-full">
+          <div className="flex-1 min-w-0 basis-full sm:basis-0 relative">
             <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input type="text" value={search} onChange={e => setSearch(e.target.value)}
               placeholder="بحث بالاسم..."
@@ -302,13 +217,13 @@ export default function GroupsPage() {
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
               <label className="block text-sm font-semibold text-gray-700 mb-1">اسم المجموعة *</label>
-              <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
+              <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="مثال: الرياضيات - المجموعة أ" />
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">الكورس *</label>
-              <select value={form.courseId} onChange={e => setForm({...form, courseId: e.target.value, levelId: ''})}
+              <select value={form.courseId} onChange={e => setForm({ ...form, courseId: e.target.value, levelId: '' })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
                 <option value="">اختر كورساً</option>
                 {courses.map(c => (
@@ -320,7 +235,7 @@ export default function GroupsPage() {
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">المستوى</label>
-              <select value={form.levelId} onChange={e => setForm({...form, levelId: e.target.value})}
+              <select value={form.levelId} onChange={e => setForm({ ...form, levelId: e.target.value })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
                 <option value="">اختر مستوى</option>
                 {selectedCourse?.levels.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
@@ -328,7 +243,7 @@ export default function GroupsPage() {
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">المدرس *</label>
-              <select value={form.teacherId} onChange={e => setForm({...form, teacherId: e.target.value})}
+              <select value={form.teacherId} onChange={e => setForm({ ...form, teacherId: e.target.value })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
                 <option value="">اختر مدرساً</option>
                 {teachers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -336,12 +251,12 @@ export default function GroupsPage() {
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">الحد الأقصى للطلاب</label>
-              <input type="number" min={1} max={50} value={form.maxStudents} onChange={e => setForm({...form, maxStudents: +e.target.value})}
+              <input type="number" min={1} max={50} value={form.maxStudents} onChange={e => setForm({ ...form, maxStudents: +e.target.value })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" />
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">الحالة</label>
-              <select value={form.status} onChange={e => setForm({...form, status: e.target.value as GroupStatus})}
+              <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value as GroupStatus })}
                 className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
                 <option value="open">مفتوحة</option>
                 <option value="full">مكتملة</option>
@@ -370,19 +285,19 @@ export default function GroupsPage() {
                   <div>
                     <label className="text-xs text-gray-500">من</label>
                     <input type="time" value={sched.startTime}
-                      onChange={e => { const sc = [...form.schedule]; sc[idx] = {...sc[idx], startTime: e.target.value}; setForm({...form, schedule: sc}); }}
+                      onChange={e => { const sc = [...form.schedule]; sc[idx] = { ...sc[idx], startTime: e.target.value }; setForm({ ...form, schedule: sc }); }}
                       className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none" />
                   </div>
                   <div>
                     <label className="text-xs text-gray-500">إلى</label>
                     <input type="time" value={sched.endTime}
-                      onChange={e => { const sc = [...form.schedule]; sc[idx] = {...sc[idx], endTime: e.target.value}; setForm({...form, schedule: sc}); }}
+                      onChange={e => { const sc = [...form.schedule]; sc[idx] = { ...sc[idx], endTime: e.target.value }; setForm({ ...form, schedule: sc }); }}
                       className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none" />
                   </div>
                   <div>
                     <label className="text-xs text-gray-500">القاعة</label>
                     <input type="text" value={sched.room || ''} placeholder="رقم القاعة"
-                      onChange={e => { const sc = [...form.schedule]; sc[idx] = {...sc[idx], room: e.target.value}; setForm({...form, schedule: sc}); }}
+                      onChange={e => { const sc = [...form.schedule]; sc[idx] = { ...sc[idx], room: e.target.value }; setForm({ ...form, schedule: sc }); }}
                       className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none" />
                   </div>
                 </div>
@@ -391,7 +306,7 @@ export default function GroupsPage() {
           </div>
         </div>
         <div className="flex gap-3 mt-5">
-          <button onClick={handleSave} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
+          <button onClick={handleSave} disabled={task.pending} className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm"
             style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
             {editing ? 'تحديث' : 'إضافة'}
           </button>
@@ -414,7 +329,7 @@ export default function GroupsPage() {
               <input type="number" placeholder="دفع دلوقتي" min="0"
                 value={paymentAmountToAdd} onChange={e => setPaymentAmountToAdd(e.target.value === '' ? '' : +e.target.value)}
                 className="w-full sm:w-28 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
-              <button onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
+              <button disabled={task.pending || !can('groups', 'edit') || !selectedStudentToAdd} onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
                 className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors"
                 style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
                 إضافة
@@ -452,15 +367,15 @@ export default function GroupsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    <button onClick={() => setRenewTarget({ studentId: sid, studentName: student.name, groupId: viewGroup.id })}
+                    <button disabled={!can('payments', 'create') || task.pending} onClick={() => setRenewTarget({ studentId: sid, studentName: student.name, groupId: viewGroup.id })}
                       className="text-xs text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded-lg transition-colors" title="تجديد / استكمال الاشتراك">
                       تجديد
                     </button>
-                    <button onClick={() => setTransferTarget({ studentId: sid, studentName: student.name, fromGroupId: viewGroup.id })}
+                    <button disabled={!can('students', 'edit') || task.pending} onClick={() => setTransferTarget({ studentId: sid, studentName: student.name, fromGroupId: viewGroup.id })}
                       className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
                       تحويل
                     </button>
-                    <button onClick={() => removeStudentFromGroup(viewGroup.id, sid)}
+                    <button disabled={task.pending || !can('groups', 'edit')} onClick={() => removeStudentFromGroup(viewGroup.id, sid)}
                       className="text-xs text-red-600 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors">
                       إزالة
                     </button>
@@ -504,27 +419,12 @@ export default function GroupsPage() {
 
       <ConfirmDialog isOpen={!!deleteId} title="حذف المجموعة" message="هل أنت متأكد؟ سيتم إلغاء تسجيل جميع الطلاب من هذه المجموعة وإعادة حساب مستحقاتهم."
         onConfirm={async () => {
-          if (deleteId) {
-            const group = groups.find(g => g.id === deleteId);
-            // Cascade: unenroll all students via enrollment system + recalculate
-            if (group) {
-              for (const sid of group.studentIds) {
-                try {
-                  await unenrollStudent(sid, deleteId, 'حذف المجموعة');
-                } catch (e) {
-                  console.error(`Failed to unenroll ${sid} from ${deleteId}:`, e);
-                }
-              }
-            }
-            await dbSoftDelete('groups', deleteId);
-            addAuditEntry({
-              userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-              action: 'delete', entity: 'group', entityId: deleteId,
-              details: `حذف مجموعة: ${group?.name || deleteId}`,
-            });
+          if (!deleteId) return;
+          await task.run(async () => {
+            await deleteCatalogRecord(user, 'groups', deleteId);
             notify.success('تم الحذف');
-            load();
-          }
+            await load();
+          });
           setDeleteId(null);
         }}
         onCancel={() => setDeleteId(null)} danger />

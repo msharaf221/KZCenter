@@ -1,17 +1,27 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Calendar, DollarSign, TrendingUp, TrendingDown, Printer, Download, ChevronRight, ChevronLeft, Users, CreditCard, Wallet } from 'lucide-react';
+import dayjs from 'dayjs';
+import { Calendar, ChevronLeft, ChevronRight, CreditCard, DollarSign, Download, Printer, TrendingDown, TrendingUp, Users, Wallet } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend, LineChart, Line,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell, Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis, YAxis,
 } from 'recharts';
 import Layout from '../components/layout/Layout';
-import { dbGetAll, dbGetByIndex, getRefunds } from '../lib/db';
-import type { Payment, Expense, Student, Course } from '../lib/db';
-import { isCountedPayment } from '../lib/billing';
-import { formatCurrency, formatDate, toCSV, downloadCSV, getContrastColor, paymentStatusLabel, paymentStatusBadge } from '../lib/utils';
+import PageReadError from '../components/layout/PageReadError';
 import { useApp } from '../contexts/AppContext';
+import { dailyReport } from '../domain/reporting/daily';
+import { usePageResource } from '../hooks/usePageResource';
 import { notify } from '../lib/notifications';
-import dayjs from 'dayjs';
+import { downloadCSV, formatCurrency, formatDate, getContrastColor, paymentStatusBadge, paymentStatusLabel, toCSV } from '../lib/utils';
+import { loadDailyReportData } from '../services/queries/dailyReports';
 
 const PIE_COLORS = ['#22c55e', '#f97316', '#ef4444'];
 const TYPE_COLORS = ['#6366f1', '#8b5cf6', '#ec4899'];
@@ -19,122 +29,33 @@ const TYPE_COLORS = ['#6366f1', '#8b5cf6', '#ec4899'];
 export default function DailyReportsPage() {
   const { settings } = useApp();
   const primaryColor = settings?.primaryColor || '#6366f1';
-  
+
   const [selectedDate, setSelectedDate] = useState(dayjs().format('YYYY-MM-DD'));
-  const [loading, setLoading] = useState(true);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [allPayments, setAllPayments] = useState<Payment[]>([]);
-  const [allExpenses, setAllExpenses] = useState<Expense[]>([]);
-  const [allRefunds, setAllRefunds] = useState<{ date: string; amount: number; deleted?: boolean }[]>([]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [allP, allE, s, c] = await Promise.all([
-        dbGetAll<Payment>('payments'),
-        dbGetAll<Expense>('expenses'),
-        dbGetAll<Student>('students'),
-        dbGetAll<Course>('courses'),
-      ]);
-      
-      const allR = await getRefunds();
-      setAllPayments(allP);
-      setAllExpenses(allE);
-      setAllRefunds(allR);
-      setStudents(s);
-      setCourses(c);
-      
-      // Use indexed queries for selected date's data
-      const [dayPayments, dayExpenses] = await Promise.all([
-        dbGetByIndex<Payment>('payments', 'by-date', selectedDate),
-        dbGetByIndex<Expense>('expenses', 'by-date', selectedDate),
-      ]);
-      
-      setPayments(dayPayments);
-      setExpenses(dayExpenses);
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedDate]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const query = useCallback(() => loadDailyReportData({ selectedDate }), [selectedDate]);
+  const { data: { loadedDate, allPayments, allExpenses, allRefunds, students, courses, payments, expenses }, loading, error, reload } = usePageResource(query, {
+    loadedDate: '', allPayments: [], allExpenses: [], allRefunds: [], students: [], courses: [], payments: [], expenses: [],
+  });
 
   // Navigate dates
   function goToPreviousDay() {
     setSelectedDate(dayjs(selectedDate).subtract(1, 'day').format('YYYY-MM-DD'));
   }
-  
+
   function goToNextDay() {
     const next = dayjs(selectedDate).add(1, 'day');
     if (next.isAfter(dayjs())) return; // Don't go to future
     setSelectedDate(next.format('YYYY-MM-DD'));
   }
-  
+
   function goToToday() {
     setSelectedDate(dayjs().format('YYYY-MM-DD'));
   }
 
-  // Calculate stats — الدفعات المحسوبة فقط (غير ملغاة/محذوفة)
-  const dayValidPayments = payments.filter(isCountedPayment);
-  const dayRefunds = allRefunds.filter(r => !r.deleted && r.date === selectedDate).reduce((s, r) => s + (r.amount || 0), 0);
-  const dayGrossRevenue = dayValidPayments.reduce((s, p) => s + p.amount, 0);
-  // صافي الإيراد = المحصّل − الاستردادات
-  const todayRevenue = Math.max(0, dayGrossRevenue - dayRefunds);
-  const todayPending = payments.filter(p => !p.deleted && p.status === 'pending').reduce((s, p) => s + p.amount, 0);
-  const todayLate = payments.filter(p => !p.deleted && p.status === 'late').reduce((s, p) => s + p.amount, 0);
-  const todayExpenses = expenses.filter(e => !e.deleted).reduce((s, e) => s + e.amount, 0);
-  const todayProfit = todayRevenue - todayExpenses;
-  const totalPaymentsCount = payments.filter(p => !p.deleted).length;
-  const paidPaymentsCount = dayValidPayments.length;
-
-  // Yesterday comparison (net of refunds)
-  const yesterday = dayjs(selectedDate).subtract(1, 'day').format('YYYY-MM-DD');
-  const netFor = (dateStr: string) => {
-    const gross = allPayments.filter(p => p.date === dateStr && isCountedPayment(p)).reduce((s, p) => s + p.amount, 0);
-    const ref = allRefunds.filter(r => !r.deleted && r.date === dateStr).reduce((s, r) => s + (r.amount || 0), 0);
-    return Math.max(0, gross - ref);
-  };
-  const yesterdayRevenue = netFor(yesterday);
-  const revenueChange = yesterdayRevenue > 0
-    ? Math.round(((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100)
-    : todayRevenue > 0 ? 100 : 0;
-
-  // Payment status distribution
-  const statusData = [
-    { name: 'مدفوع', value: dayValidPayments.length, amount: todayRevenue },
-    { name: 'معلق', value: payments.filter(p => !p.deleted && p.status === 'pending').length, amount: todayPending },
-    { name: 'متأخر', value: payments.filter(p => !p.deleted && p.status === 'late').length, amount: todayLate },
-  ].filter(d => d.value > 0);
-
-  // Payment type distribution
-  const typeData = [
-    { name: 'اشتراكات', value: dayValidPayments.filter(p => p.type === 'subscription').reduce((s, p) => s + p.amount, 0) },
-    { name: 'كتب', value: dayValidPayments.filter(p => p.type === 'books').reduce((s, p) => s + p.amount, 0) },
-    { name: 'أخرى', value: dayValidPayments.filter(p => p.type === 'other').reduce((s, p) => s + p.amount, 0) },
-  ].filter(d => d.value > 0);
-
-  // Last 7 days trend
-  const last7Days = [];
-  for (let i = 6; i >= 0; i--) {
-    const date = dayjs(selectedDate).subtract(i, 'day');
-    const dateStr = date.format('YYYY-MM-DD');
-    const revenue = netFor(dateStr);
-    const expense = allExpenses
-      .filter(e => e.date === dateStr && !e.deleted)
-      .reduce((s, e) => s + e.amount, 0);
-    last7Days.push({
-      date: date.format('MM/DD'),
-      day: date.format('ddd'),
-      revenue,
-      expense,
-      profit: revenue - expense,
-    });
-  }
+  const { todayRevenue, todayPending, todayLate, todayExpenses, todayProfit, totalPaymentsCount, paidPaymentsCount, revenueChange, statusData, typeData, last7Days } = useMemo(
+    () => dailyReport({ payments: allPayments, expenses: allExpenses, refunds: allRefunds }, selectedDate),
+    [allPayments, allExpenses, allRefunds, selectedDate],
+  );
 
   // Get student and course names
   function getStudentName(id: string) {
@@ -176,7 +97,9 @@ export default function DailyReportsPage() {
   const isToday = selectedDate === dayjs().format('YYYY-MM-DD');
   const displayDate = dayjs(selectedDate).format('dddd، D MMMM YYYY');
 
-  if (loading) {
+  if (error) return <PageReadError title="التقارير اليومية" onRetry={reload} />;
+
+  if (loading || loadedDate !== selectedDate) {
     return (
       <Layout title="التقارير اليومية">
         <div className="flex justify-center py-12">
@@ -199,7 +122,7 @@ export default function DailyReportsPage() {
               >
                 <ChevronRight size={20} />
               </button>
-              
+
               <div className="flex items-center gap-2">
                 <Calendar size={20} className="text-gray-400" />
                 <input
@@ -210,7 +133,7 @@ export default function DailyReportsPage() {
                   className="px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
-              
+
               <button
                 onClick={goToNextDay}
                 disabled={isToday}
@@ -218,7 +141,7 @@ export default function DailyReportsPage() {
               >
                 <ChevronLeft size={20} />
               </button>
-              
+
               {!isToday && (
                 <button
                   onClick={goToToday}
@@ -245,7 +168,7 @@ export default function DailyReportsPage() {
               </button>
             </div>
           </div>
-          
+
           <div className="mt-3 text-center">
             <h2 className="text-lg font-bold text-gray-900">{displayDate}</h2>
             {isToday && <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">اليوم</span>}
@@ -337,7 +260,7 @@ export default function DailyReportsPage() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis dataKey="date" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip 
+                <Tooltip
                   formatter={(value, name) => [
                     formatCurrency(Number(value), settings?.currency),
                     name === 'revenue' ? 'الإيرادات' : name === 'expense' ? 'المصروفات' : 'الربح'
@@ -417,10 +340,10 @@ export default function DailyReportsPage() {
                       <p className="text-sm font-medium text-gray-900">{exp.description}</p>
                       <p className="text-xs text-gray-500">
                         {exp.category === 'salaries' ? 'رواتب' :
-                         exp.category === 'bills' ? 'فواتير' :
-                         exp.category === 'maintenance' ? 'صيانة' :
-                         exp.category === 'purchases' ? 'مشتريات' :
-                         exp.category === 'rent' ? 'إيجار' : 'أخرى'}
+                          exp.category === 'bills' ? 'فواتير' :
+                            exp.category === 'maintenance' ? 'صيانة' :
+                              exp.category === 'purchases' ? 'مشتريات' :
+                                exp.category === 'rent' ? 'إيجار' : 'أخرى'}
                       </p>
                     </div>
                     <span className="text-sm font-bold text-red-600">
@@ -439,7 +362,7 @@ export default function DailyReportsPage() {
             <h3 className="text-base font-bold text-gray-900">تفاصيل المدفوعات</h3>
             <p className="text-sm text-gray-500">{formatDate(selectedDate)}</p>
           </div>
-          
+
           {payments.length === 0 ? (
             <div className="p-12 text-center text-gray-400">
               <DollarSign size={48} className="mx-auto mb-3 opacity-30" />
@@ -503,7 +426,7 @@ export default function DailyReportsPage() {
             <h2 className="text-lg text-gray-600">التقرير اليومي للإيرادات</h2>
             <p className="text-gray-500">{displayDate}</p>
           </div>
-          
+
           <div className="grid grid-cols-3 gap-4 mb-6">
             <div className="text-center p-4 bg-green-50 rounded-lg">
               <p className="text-sm text-gray-600">الإيرادات</p>

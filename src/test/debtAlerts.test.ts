@@ -1,8 +1,9 @@
+import * as balances from '../services/balanceService';
 /**
  * اختبارات تنبيهات المديونيات (الكاش المشترك بين السايدبار والداشبورد)
  */
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { refreshDebtAlert, subscribeDebtAlert, getDebtAlert } from '../lib/debtAlerts';
 import {
   dbAdd, dbClearStore, dbPut, dbGetById, enrollStudent, recordInstallmentPayment,
@@ -86,4 +87,23 @@ describe('refreshDebtAlert', () => {
     await refreshDebtAlert(true);
     expect(seen[seen.length - 1]).toBe(2);   // ما وصلوش تحديث بعد إلغاء الاشتراك
   });
+});
+
+
+afterEach(() => vi.restoreAllMocks());
+it('marks a failed cached summary as unavailable and retries instead of reporting all students paid', async () => {
+  await seedStudent('Synthetic debtor', 100, 1, 0);
+  expect((await refreshDebtAlert(true)).debtorsCount).toBe(1);
+  const read = vi.spyOn(balances, 'getDebtors').mockRejectedValueOnce(new Error('Synthetic read failure'));
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  const seen = vi.fn();
+  const unsubscribe = subscribeDebtAlert(seen);
+  const result = await refreshDebtAlert(true);
+  expect(result).toMatchObject({ unavailable: true, debtorsCount: 1 });
+  expect(seen).toHaveBeenLastCalledWith(expect.objectContaining({ unavailable: true }));
+  read.mockRestore();
+  const retry = await refreshDebtAlert();
+  expect(retry.unavailable).not.toBe(true);
+  expect(retry.debtorsCount).toBe(1);
+  unsubscribe();
 });

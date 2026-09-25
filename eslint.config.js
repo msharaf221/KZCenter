@@ -3,6 +3,7 @@ import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
+import { compatibilityModules } from './architecture.config.mjs';
 
 export default tseslint.config(
   { ignores: ['dist', 'node_modules'] },
@@ -38,6 +39,18 @@ export default tseslint.config(
     files: ['src/contexts/**/*.tsx'],
     rules: {
       'react-refresh/only-export-components': 'off',
+    },
+  },
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/test/**'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: compatibilityModules.flatMap(file => [`**/${file.slice(0, -3)}`, `./${file.split('/').pop().slice(0, -3)}`]),
+          message: 'Import domain/data/services owners; this module is a legacy compatibility facade.',
+        }],
+      }],
     },
   },
 );

@@ -1,28 +1,38 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import dayjs from 'dayjs';
 import {
-  AlertTriangle, Search, Download, MessageCircle, Eye, Receipt,
-  Users, TrendingDown, Clock, DollarSign, Eraser,
+  AlertTriangle,
+  Clock, DollarSign,
+  Download,
+  Eraser,
+  Eye,
+  MessageCircle,
+  Receipt,
+  Search,
+  TrendingDown,
+  Users,
 } from 'lucide-react';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
+import PageReadError from '../components/layout/PageReadError';
 import Modal from '../components/ui/Modal';
 import WriteOffDebtsDialog from '../components/WriteOffDebtsDialog';
-import {
-  getDebtors, recordInstallmentPayment, markOverdueInstallments, DebtorRow,
-  WRITE_OFF_SCOPE_LABEL, WriteOffResult, WriteOffScope,
-} from '../lib/db';
-import { formatDate, formatCurrency, getWhatsAppLink, toCSV, downloadCSV, getContrastColor } from '../lib/utils';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { usePageResource } from '../hooks/usePageResource';
 import { notify } from '../lib/notifications';
-import { addAuditEntry } from '../lib/security';
-import { refreshDebtAlert } from '../lib/debtAlerts';
-import dayjs from 'dayjs';
+import { downloadCSV, formatCurrency, formatDate, getContrastColor, getWhatsAppLink, toCSV } from '../lib/utils';
+import type { DebtorRow } from '../services/balanceService';
+import { collectStudentPayment } from '../services/commands/studentFinance';
+import type { WriteOffResult, WriteOffScope } from '../services/debtWriteOffService';
+import { loadDebtors } from '../services/queries/debtors';
 
 type FilterKey = 'all' | 'overdue' | 'neverPaid' | 'suspended';
 type SortKey = 'remaining' | 'overdue' | 'oldestPayment' | 'name';
 
 export default function DebtorsPage() {
+  const task = useCommandTask();
   const navigate = useNavigate();
   const { settings } = useApp();
   const { user, can } = useAuth();
@@ -30,9 +40,7 @@ export default function DebtorsPage() {
   const canWriteOff = can('debtors', 'delete'); // إبراء الذمة = إلغاء أقساط → صلاحية حذف
   const primaryColor = settings?.primaryColor || '#6366f1';
 
-  const [debtors, setDebtors] = useState<DebtorRow[]>([]);
   const [showWriteOff, setShowWriteOff] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterKey>('all');
   const [sort, setSort] = useState<SortKey>('remaining');
@@ -41,23 +49,9 @@ export default function DebtorsPage() {
   const [payAmount, setPayAmount] = useState(0);
   const [payDate, setPayDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [payNotes, setPayNotes] = useState('');
-  const [saving, setSaving] = useState(false);
+  const saving = task.pending;
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      await markOverdueInstallments();   // تحديث حالة الأقساط المتأخرة قبل العرض
-      const rows = await getDebtors();
-      setDebtors(rows);
-      void refreshDebtAlert(true);       // تحديث عدّاد السايدبار والداشبورد
-    } catch (e) {
-      console.error('Debtors load error:', e);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
+  const { data: debtors, loading, reload: load, error } = usePageResource(loadDebtors, []);
 
   const rows = debtors
     .filter(d => {
@@ -138,9 +132,8 @@ export default function DebtorsPage() {
       notify.error(`المبلغ أكبر من المتبقي (${formatCurrency(payTarget.remaining, settings?.currency)})`);
       return;
     }
-    setSaving(true);
-    try {
-      const result = await recordInstallmentPayment({
+    await task.run(async () => {
+      const result = await collectStudentPayment(user, {
         studentId: payTarget.studentId,
         amount: payAmount,
         date: payDate,
@@ -154,28 +147,18 @@ export default function DebtorsPage() {
       );
       setPayTarget(null);
       await load();
-    } catch {
-      notify.error('حدث خطأ أثناء التحصيل');
-    } finally {
-      setSaving(false);
-    }
+    });
   }
 
   async function handleWriteOff(info: { scope: WriteOffScope; reason: string; result: WriteOffResult }) {
-    const { scope, reason, result } = info;
+    const { result } = info;
     const p = result.preview;
     if (!p) return;
 
     notify.success(
       `تم تصفير ${formatCurrency(p.amount, settings?.currency)} — ${p.installmentsCount} قسط لـ ${p.studentsCount} طالب`
     );
-    addAuditEntry({
-      userId: user?.id || 'unknown',
-      username: user?.username || 'غير معروف',
-      action: 'writeoff',
-      entity: 'installments',
-      details: `تصفير مديونيات (${WRITE_OFF_SCOPE_LABEL[scope]}): ${p.amount} — ${p.installmentsCount} قسط — ${p.studentsCount} طالب — المتبقي ${result.remainingBefore} → ${result.remainingAfter} — السبب: ${reason}`,
-    });
+
     setShowWriteOff(false);
     await load();
   }
@@ -186,6 +169,8 @@ export default function DebtorsPage() {
     { key: 'neverPaid', label: 'لم يدفعوا بعد', count: debtors.filter(d => d.daysSinceLastPayment === null).length },
     { key: 'suspended', label: 'متوقفون', count: debtors.filter(d => d.status === 'suspended').length },
   ];
+
+  if (error) return <PageReadError title="المديونيات" onRetry={load} />;
 
   return (
     <Layout title="المديونيات والتنبيهات">
@@ -224,9 +209,8 @@ export default function DebtorsPage() {
             <div className="flex flex-wrap gap-1 bg-gray-50 rounded-xl p-1">
               {FILTERS.map(f => (
                 <button key={f.key} onClick={() => setFilter(f.key)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    filter === f.key ? 'text-white' : 'text-gray-600 hover:bg-gray-100'
-                  }`}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${filter === f.key ? 'text-white' : 'text-gray-600 hover:bg-gray-100'
+                    }`}
                   style={filter === f.key ? { backgroundColor: primaryColor, color: getContrastColor(primaryColor) } : {}}>
                   {f.label} ({f.count})
                 </button>
@@ -354,7 +338,7 @@ export default function DebtorsPage() {
 
       {/* نافذة التحصيل */}
       {payTarget && (
-        <Modal isOpen={!!payTarget} onClose={() => setPayTarget(null)} title={`تحصيل دفعة — ${payTarget.name}`} size="md">
+        <Modal isOpen={!!payTarget} onClose={() => { if (!saving) setPayTarget(null); }} title={`تحصيل دفعة — ${payTarget.name}`} size="md">
           <div className="space-y-4">
             <div className="p-3 rounded-xl bg-gray-50 border border-gray-100 text-sm space-y-1">
               <div className="flex justify-between">
@@ -415,7 +399,7 @@ export default function DebtorsPage() {
               style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}>
               {saving ? 'جاري الحفظ...' : 'تأكيد التحصيل'}
             </button>
-            <button onClick={() => setPayTarget(null)}
+            <button disabled={saving} onClick={() => setPayTarget(null)}
               className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm hover:bg-gray-200">
               إلغاء
             </button>

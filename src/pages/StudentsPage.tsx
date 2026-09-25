@@ -1,63 +1,38 @@
-import { useState, useEffect, useCallback } from 'react';
+import { BookOpen, CheckSquare, ClipboardX, DollarSign, Download, Edit2, Eye, FileSpreadsheet, Filter, Plus, Search, Square, Trash2, Upload, Users } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Filter, Edit2, Trash2, Eye, Download, Upload, CheckSquare, Square, BookOpen, Users, DollarSign, FileSpreadsheet, Image as ImageIcon, AlertTriangle, ClipboardX } from 'lucide-react';
-import Layout from '../components/layout/Layout';
-import Modal from '../components/ui/Modal';
-import ConfirmDialog from '../components/ui/ConfirmDialog';
-import Badge from '../components/ui/Badge';
-import Pagination from '../components/ui/Pagination';
-import SheetImportDialog from '../components/SheetImportDialog';
 import DataImportDialog from '../components/DataImportDialog';
-import { dbGetPaginated, dbGetAll, dbPut, dbSoftDelete, dbAdd, recalculateStudentTotalPaid, enrollStudent, unenrollStudent, generateId, Student, Group, Course, Gender, StudentStatus, Attendance } from '../lib/db';
-import { toCSV, downloadCSV, parseCSV, formatDate, formatCurrency, validatePhone, getContrastColor } from '../lib/utils';
-import { effectiveMonthlyPrice, proratedFirstPeriod, resolveSessionsPerMonth } from '../lib/billing';
-import SessionPicker from '../components/SessionPicker';
+import Layout from '../components/layout/Layout';
+import PageReadError from '../components/layout/PageReadError';
+import SheetImportDialog from '../components/SheetImportDialog';
+import Badge from '../components/ui/Badge';
+import ConfirmDialog from '../components/ui/ConfirmDialog';
+import Pagination from '../components/ui/Pagination';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import { visibleGroupIds } from '../lib/permissions';
-import { notify, notifyNewStudent } from '../lib/notifications';
+import StudentFormDialog from '../features/students/StudentFormDialog';
+import { useStudentEditor } from '../features/students/useStudentEditor';
 import { useDebounce } from '../hooks';
-import { addAuditEntry } from '../lib/security';
+import { useCommandTask } from '../hooks/useCommandTask';
+import { usePageResource } from '../hooks/usePageResource';
+import { notify, notifyNewStudent } from '../lib/notifications';
+import { downloadCSV, formatCurrency, formatDate, getContrastColor, toCSV } from '../lib/utils';
+import { deleteStudents, importStudentCSV, saveStudent } from '../services/commands/students';
+import { loadStudentsList } from '../services/queries/students';
 
 const PAGE_SIZE = 24;
 
-const INITIAL_FORM: Omit<Student, 'id' | 'createdAt' | 'updatedAt'> = {
-  name: '', age: 10, gender: 'male', phone: '', parentPhone: '',
-  avatar: '', notes: '', status: 'active', totalPaid: 0, enrolledGroups: [],
-  school: '', gradeLevel: '', source: '', parentName: '',
-};
-
-/** تسعير خاص لكل تسجيل (سعر مختلف / خصم) */
-interface EnrollPricing {
-  priceOverride?: number;
-  discountAmount?: number;
-  discountPercent?: number;
-  discountReason?: string;
-}
-
-/**
- * كشف التكرار: نفس التليفون = شبه مؤكد نفس الشخص،
- * والاسم المتطابق بعد التوحيد = احتمال عالي. بننبّه المستخدم قبل ما يعمل نسخة مكررة.
- */
-const foldName = (s: string) => s
-  .replace(/[\u064B-\u0652\u0640]/g, '')
-  .replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ؤ/g, 'و')
-  .replace(/ئ/g, 'ي').replace(/ة/g, 'ه')
-  .replace(/\s+/g, ' ').trim();
-
-const digits = (s?: string) => String(s || '').replace(/\D/g, '');
-
 export default function StudentsPage() {
+  const task = useCommandTask();
+  const editor = useStudentEditor();
+  const { setShowModal, editingStudent, form, initialPayments, startSessions, enrollPricing, openAdd, openEdit } = editor;
   const navigate = useNavigate();
   const { settings } = useApp();
   const { can, user } = useAuth();
   const canEdit = can('students', 'edit') || can('students', 'create'); // المدرس: عرض فقط
   const canDelete = can('students', 'delete');
-  const showMoney = can('payments', 'view'); // الأرقام المالية لمن عنده صلاحية المدفوعات
-  const [students, setStudents] = useState<Student[]>([]);
-  const [total, setTotal] = useState(0);
+  const showMoney = can('payments', 'view');
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(false);
   const [searchParams] = useSearchParams();
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search, 300);
@@ -66,88 +41,16 @@ export default function StudentsPage() {
   const [courseFilter, setCourseFilter] = useState('');
   const [balanceFilter, setBalanceFilter] = useState('');
   const [attendanceFilter, setAttendanceFilter] = useState('');
-  /** إحصائيات الحضور لكل طالب: عدد الغياب / إجمالي السجلات — بتتحسب مرة من كل سجلات الحضور */
-  const [attStatsById, setAttStatsById] = useState<Record<string, { absent: number; total: number }>>({});
-  const [courses, setCourses] = useState<Course[]>([]);
-  const [showModal, setShowModal] = useState(false);
-  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
-  const [form, setForm] = useState<Omit<Student, 'id' | 'createdAt' | 'updatedAt'>>(INITIAL_FORM);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [showSheetImport, setShowSheetImport] = useState(false);
   const [showDataImport, setShowDataImport] = useState(false);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [initialPayments, setInitialPayments] = useState<Record<string, number>>({});
-  const [startSessions, setStartSessions] = useState<Record<string, number>>({});
-  const [enrollPricing, setEnrollPricing] = useState<Record<string, EnrollPricing>>({});
-  const [allStudents, setAllStudents] = useState<Student[]>([]);
-  const [duplicateWarning, setDuplicateWarning] = useState<{ kind: 'phone' | 'name'; matches: Student[] } | null>(null);
 
-  const loadStudents = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [everyGroup, allCourses, allAttendance] = await Promise.all([
-        dbGetAll<Group>('groups'),
-        dbGetAll<Course>('courses'),
-        dbGetAll<Attendance>('attendance'),
-      ]);
-      // المدرس يشوف مجموعاته وطلابها هو بس
-      const allowed = visibleGroupIds({ role: user?.role, teacherId: user?.teacherId, groups: everyGroup });
-      const allGroups = allowed ? everyGroup.filter(g => allowed.has(g.id)) : everyGroup;
-      setGroups(allGroups);
-      setCourses(allCourses);
-
-      // تجميع إحصائيات الحضور لكل طالب (غياب/إجمالي سجلات)
-      const stats: Record<string, { absent: number; total: number }> = {};
-      for (const a of allAttendance) {
-        if (!stats[a.studentId]) stats[a.studentId] = { absent: 0, total: 0 };
-        stats[a.studentId].total += 1;
-        if (a.status === 'absent') stats[a.studentId].absent += 1;
-      }
-      setAttStatsById(stats);
-
-      const result = await dbGetPaginated<Student>('students', page, PAGE_SIZE, (s: Student) => {
-        if (allowed && !(s.enrolledGroups || []).some(gid => allowed.has(gid))) return false;
-        const q = debouncedSearch.toLowerCase();
-        const matchSearch = !q || s.name.toLowerCase().includes(q) || s.parentPhone.includes(q);
-        const matchStatus = !statusFilter || s.status === statusFilter;
-        const matchGroup = !groupFilter || s.enrolledGroups?.includes(groupFilter);
-
-        let matchCourse = true;
-        if (courseFilter) {
-          const studentGroups = allGroups.filter(g => s.enrolledGroups?.includes(g.id));
-          matchCourse = studentGroups.some(g => g.courseId === courseFilter);
-        }
-
-        // فلتر المتبقي (مبني على المستحقات المحسوبة على الطالب)
-        const remaining = (s.totalOwed || 0) - s.totalPaid;
-        const matchBalance = !balanceFilter
-          || (balanceFilter === 'debt' && remaining > 0)
-          || (balanceFilter === 'settled' && remaining <= 0);
-
-        // فلتر الغياب: غاب على الأقل مرة / غياب متكرر (3+) / بدون سجل حضور
-        const st = stats[s.id];
-        const absentCount = st?.absent || 0;
-        const totalCount = st?.total || 0;
-        const matchAttendance = !attendanceFilter
-          || (attendanceFilter === 'absent' && absentCount > 0)
-          || (attendanceFilter === 'repeat' && absentCount >= 3)
-          || (attendanceFilter === 'none' && totalCount === 0);
-
-        return matchSearch && matchStatus && matchGroup && matchCourse && matchBalance && matchAttendance;
-      });
-      setStudents(result.items);
-      setTotal(result.total);
-      setAllStudents(await dbGetAll<Student>('students'));
-    } finally {
-      setLoading(false);
-    }
-  }, [page, debouncedSearch, statusFilter, groupFilter, courseFilter, balanceFilter, attendanceFilter, user?.role, user?.teacherId]);
-
-  useEffect(() => {
-    loadStudents();
-  }, [loadStudents]);
+  const query = useCallback(() => loadStudentsList({ page, pageSize: PAGE_SIZE, search: debouncedSearch, statusFilter, groupFilter, courseFilter, balanceFilter, attendanceFilter, role: user?.role, teacherId: user?.teacherId }), [page, debouncedSearch, statusFilter, groupFilter, courseFilter, balanceFilter, attendanceFilter, user?.role, user?.teacherId]);
+  const { data: { groups, courses, attStatsById, students, total, allStudents }, loading, reload: loadStudents, error } = usePageResource(query, {
+    groups: [], courses: [], attStatsById: {}, students: [], total: 0, allStudents: [],
+  });
 
   useEffect(() => {
     setPage(1);
@@ -159,214 +62,27 @@ export default function StudentsPage() {
     if (q !== null) setSearch(q);
   }, [searchParams]);
 
-  /**
-   * كشف التكرار أثناء الكتابة: نفس رقم ولي الأمر، أو نفس الاسم بعد التوحيد.
-   * الهدف نمنع «أحمد محمد» يتسجل مرتين وتضيع فلوسه على سجلين.
-   */
-  useEffect(() => {
-    if (!showModal) { setDuplicateWarning(null); return; }
-    const phone = digits(form.parentPhone);
-    const nameKey = foldName(form.name);
-
-    const matches = allStudents.filter(st => {
-      if (editingStudent && st.id === editingStudent.id) return false;
-      if (phone.length >= 10 && (digits(st.parentPhone) === phone || digits(st.phone) === phone)) return true;
-      if (nameKey.length >= 6 && foldName(st.name) === nameKey) return true;
-      return false;
-    });
-
-    if (matches.length === 0) { setDuplicateWarning(null); return; }
-    const byPhone = matches.some(st =>
-      phone.length >= 10 && (digits(st.parentPhone) === phone || digits(st.phone) === phone));
-    setDuplicateWarning({ kind: byPhone ? 'phone' : 'name', matches: matches.slice(0, 3) });
-  }, [form.parentPhone, form.name, showModal, allStudents, editingStudent]);
-
-  /** رفع صورة الطالب — بتتصغر وتتخزن data URL (من غير سيرفر ملفات) */
-  async function handlePhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith('image/')) { notify.error('الملف لازم يكون صورة'); return; }
-    if (file.size > 3 * 1024 * 1024) { notify.error('حجم الصورة كبير (الحد 3 ميجا)'); return; }
-    const dataUrl = await new Promise<string>((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        const max = 256;
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.82));
-      };
-      img.onerror = () => resolve('');
-      img.src = URL.createObjectURL(file);
-    });
-    if (!dataUrl) { notify.error('تعذّر قراءة الصورة'); return; }
-    setForm(f => ({ ...f, avatar: dataUrl }));
-    notify.success('تم رفع الصورة — اضغط حفظ لتفعيلها');
-  }
-
-  function openAdd() {
-    setEditingStudent(null);
-    setForm(INITIAL_FORM);
-    setInitialPayments({});
-    setStartSessions({});
-    setEnrollPricing({});
-    setShowModal(true);
-  }
-
-  function openEdit(student: Student) {
-    setEditingStudent(student);
-    setInitialPayments({});
-    setStartSessions({});
-    setEnrollPricing({});
-    setForm({
-      name: student.name, age: student.age, gender: student.gender,
-      phone: student.phone || '', parentPhone: student.parentPhone,
-      avatar: student.avatar || '', notes: student.notes || '',
-      status: student.status, totalPaid: student.totalPaid,
-      enrolledGroups: student.enrolledGroups,
-    });
-    setShowModal(true);
-  }
-
   async function handleSave() {
-    if (!canEdit) { notify.error('ليس لديك صلاحية التعديل'); return; }
-    if (!form.name.trim()) { notify.error('الاسم مطلوب'); return; }
-    if (!form.parentPhone.trim()) { notify.error('هاتف ولي الأمر مطلوب'); return; }
-    if (!validatePhone(form.parentPhone)) { notify.error('هاتف ولي الأمر غير صحيح'); return; }
-    if (form.phone && !validatePhone(form.phone)) { notify.error('هاتف الطالب غير صحيح'); return; }
-    if (form.age < 3 || form.age > 18) { notify.error('العمر يجب أن يكون بين 3 و 18 سنة'); return; }
-
-    // فحص المجموعات الجديدة (السعة والحالة) قبل أي حفظ - نفس منطق صفحة المجموعات
-    const oldGroups = editingStudent?.enrolledGroups || [];
-    const newGroups = form.enrolledGroups || [];
-    const removedGroups = oldGroups.filter(g => !newGroups.includes(g));
-    const addedGroups = newGroups.filter(g => !oldGroups.includes(g));
-
-    for (const groupId of addedGroups) {
-      const g = groups.find(g => g.id === groupId);
-      if (!g) continue;
-      if (g.status === 'ended') {
-        notify.error(`المجموعة "${g.name}" منتهية - لا يمكن التسجيل فيها`);
-        return;
-      }
-      if (g.studentIds.length >= g.maxStudents) {
-        notify.error(`المجموعة "${g.name}" مكتملة (${g.studentIds.length}/${g.maxStudents})`);
-        return;
-      }
-    }
-
-    try {
-      const studentId = editingStudent?.id || generateId();
-      
-      const newStudentData = {
-        id: studentId,
-        ...form,
-        updatedAt: new Date().toISOString(),
-      };
-
-      if (editingStudent) {
-        await dbPut('students', { ...editingStudent, ...newStudentData });
-        notify.success('تم تحديث بيانات الطالب');
-        addAuditEntry({
-          userId: user?.id || 'unknown',
-          username: user?.username || 'غير معروف',
-          action: 'update',
-          entity: 'student',
-          entityId: studentId,
-          details: `تعديل بيانات الطالب: ${form.name}`,
-        });
-      } else {
-        await dbAdd('students', { ...newStudentData, createdAt: new Date().toISOString() });
-        notifyNewStudent(form.name);
-        addAuditEntry({
-          userId: user?.id || 'unknown',
-          username: user?.username || 'غير معروف',
-          action: 'create',
-          entity: 'student',
-          entityId: studentId,
-          details: `إضافة طالب جديد: ${form.name}`,
-        });
-      }
-
-      for (const groupId of removedGroups) {
-        try {
-          await unenrollStudent(studentId, groupId, 'تعديل بيانات الطالب');
-        } catch (e) {
-          console.error(`Failed to unenroll ${studentId} from ${groupId}:`, e);
-        }
-      }
-      for (const groupId of addedGroups) {
-        const paidAmount = initialPayments[groupId] || 0;
-        const fromSession = startSessions[groupId] || 1;
-        const pricing = enrollPricing[groupId] || {};
-        try {
-          const result = await enrollStudent(
-            studentId,
-            groupId,
-            paidAmount > 0 ? paidAmount : undefined,
-            {
-              startSession: fromSession,
-              priceOverride: pricing.priceOverride && pricing.priceOverride > 0 ? pricing.priceOverride : undefined,
-              discountAmount: pricing.discountAmount && pricing.discountAmount > 0 ? pricing.discountAmount : undefined,
-              discountPercent: pricing.discountPercent && pricing.discountPercent > 0 ? pricing.discountPercent : undefined,
-              discountReason: pricing.discountReason || undefined,
-              // الدفعة الأولى تتسجل باسم اللي حصّلها (تظهر في التقرير اليومي بالموظف)
-              paymentMethod: 'cash',
-              collectedBy: user?.id,
-              collectedByName: user?.username,
-            }
-          );
-          if (!result.success) {
-            notify.error(`تعذّر التسجيل في "${groups.find(g => g.id === groupId)?.name}": ${result.error}`);
-          }
-        } catch (e) {
-          console.error(`Failed to enroll ${studentId} in ${groupId}:`, e);
-        }
-      }
-
-      // إعادة حساب المدفوع والمستحق دائماً بعد أي تغيير في المجموعات
-      if (addedGroups.length > 0 || removedGroups.length > 0) {
-        await recalculateStudentTotalPaid(studentId);
-      }
-
+    await task.run(async () => {
+      const result = await saveStudent(user, { id: editingStudent?.id, baselineGroupIds: editingStudent?.enrolledGroups, draft: form, initialPayments, startSessions, pricing: enrollPricing });
+      if (editingStudent) notify.success('تم تحديث بيانات الطالب'); else { notifyNewStudent(form.name); notify.success('تم إضافة الطالب بنجاح'); }
+      for (const warning of result.warnings) notify.error(warning);
       setShowModal(false);
-      loadStudents();
-    } catch {
-      notify.error('حدث خطأ أثناء الحفظ');
-    }
+      await loadStudents();
+    });
   }
 
   async function handleDelete(id: string) {
-    if (!canDelete) { notify.error('ليس لديك صلاحية الحذف'); return; }
-    try {
-      const student = students.find(s => s.id === id);
-      if (student && student.enrolledGroups) {
-        for (const groupId of student.enrolledGroups) {
-          try {
-            await unenrollStudent(id, groupId, 'حذف الطالب');
-          } catch (e) {
-            console.error(`Failed to unenroll ${id} from ${groupId}:`, e);
-          }
-        }
-      }
-      await dbSoftDelete('students', id);
-      addAuditEntry({
-        userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-        action: 'delete', entity: 'student', entityId: id,
-        details: `حذف طالب: ${student?.name || id}${student && (student.totalOwed || 0) - student.totalPaid > 0 ? ` (كان عليه ${formatCurrency((student.totalOwed || 0) - student.totalPaid, settings?.currency)})` : ''}`,
-      });
-      notify.success('تم حذف الطالب');
-      loadStudents();
-    } catch {
-      notify.error('حدث خطأ أثناء الحذف');
-    }
+    await task.run(async () => {
+      const result = await deleteStudents(user, [id]);
+      for (const warning of result.warnings) notify.error(warning);
+      notify.success('تم حذف الطالب'); await loadStudents();
+    });
   }
 
   /** رسالة تأكيد الحذف — بتنبّه لو الطالب عليه فلوس (الحذف بيسقط دينه من قائمة المديونيات) */
   function deleteMessage(ids: string[]): string {
-    const targets = students.filter(s => ids.includes(s.id));
+    const targets = allStudents.filter(s => ids.includes(s.id));
     const debt = targets.reduce((sum, s) => sum + Math.max(0, (s.totalOwed || 0) - s.totalPaid), 0);
     const base = ids.length === 1
       ? 'هل أنت متأكد من حذف هذا الطالب؟ سيتم حذفه بشكل مؤقت.'
@@ -377,45 +93,27 @@ export default function StudentsPage() {
   }
 
   async function handleBulkDelete() {
-    if (!canDelete) { notify.error('ليس لديك صلاحية الحذف'); return; }
-    try {
-      for (const id of selectedIds) {
-        const student = students.find(s => s.id === id);
-        if (student && student.enrolledGroups) {
-          for (const groupId of student.enrolledGroups) {
-            try {
-              await unenrollStudent(id, groupId, 'حذف جماعي');
-            } catch (e) {
-              console.error(`Failed to unenroll ${id} from ${groupId}:`, e);
-            }
-          }
-        }
-        await dbSoftDelete('students', id);
-        addAuditEntry({
-          userId: user?.id || 'unknown', username: user?.username || 'غير معروف',
-          action: 'delete', entity: 'student', entityId: id,
-          details: `حذف طالب (جماعي): ${student?.name || id}`,
-        });
-      }
-      notify.success(`تم حذف ${selectedIds.length} طالب`);
-      setSelectedIds([]);
-      loadStudents();
-    } catch {
-      notify.error('حدث خطأ أثناء الحذف الجماعي');
-    }
+    await task.run(async () => {
+      const result = await deleteStudents(user, selectedIds);
+      for (const warning of result.warnings) notify.error(warning);
+      notify.success(`تم حذف ${result.deleted} طالب`);
+      setSelectedIds([]); await loadStudents();
+    });
   }
 
   function toggleSelect(id: string) {
     setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
   }
 
+  const allVisibleSelected = students.length > 0 && students.every(student => selectedIds.includes(student.id));
+  const someVisibleSelected = students.some(student => selectedIds.includes(student.id));
   function toggleSelectAll() {
-    if (selectedIds.length === students.length) {
-      setSelectedIds([]);
-    } else {
-      setSelectedIds(students.map(s => s.id));
-    }
+    const visibleIds = students.map(student => student.id);
+    setSelectedIds(previous => visibleIds.every(id => previous.includes(id))
+      ? previous.filter(id => !visibleIds.includes(id))
+      : [...new Set([...previous, ...visibleIds])]);
   }
+
 
   function exportCSV() {
     const rows = students.map(s => {
@@ -452,55 +150,20 @@ export default function StudentsPage() {
     notify.success('تم تحميل نموذج الاستيراد');
   }
 
-  async function handleImportCSV(e: React.ChangeEvent<HTMLInputElement>) {
-    if (!canEdit) { notify.error('ليس لديك صلاحية الاستيراد'); return; }
-    const file = e.target.files?.[0];
+  async function handleImportCSV(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
     if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const text = event.target?.result as string;
-      const rows = parseCSV(text);
-      if (rows.length < 2) { notify.error('الملف فارغ أو غير صالح'); return; }
-
-      const headers = rows[0];
-      const dataRows = rows.slice(1);
-
-      let imported = 0;
-      let errors = 0;
-
-      for (const row of dataRows) {
-        if (row.every(cell => !cell.trim())) continue;
-        try {
-          const name = row[headers.indexOf(headers.find(h => h.includes('الاسم')) || '')] || row[0];
-          const age = parseInt(row[1]) || 12;
-          const gender = (row[2] as Gender) || 'male';
-          const phone = row[3] || '';
-          const parentPhone = row[4] || '';
-          const status = (row[5] as StudentStatus) || 'active';
-          const notes = row[6] || '';
-
-          if (!name.trim() || !parentPhone.trim()) { errors++; continue; }
-
-          const student: Student = {
-            id: generateId(), name: name.trim(), age, gender,
-            phone, parentPhone: parentPhone.trim(), status, notes,
-            totalPaid: 0, enrolledGroups: [],
-            createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-          };
-          await dbAdd('students', student);
-          imported++;
-        } catch { errors++; }
-      }
-
-      notify.success(`تم استيراد ${imported} طالب${errors > 0 ? ` (${errors} خطأ)` : ''}`);
-      loadStudents();
-    };
-    reader.readAsText(file, 'UTF-8');
-    e.target.value = '';
+    await task.run(async () => {
+      const result = await importStudentCSV(user, await file.text());
+      notify.success(`تم استيراد ${result.imported} طالب${result.errors ? ` (${result.errors} خطأ)` : ''}`);
+      await loadStudents();
+    });
   }
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  if (error) return <PageReadError title="الطلاب" onRetry={loadStudents} />;
 
   return (
     <Layout title="إدارة الطلاب">
@@ -567,18 +230,18 @@ export default function StudentsPage() {
 
             {/* Balance Filter */}
             {showMoney && (
-            <div className="relative">
-              <DollarSign size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              <select
-                value={balanceFilter}
-                onChange={e => setBalanceFilter(e.target.value)}
-                className="pr-9 pl-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-              >
-                <option value="">كل الأرصدة</option>
-                <option value="debt">عليهم مبالغ</option>
-                <option value="settled">مسددين</option>
-              </select>
-            </div>
+              <div className="relative">
+                <DollarSign size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <select
+                  value={balanceFilter}
+                  onChange={e => setBalanceFilter(e.target.value)}
+                  className="pr-9 pl-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+                >
+                  <option value="">كل الأرصدة</option>
+                  <option value="debt">عليهم مبالغ</option>
+                  <option value="settled">مسددين</option>
+                </select>
+              </div>
             )}
 
             {/* Attendance Filter */}
@@ -607,7 +270,7 @@ export default function StudentsPage() {
               </button>
             )}
 
-            <div className="flex gap-2 mr-auto">
+            <div role="group" aria-label="إجراءات الطلاب" className="flex min-w-0 max-w-full flex-wrap gap-2 mr-auto">
               {canEdit && (
                 <>
                   <button onClick={downloadTemplate} className="flex items-center gap-2 px-3 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-700 hover:bg-gray-50 transition-colors">
@@ -667,8 +330,8 @@ export default function StudentsPage() {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="p-4 text-right">
-                    <button onClick={toggleSelectAll}>
-                      {selectedIds.length === students.length && students.length > 0
+                    <button type="button" role="checkbox" aria-label="اختيار كل الطلاب المعروضين" aria-checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false} disabled={loading || task.pending || !students.length} onClick={toggleSelectAll}>
+                      {allVisibleSelected
                         ? <CheckSquare size={16} className="text-indigo-600" />
                         : <Square size={16} className="text-gray-400" />
                       }
@@ -696,7 +359,7 @@ export default function StudentsPage() {
                 ) : students.map((student, idx) => (
                   <tr key={student.id} className="hover:bg-gray-50 transition-colors">
                     <td className="p-4">
-                      <button onClick={() => toggleSelect(student.id)}>
+                      <button type="button" role="checkbox" aria-label={`اختيار ${student.name}`} aria-checked={selectedIds.includes(student.id)} disabled={task.pending} onClick={() => toggleSelect(student.id)}>
                         {selectedIds.includes(student.id)
                           ? <CheckSquare size={16} className="text-indigo-600" />
                           : <Square size={16} className="text-gray-400" />
@@ -795,222 +458,7 @@ export default function StudentsPage() {
       </div>
 
       {/* Add/Edit Modal */}
-      <Modal isOpen={showModal} onClose={() => setShowModal(false)} title={editingStudent ? 'تعديل بيانات الطالب' : 'إضافة طالب جديد'} size="lg">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {/* كشف التكرار */}
-          {duplicateWarning && (
-            <div className="sm:col-span-2 p-3 rounded-xl bg-amber-50 border border-amber-200">
-              <p className="text-xs font-bold text-amber-800 flex items-center gap-1.5 mb-1.5">
-                <AlertTriangle size={14} />
-                {duplicateWarning.kind === 'phone'
-                  ? 'فيه طالب بنفس رقم ولي الأمر — تأكد إن ده مش نفس الشخص'
-                  : 'فيه طالب بنفس الاسم — تأكد إن ده مش تسجيل مكرر'}
-              </p>
-              <div className="space-y-1">
-                {duplicateWarning.matches.map(m => (
-                  <button key={m.id} type="button"
-                    onClick={() => { setShowModal(false); navigate(`/students/${m.id}`); }}
-                    className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-lg bg-white/70 hover:bg-white text-right">
-                    <span className="text-xs font-semibold text-gray-800">{m.name}</span>
-                    <span className="text-[11px] text-gray-500" dir="ltr">{m.parentPhone}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* الصورة */}
-          <div className="sm:col-span-2 flex items-center gap-3">
-            <div className="w-16 h-16 rounded-xl border-2 border-dashed border-gray-200 flex items-center justify-center overflow-hidden bg-gray-50 flex-shrink-0">
-              {form.avatar
-                ? <img src={form.avatar} alt={form.name} className="w-full h-full object-cover" />
-                : <ImageIcon size={20} className="text-gray-300" />}
-            </div>
-            <div className="flex gap-2">
-              <label className="inline-flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-xl text-xs text-gray-700 hover:bg-gray-50 cursor-pointer">
-                <Upload size={13} /> رفع صورة
-                <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
-              </label>
-              {form.avatar && (
-                <button type="button" onClick={() => setForm(f => ({ ...f, avatar: '' }))}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 border border-red-200 rounded-xl text-xs text-red-600 hover:bg-red-50">
-                  <Trash2 size={13} /> إزالة
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-semibold text-gray-700 mb-1">الاسم الكامل *</label>
-            <input type="text" value={form.name} onChange={e => setForm({...form, name: e.target.value})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              placeholder="أدخل اسم الطالب" />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">العمر *</label>
-            <input type="number" min={3} max={18} value={form.age} onChange={e => setForm({...form, age: +e.target.value})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">النوع *</label>
-            <select value={form.gender} onChange={e => setForm({...form, gender: e.target.value as Gender})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
-              <option value="male">ولد</option>
-              <option value="female">بنت</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">هاتف الطالب</label>
-            <input type="tel" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              placeholder="اختياري" />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">هاتف ولي الأمر *</label>
-            <input type="tel" value={form.parentPhone} onChange={e => setForm({...form, parentPhone: e.target.value})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              placeholder="إلزامي" />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">الحالة</label>
-            <select value={form.status} onChange={e => setForm({...form, status: e.target.value as StudentStatus})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
-              <option value="active">نشط</option>
-              <option value="suspended">متوقف</option>
-              <option value="ended">منتهي</option>
-            </select>
-          </div>
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-semibold text-gray-700 mb-1">المجموعات المسجل بها</label>
-            <div className="border border-gray-200 rounded-xl max-h-40 overflow-y-auto p-2 bg-white space-y-1">
-              {groups.map(g => (
-                <div key={g.id} className="flex flex-col gap-2 p-2 hover:bg-gray-50 rounded-lg transition-colors border border-transparent hover:border-gray-200">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={form.enrolledGroups.includes(g.id)}
-                      onChange={e => {
-                        const checked = e.target.checked;
-                        const newEnrolled = checked 
-                          ? [...form.enrolledGroups, g.id]
-                          : form.enrolledGroups.filter(id => id !== g.id);
-                        setForm({...form, enrolledGroups: newEnrolled});
-                        if (!checked) {
-                          const newPayments = { ...initialPayments };
-                          delete newPayments[g.id];
-                          setInitialPayments(newPayments);
-                          const newSessions = { ...startSessions };
-                          delete newSessions[g.id];
-                          setStartSessions(newSessions);
-                        }
-                      }}
-                      className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500" />
-                    <span className="text-sm font-medium">{g.name}</span>
-                    <span className="text-xs text-gray-400">({g.studentIds.length}/{g.maxStudents})</span>
-                  </label>
-                  {form.enrolledGroups.includes(g.id) && (!editingStudent || !editingStudent.enrolledGroups?.includes(g.id)) && (() => {
-                    const course = courses.find(c => c.id === g.courseId);
-                    const pr = enrollPricing[g.id] || {};
-                    const monthly = course ? effectiveMonthlyPrice({ coursePrice: course.price, priceOverride: pr.priceOverride }) : 0;
-                    const sessions = resolveSessionsPerMonth({
-                      courseSessionsPerMonth: course?.sessionsPerMonth,
-                      settingSessionsPerMonth: settings?.sessionsPerMonth,
-                    });
-                    const fromSession = startSessions[g.id] || 1;
-                    const firstMonth = fromSession > 1 ? proratedFirstPeriod(monthly, fromSession, sessions) : monthly;
-                    const paid = initialPayments[g.id] || 0;
-                    const left = Math.max(0, firstMonth - paid);
-                    return (
-                      <div className="pr-6 space-y-1.5">
-                        <SessionPicker
-                          size="sm"
-                          sessions={sessions}
-                          value={fromSession}
-                          onChange={n => setStartSessions({ ...startSessions, [g.id]: n })}
-                        />
-                        <div className="flex flex-wrap items-center gap-2">
-                          <label className="text-xs text-gray-500">سعر خاص</label>
-                          <input type="number" min={0} placeholder={course ? String(course.price) : ''}
-                            value={pr.priceOverride ?? ''}
-                            onChange={e => setEnrollPricing(p => ({ ...p, [g.id]: { ...p[g.id], priceOverride: e.target.value === '' ? undefined : +e.target.value } }))}
-                            className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500" />
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <label className="text-xs text-gray-500">دفع دلوقتي</label>
-                          <input type="number" placeholder="0" min="0"
-                            value={initialPayments[g.id] || ''}
-                            onChange={e => setInitialPayments({...initialPayments, [g.id]: +e.target.value})}
-                            className="w-28 px-3 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500" />
-                          {course && (
-                            <button type="button" onClick={() => setInitialPayments({...initialPayments, [g.id]: firstMonth})}
-                              className="px-2 py-1 text-[11px] rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">المبلغ كله</button>
-                          )}
-                        </div>
-                        {course && (
-                          <p className="text-xs text-gray-500">
-                            {fromSession > 1
-                              ? <>المطلوب: <strong className="text-gray-800">{formatCurrency(firstMonth, settings?.currency)}</strong> ({sessions - fromSession + 1} حصص من {sessions} × {formatCurrency(Math.round((monthly / sessions) * 100) / 100, settings?.currency)})</>
-                              : <>المطلوب: <strong className="text-gray-800">{formatCurrency(firstMonth, settings?.currency)}</strong> (شهر كامل)</>}
-                            {paid > 0 && (
-                              <> — يدفع {formatCurrency(paid, settings?.currency)} و
-                                {left > 0
-                                  ? <strong className="text-red-600"> باقي {formatCurrency(left, settings?.currency)}</strong>
-                                  : <strong className="text-green-600"> خالص</strong>}
-                              </>
-                            )}
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-              ))}
-              {groups.length === 0 && <p className="text-sm text-gray-500 text-center py-2">لا توجد مجموعات متاحة</p>}
-            </div>
-          </div>
-          {/* بيانات المتابعة (CRM) */}
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">اسم ولي الأمر</label>
-            <input type="text" value={form.parentName || ''} onChange={e => setForm({...form, parentName: e.target.value})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" placeholder="اختياري" />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">المدرسة</label>
-            <input type="text" value={form.school || ''} onChange={e => setForm({...form, school: e.target.value})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" placeholder="اختياري" />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">الصف الدراسي</label>
-            <input type="text" value={form.gradeLevel || ''} onChange={e => setForm({...form, gradeLevel: e.target.value})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none" placeholder="مثال: تالتة ابتدائي" />
-          </div>
-          <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-1">إزاي عرف المركز؟</label>
-            <select value={form.source || ''} onChange={e => setForm({...form, source: e.target.value})}
-              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
-              <option value="">غير محدد</option>
-              {['إعلان فيسبوك', 'توصية من ولي أمر', 'لافتة المركز', 'بحث جوجل', 'إنستجرام', 'أخ/أخت في المركز', 'أخرى'].map(o => (
-                <option key={o} value={o}>{o}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-semibold text-gray-700 mb-1">ملاحظات</label>
-            <textarea value={form.notes} onChange={e => setForm({...form, notes: e.target.value})}
-              rows={3} className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-              placeholder="أي ملاحظات إضافية..." />
-          </div>
-        </div>
-        <div className="flex gap-3 mt-5">
-          <button onClick={handleSave}
-            className="flex-1 py-2.5 text-white rounded-xl font-semibold text-sm transition-colors"
-            style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-            {editingStudent ? 'تحديث' : 'إضافة'}
-          </button>
-          <button onClick={() => setShowModal(false)} className="flex-1 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-semibold text-sm hover:bg-gray-200 transition-colors">
-            إلغاء
-          </button>
-        </div>
-      </Modal>
+      <StudentFormDialog editor={editor} students={allStudents} groups={groups} courses={courses} onSave={handleSave} busy={task.pending} />
 
       {/* End Modals */}
 

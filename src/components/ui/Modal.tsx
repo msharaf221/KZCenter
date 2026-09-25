@@ -1,5 +1,6 @@
-import { ReactNode, useEffect } from 'react';
 import { X } from 'lucide-react';
+import { ReactNode, useId } from 'react';
+import DialogFrame from './DialogFrame';
 
 interface ModalProps {
   isOpen: boolean;
@@ -10,17 +11,7 @@ interface ModalProps {
 }
 
 export default function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalProps) {
-  useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-    return () => { document.body.style.overflow = ''; };
-  }, [isOpen]);
-
-  if (!isOpen) return null;
-
+  const titleId = useId();
   const sizeClasses = {
     sm: 'max-w-md',
     md: 'max-w-lg',
@@ -29,25 +20,25 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' }:
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" dir="rtl">
-      <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={onClose}
-      />
-      <div className={`relative bg-white rounded-2xl shadow-2xl w-full ${sizeClasses[size]} max-h-[90vh] flex flex-col fade-in`}>
-        <div className="flex items-center justify-between p-5 border-b border-gray-100">
-          <h2 className="text-lg font-bold text-gray-900">{title}</h2>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors"
-          >
-            <X size={20} />
-          </button>
-        </div>
-        <div className="overflow-y-auto flex-1 p-5">
-          {children}
-        </div>
+    <DialogFrame
+      open={isOpen}
+      onDismiss={onClose}
+      labelledBy={titleId}
+      className={`${sizeClasses[size]} max-h-[90vh] flex flex-col`}
+    >
+      <div className="flex items-center justify-between p-5 border-b border-gray-100">
+        <h2 id={titleId} className="text-lg font-bold text-gray-900">
+          {title}
+        </h2>
+        <button
+          onClick={onClose}
+          aria-label="إغلاق النافذة"
+          className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors"
+        >
+          <X size={20} />
+        </button>
       </div>
-    </div>
+      <div className="overflow-y-auto flex-1 p-5">{children}</div>
+    </DialogFrame>
   );
 }

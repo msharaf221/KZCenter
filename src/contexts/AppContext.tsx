@@ -1,8 +1,12 @@
-import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import { Settings, dbGetById, dbPut } from '../lib/db';
-import { setSettingsCache, DEFAULT_SETTINGS_VALUES } from '../lib/settings';
-import { requestNotificationPermission, updateNotificationSettings } from '../lib/notifications';
-import { getSupabaseConfigured } from '../lib/supabase';
+import { createContext, ReactNode, useCallback, useContext, useEffect, useState } from 'react';
+import { applyApplicationTheme } from '../app/theme';
+import ResourceError from '../components/ui/ResourceError';
+import { getSupabaseConfigured } from '../data/cloud/client';
+import type { Settings } from '../domain/models';
+import { useAsyncResource } from '../hooks/useAsyncResource';
+import { notify, requestNotificationPermission, updateNotificationSettings } from '../lib/notifications';
+import { setSettingsCache } from '../lib/settings';
+import { loadApplicationSettings, updateApplicationSettings } from '../services/settingsService';
 
 interface AppContextType {
   settings: Settings | null;
@@ -19,113 +23,69 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | null>(null);
 
-/** نفس الافتراضيات الموجودة في lib/settings (مصدر واحد للحقيقة) */
-const DEFAULT_SETTINGS: Settings = DEFAULT_SETTINGS_VALUES;
-
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [settings, setSettings] = useState<Settings | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [darkMode, setDarkMode] = useState(false);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const { data: settings, error: settingsError, reload } = useAsyncResource<Settings | null>(loadApplicationSettings, null);
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 768);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    () => 'Notification' in window && Notification.permission === 'granted',
+  );
 
   useEffect(() => {
-    refreshSettings();
-    checkNotificationPermission();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- مقصود: إعادة التحميل مربوطة بالـ deps المكتوبة بس
+    if (!settings) return;
+    setSettingsCache(settings);
+    applyApplicationTheme(settings);
+    updateNotificationSettings({
+      notifyNewStudent: settings.notifyNewStudent,
+      notifyAbsence: settings.notifyAbsence,
+      notifyLatePayment: settings.notifyLatePayment,
+    });
+  }, [settings]);
+
+  useEffect(() => {
+    const collapseOnMobile = () => {
+      if (window.innerWidth < 768) setSidebarOpen(false);
+    };
+    window.addEventListener('resize', collapseOnMobile);
+    return () => window.removeEventListener('resize', collapseOnMobile);
   }, []);
-
-  async function checkNotificationPermission() {
-    if ('Notification' in window && Notification.permission === 'granted') {
-      setNotificationsEnabled(true);
-    }
-  }
-
-  async function enableNotifications() {
-    const granted = await requestNotificationPermission();
-    setNotificationsEnabled(granted);
-  }
 
   const refreshSettings = useCallback(async () => {
-    try {
-      const s = await dbGetById<Settings>('settings', 'main');
-      if (s) {
-        setSettingsCache(s);
-        setSettings(s);
-        applySettings(s);
-        updateNotificationSettings({
-          notifyNewStudent: s.notifyNewStudent,
-          notifyAbsence: s.notifyAbsence,
-          notifyLatePayment: s.notifyLatePayment,
-        });
-      } else {
-        setSettingsCache(DEFAULT_SETTINGS);
-        setSettings(DEFAULT_SETTINGS);
-        applySettings(DEFAULT_SETTINGS);
-      }
-    } catch (e) {
-      console.error('refreshSettings error:', e);
-      setSettingsCache(DEFAULT_SETTINGS);
-      setSettings(DEFAULT_SETTINGS);
-    }
-  }, []);
+    await reload();
+  }, [reload]);
+  const updateSettings = useCallback(
+    async (partial: Partial<Settings>) => {
+      await updateApplicationSettings(partial);
+      await reload();
+    },
+    [reload],
+  );
 
-  function applySettings(s: Settings) {
-    // Apply primary color
-    document.documentElement.style.setProperty('--primary', s.primaryColor);
-
-    // Apply font size
-    const html = document.documentElement;
-    html.classList.remove('font-sm', 'font-md', 'font-lg');
-    html.classList.add(`font-${s.fontSize}`);
-
-    // Apply dark mode
-    if (s.darkMode) {
-      html.classList.add('dark');
-    } else {
-      html.classList.remove('dark');
-    }
-    setDarkMode(s.darkMode);
-  }
-
-  async function updateSettings(partial: Partial<Settings>) {
-    const current = settings || DEFAULT_SETTINGS;
-    const updated = { ...current, ...partial };
-    await dbPut('settings', updated);
-    setSettingsCache(updated);
-    setSettings(updated);
-    applySettings(updated);
-    
-    // Update notification settings
-    if (partial.notifyNewStudent !== undefined || 
-        partial.notifyAbsence !== undefined || 
-        partial.notifyLatePayment !== undefined) {
-      updateNotificationSettings({
-        notifyNewStudent: updated.notifyNewStudent,
-        notifyAbsence: updated.notifyAbsence,
-        notifyLatePayment: updated.notifyLatePayment,
-      });
-    }
+  async function enableNotifications() {
+    setNotificationsEnabled(await requestNotificationPermission());
   }
 
   function toggleDarkMode() {
-    const newMode = !darkMode;
-    updateSettings({ darkMode: newMode });
+    void updateApplicationSettings(current => ({ darkMode: !current.darkMode }))
+      .then(() => reload())
+      .catch(() => notify.error('تعذّر حفظ إعدادات المظهر'));
   }
 
   return (
-    <AppContext.Provider value={{
-      settings,
-      updateSettings,
-      sidebarOpen,
-      setSidebarOpen,
-      darkMode,
-      toggleDarkMode,
-      refreshSettings,
-      isCloudEnabled: getSupabaseConfigured(),
-      notificationsEnabled,
-      enableNotifications,
-    }}>
-      {children}
+    <AppContext.Provider
+      value={{
+        settings,
+        updateSettings,
+        sidebarOpen,
+        setSidebarOpen,
+        darkMode: settings?.darkMode ?? false,
+        toggleDarkMode,
+        refreshSettings,
+        isCloudEnabled: getSupabaseConfigured(),
+        notificationsEnabled,
+        enableNotifications,
+      }}
+    >
+      {settingsError ? <div className="mx-auto max-w-xl p-6"><ResourceError onRetry={reload} message="تعذّر قراءة إعدادات المركز. أعد المحاولة قبل استخدام النظام." /></div> : children}
     </AppContext.Provider>
   );
 }

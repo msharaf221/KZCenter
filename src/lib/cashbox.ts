@@ -1,3 +1,4 @@
+import { round2 } from './money';
 /**
  * الخزينة والصندوق (Cash Box) — التقفيل اليومي ومطابقة النقدية
  *
@@ -9,10 +10,11 @@
  *   المستخدم يعدّ الدرج → **المعدود فعلياً** → الفرق (عجز/زيادة).
  */
 import dayjs from 'dayjs';
-import {
-  dbAdd, dbGetAll, dbGetById, dbGetByIndex, dbPut, generateId,
-  CashSession, Expense, Payment, PaymentMethod, Refund, isCountedPayment,
-} from './db';
+import { readAll, readById, readByIndex } from '../data/readers';
+import { dbAdd, dbPut } from '../data/records';
+import type { CashSession, Expense, Payment, PaymentMethod, Refund } from '../domain/models';
+import { isCountedPayment } from './billing';
+import { generateId } from './ids';
 
 export const METHOD_LABEL: Record<PaymentMethod, string> = {
   cash: 'نقدي',
@@ -120,9 +122,9 @@ export function computeDayTotals(opts: {
 /** إجماليات يوم من القاعدة */
 export async function getDayTotals(date: string, openingBalance = 0): Promise<DayTotals> {
   const [payments, refunds, expenses] = await Promise.all([
-    dbGetAll<Payment>('payments'),
-    dbGetAll<Refund>('refunds'),
-    dbGetAll<Expense>('expenses'),
+    readAll<Payment>('payments'),
+    readAll<Refund>('refunds'),
+    readAll<Expense>('expenses'),
   ]);
   return computeDayTotals({ date, payments, refunds, expenses, openingBalance });
 }
@@ -131,10 +133,10 @@ export async function getDayTotals(date: string, openingBalance = 0): Promise<Da
 
 export async function getCashSessionByDate(date: string): Promise<CashSession | null> {
   try {
-    const rows = await dbGetByIndex<CashSession>('cashbox_sessions', 'by-date', date);
+    const rows = await readByIndex<CashSession>('cashbox_sessions', 'by-date', date);
     return rows.find(s => !s.closedAt) || rows[rows.length - 1] || null;
   } catch {
-    const all = await dbGetAll<CashSession>('cashbox_sessions');
+    const all = await readAll<CashSession>('cashbox_sessions');
     return all.find(s => s.date === date) || null;
   }
 }
@@ -186,7 +188,7 @@ export async function closeCashSession(opts: {
   username?: string;
   notes?: string;
 }): Promise<CloseResult> {
-  const session = await dbGetById<CashSession>('cashbox_sessions', opts.sessionId);
+  const session = await readById<CashSession>('cashbox_sessions', opts.sessionId);
   if (!session) return { success: false, error: 'الوردية غير موجودة' };
   if (session.status === 'closed') return { success: false, error: 'الوردية متقفلة بالفعل' };
 
@@ -221,7 +223,7 @@ export async function closeCashSession(opts: {
 
 /** سجل الورديات (للمتابعة والمراجعة) */
 export async function getCashSessions(limit = 60): Promise<CashSession[]> {
-  const rows = await dbGetAll<CashSession>('cashbox_sessions');
+  const rows = await readAll<CashSession>('cashbox_sessions');
   return rows
     .sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.openedAt || '').localeCompare(a.openedAt || ''))
     .slice(0, limit);
@@ -237,9 +239,9 @@ export async function summarizePeriod(from: string, to: string): Promise<{
   paymentsCount: number;
 }> {
   const [payments, refunds, expenses] = await Promise.all([
-    dbGetAll<Payment>('payments'),
-    dbGetAll<Refund>('refunds'),
-    dbGetAll<Expense>('expenses'),
+    readAll<Payment>('payments'),
+    readAll<Refund>('refunds'),
+    readAll<Expense>('expenses'),
   ]);
 
   const byMethod = ZERO_METHODS();
@@ -270,8 +272,4 @@ export async function summarizePeriod(from: string, to: string): Promise<{
     net: round2(collected - refundsTotal - expensesTotal),
     paymentsCount,
   };
-}
-
-function round2(n: number): number {
-  return Math.round((n || 0) * 100) / 100;
 }

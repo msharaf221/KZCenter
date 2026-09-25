@@ -1,17 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  FileSpreadsheet, Upload, AlertTriangle, CheckCircle2, Users, Layers, GraduationCap, BookOpen,
+  AlertTriangle,
+  BookOpen,
+  CheckCircle2,
+  FileSpreadsheet,
+  GraduationCap,
+  Layers,
+  Upload,
+  Users,
 } from 'lucide-react';
-import Modal from './ui/Modal';
-import { useApp } from '../contexts/AppContext';
-import { notify } from '../lib/notifications';
+import type { CourseStrategy } from '../domain/imports/types';
+import { useSheetImport } from '../features/imports/useSheetImport';
 import { getContrastColor } from '../lib/utils';
-import {
-  parseSheetBuffer, importSheetIntoDb, subjectOfParsedGroup, SheetParseResult, SheetImportOptions,
-  SheetImportReport, CourseStrategy,
-} from '../lib/sheetImport';
-import { SUBJECTS, type SubjectId } from '../lib/subjects';
-import { getSubjectPrices } from '../lib/subjectSync';
+import Modal from './ui/Modal';
 
 interface Props {
   open: boolean;
@@ -34,132 +34,7 @@ const STRATEGY_LABELS: { value: CourseStrategy; label: string; hint: string }[] 
  * في كل مجموعاته (مش بيتعمله نسخة تانية).
  */
 export default function SheetImportDialog({ open, onClose, onDone }: Props) {
-  const { settings } = useApp();
-  const primaryColor = settings?.primaryColor || '#6366f1';
-
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [fileName, setFileName] = useState('');
-  const [parsed, setParsed] = useState<SheetParseResult | null>(null);
-  const [parsing, setParsing] = useState(false);
-  const [opts, setOpts] = useState<SheetImportOptions>({
-    courseStrategy: 'bySubject',
-    coursePrice: 0,
-    durationMonths: 1,
-    phonePrefix: '0100000',
-    maxStudents: 40,
-    useSubjectPrices: true,
-  });
-  /** أسعار المواد الفعلية (من الإعدادات) — بتتحمّل مرة عند فتح النافذة */
-  const [prices, setPrices] = useState<Record<SubjectId, number> | null>(null);
-  const [progress, setProgress] = useState<{ done: number; total: number; label: string } | null>(null);
-  const [report, setReport] = useState<SheetImportReport | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [showAllGroups, setShowAllGroups] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    getSubjectPrices().then(p => {
-      setPrices(p);
-      setOpts(o => ({ ...o, subjectPrices: p }));
-    });
-  }, [open]);
-
-  /** توزيع مجموعات الشيت على المواد (معاينة قبل الاستيراد) */
-  const subjectBreakdown = useMemo(() => {
-    if (!parsed) return { rows: [] as { id: SubjectId; name: string; icon: string; groups: number; price: number }[], unknown: 0 };
-    const counts = new Map<SubjectId, number>();
-    let unknown = 0;
-    for (const g of parsed.groups) {
-      const subject = subjectOfParsedGroup(g);
-      if (!subject) { unknown++; continue; }
-      counts.set(subject.id, (counts.get(subject.id) || 0) + 1);
-    }
-    const rows = SUBJECTS
-      .filter(s => counts.has(s.id))
-      .map(s => ({
-        id: s.id,
-        name: s.name,
-        icon: s.icon,
-        groups: counts.get(s.id) || 0,
-        price: prices?.[s.id] ?? s.monthlyPrice,
-      }));
-    return { rows, unknown };
-  }, [parsed, prices]);
-
-  const coursesCount = useMemo(() => {
-    if (!parsed) return 0;
-    const set = new Set<string>();
-    for (const g of parsed.groups) {
-      if (opts.courseStrategy === 'single') set.add('Kids Zone');
-      else if (opts.courseStrategy === 'byTeacher') set.add(g.teacherName);
-      else if (opts.courseStrategy === 'bySubject') {
-        const subject = subjectOfParsedGroup(g);
-        set.add(subject ? subject.name : (g.name.includes(g.teacherName) ? g.teacherName : g.name.replace(/\([^)]*\)/g, '').replace(/\d+(\s*\/\s*\d+)?/g, '').trim()));
-      }
-      else set.add(g.name.includes(g.teacherName) ? g.teacherName : g.name.replace(/\([^)]*\)/g, '').replace(/\d+(\s*\/\s*\d+)?/g, '').trim());
-    }
-    return set.size;
-  }, [parsed, opts.courseStrategy]);
-
-  const handleFile = useCallback(async (file: File | undefined) => {
-    if (!file) return;
-    setParsing(true);
-    setReport(null);
-    setFileName(file.name);
-    try {
-      const buf = await file.arrayBuffer();
-      const result = await parseSheetBuffer(buf);
-      if (result.teachers.length === 0) {
-        notify.error('مفيش مدرسين أو طلاب في الشيت — اتأكد إنه نفس شكل شيت المركز');
-        setParsed(null);
-      } else if (!result.looksLikeCenterSheet) {
-        notify.error('الملف ده مش شيت المركز — العناوين لازم يكون فيها اليوم والميعاد (مثال: «s.r 1 السبت من 4/5»)');
-        setParsed(null);
-      } else {
-        setParsed(result);
-      }
-    } catch (err) {
-      notify.error(`ماقدرتش أقرا الملف: ${(err as Error).message}`);
-      setParsed(null);
-    } finally {
-      setParsing(false);
-    }
-  }, []);
-
-  const runImport = useCallback(async () => {
-    if (!parsed) return;
-    setBusy(true);
-    setReport(null);
-    setProgress({ done: 0, total: 1, label: 'جاري التحضير…' });
-    try {
-      const result = await importSheetIntoDb(parsed, opts, (done, total, label) => {
-        if (done % 25 === 0 || done === total) setProgress({ done, total, label });
-      });
-      setProgress({ done: 1, total: 1, label: 'تم' });
-      setReport(result);
-      if (result.errors.length > 0) {
-        notify.error(`تم الاستيراد مع ${result.errors.length} مشكلة`);
-      } else {
-        notify.success(
-          `تم الاستيراد: ${result.teachersCreated + result.teachersExisting} مدرس، ` +
-          `${result.groupsCreated + result.groupsExisting} مجموعة، ` +
-          `${result.studentsCreated + result.studentsExisting} طالب`
-        );
-      }
-      onDone();
-    } catch (err) {
-      notify.error(`حصل خطأ أثناء الاستيراد: ${(err as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
-  }, [parsed, opts, onDone]);
-
-  const percent = progress && progress.total > 0
-    ? Math.round((progress.done / progress.total) * 100)
-    : 0;
-
-  const visibleGroups = parsed ? (showAllGroups ? parsed.groups : parsed.groups.slice(0, 12)) : [];
-
+  const { primaryColor, fileRef, fileName, parsed, parsing, opts, setOpts, prices, progress, report, busy, showAllGroups, setShowAllGroups, subjectBreakdown, coursesCount, handleFile, runImport, percent, visibleGroups } = useSheetImport(open, onDone);
   return (
     <Modal isOpen={open} onClose={busy ? () => {} : onClose} title="استيراد شيت إكسيل" size="xl">
       <div className="p-5 space-y-4 overflow-y-auto">

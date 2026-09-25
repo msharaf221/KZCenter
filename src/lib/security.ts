@@ -208,8 +208,8 @@ export function clearSession(): void {
  *  - ما يتمسحش بمسح بيانات المتصفح
  * الدوال هنا re-export عشان كل الاستيرادات القديمة تفضل شغالة.
  */
-export { addAuditEntry, clearAuditLog, getAuditEntries, auditStats, migrateAuditFromLocalStorage } from './audit';
-export type { AuditEntry, AuditAction } from './audit';
+export { addAuditEntry, auditStats, clearAuditLog, getAuditEntries, migrateAuditFromLocalStorage } from './audit';
+export type { AuditAction, AuditEntry } from './audit';
 
 // ==================== PASSWORD VALIDATION ====================
 

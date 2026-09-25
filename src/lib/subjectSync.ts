@@ -18,17 +18,20 @@
  * الدوال كلها idempotent: تشغيلها أكتر من مرة ما بيغيّرش حاجة زيادة.
  */
 import dayjs from 'dayjs';
-import {
-  dbGetAll, dbPut, dbAdd, generateId,
-  type Course, type Group, type Teacher, type Installment, type Enrollment,
-  recalculateStudentTotalPaid,
-} from './db';
+import { readAll } from '../data/readers';
+import { dbAdd, dbPut } from '../data/records';
+import type { Course, Enrollment, Group, Teacher } from '../domain/models';
+import { recalculateStudentTotalPaid } from '../services/balanceService';
+import type { Installment } from './billing';
+import { installmentState } from './billing';
+import { generateId } from './ids';
 import { getSettings } from './settings';
 import {
-  SUBJECTS, matchSubjectId, subjectPrice, getSubject,
+  SUBJECTS,
+  getSubject,
+  matchSubjectId, subjectPrice,
   type SubjectId, type SubjectPrices,
 } from './subjects';
-import { installmentState } from './billing';
 
 export interface SubjectSyncOptions {
   /** إنشاء كورس لكل مادة ناقصة (عشان تقدر تفتح مجموعات عليها فوراً) */
@@ -119,9 +122,9 @@ export async function syncSubjects(options: SubjectSyncOptions = {}): Promise<Su
 
   const now = new Date().toISOString();
   const [courses, groups, teachers] = await Promise.all([
-    dbGetAll<Course>('courses'),
-    dbGetAll<Group>('groups'),
-    dbGetAll<Teacher>('teachers'),
+    readAll<Course>('courses'),
+    readAll<Group>('groups'),
+    readAll<Teacher>('teachers'),
   ]);
 
   const teacherById = new Map(teachers.map(t => [t.id, t]));
@@ -252,9 +255,9 @@ export async function syncSubjects(options: SubjectSyncOptions = {}): Promise<Su
     );
     if (affectedGroupIds.size > 0) {
       const [installments, enrollments, freshCourses] = await Promise.all([
-        dbGetAll<Installment>('installments'),
-        dbGetAll<Enrollment>('enrollments'),
-        dbGetAll<Course>('courses'),
+        readAll<Installment>('installments'),
+        readAll<Enrollment>('enrollments'),
+        readAll<Course>('courses'),
       ]);
       const priceByGroup = new Map<string, number>();
       for (const g of groups) {
@@ -294,8 +297,8 @@ export async function syncSubjects(options: SubjectSyncOptions = {}): Promise<Su
   }
 
   // ---------- 6) ملخّص الأسعار ----------
-  const finalCourses = await dbGetAll<Course>('courses');
-  const finalGroups = await dbGetAll<Group>('groups');
+  const finalCourses = await readAll<Course>('courses');
+  const finalGroups = await readAll<Group>('groups');
   report.prices = SUBJECTS.map(s => ({
     id: s.id,
     name: s.name,
