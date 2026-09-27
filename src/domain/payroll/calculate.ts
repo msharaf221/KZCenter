@@ -22,6 +22,7 @@ export function groupSubscriptionLines(
   groupId: string,
   period: string,
   rate: number,
+  calcMode: 'percentage' | 'fixed' = 'percentage'
 ): PayrollStudentLine[] {
   const names = new Map((ctx.students || []).map(s => [s.id, s.name]));
   const byStudent = new Map<string, PayrollStudentLine>();
@@ -48,8 +49,15 @@ export function groupSubscriptionLines(
     };
     line.installmentIds.push(installment.id);
     line.subscriptionAmount = round2(line.subscriptionAmount + installment.amount);
-    // جنيه → قروش، ونسبة → أجزاء من مئة؛ نتجنب 1.005 → 1.00 بسبب الكسور الثنائية.
-    line.amount = Math.round((Math.round(line.subscriptionAmount * 100) * Math.round(rate * 100)) / 10_000) / 100;
+    
+    if (calcMode === 'percentage') {
+      // جنيه → قروش، ونسبة → أجزاء من مئة؛ نتجنب 1.005 → 1.00 بسبب الكسور الثنائية.
+      line.amount = Math.round((Math.round(line.subscriptionAmount * 100) * Math.round(rate * 100)) / 10_000) / 100;
+    } else {
+      // مبلغ ثابت لكل طالب في المجموعة
+      line.amount = rate;
+    }
+    
     byStudent.set(installment.studentId, line);
   }
   return [...byStudent.values()].sort((a, b) => a.studentName.localeCompare(b.studentName, 'ar'));
@@ -89,7 +97,7 @@ export function calcTeacherPayroll(
   const lines: PayrollLine[] = [];
 
   const teacherGroups = ctx.groups.filter(
-    g => g.teacherId === teacher.id && !g.deleted && (model === 'subscription_percentage' || g.status !== 'ended'),
+    g => g.teacherId === teacher.id && !g.deleted && (model === 'subscription_percentage' || model === 'per_student' || g.status !== 'ended'),
   );
 
   // كل الفروع بتعيّن القيم دي، فبنعلنهم من غير قيمة ابتدائية
@@ -132,9 +140,10 @@ export function calcTeacherPayroll(
     gross = round2(totalSessions * rate);
     base = totalSessions;
     baseLabel = `${totalSessions} حصة × ${rate}`;
-  } else if (model === 'subscription_percentage') {
+  } else if (model === 'subscription_percentage' || model === 'per_student') {
+    const isFixed = model === 'per_student';
     for (const g of teacherGroups) {
-      const students = groupSubscriptionLines(ctx, g.id, period, rate);
+      const students = groupSubscriptionLines(ctx, g.id, period, rate, isFixed ? 'fixed' : 'percentage');
       if (students.length === 0) continue;
       lines.push({
         groupId: g.id,
@@ -146,9 +155,17 @@ export function calcTeacherPayroll(
         students,
       });
     }
-    base = round2(lines.reduce((sum, l) => sum + (l.subscriptions || 0), 0));
-    gross = round2(lines.reduce((sum, l) => sum + l.amount, 0));
-    baseLabel = `${rate}% من اشتراكات بقيمة ${base}`;
+    
+    if (isFixed) {
+      const totalStudents = lines.reduce((sum, l) => sum + (l.students?.length || 0), 0);
+      base = totalStudents;
+      gross = round2(totalStudents * rate);
+      baseLabel = `${totalStudents} طالب × ${rate}`;
+    } else {
+      base = round2(lines.reduce((sum, l) => sum + (l.subscriptions || 0), 0));
+      gross = round2(lines.reduce((sum, l) => sum + l.amount, 0));
+      baseLabel = `${rate}% من اشتراكات بقيمة ${base}`;
+    }
   } else if (model === 'percentage') {
     let totalCollected = 0;
     for (const g of teacherGroups) {

@@ -16,7 +16,7 @@ export type TeacherStatus = 'active' | 'vacation' | 'suspended';
  *  - subscription_percentage → نسبة من قيمة اشتراكات الشهر، سواء سُددت أم لا
  *  - per_group  → مبلغ ثابت لكل مجموعة في الشهر
  */
-export type TeacherPayModel = 'fixed' | 'per_session' | 'percentage' | 'subscription_percentage' | 'per_group';
+export type TeacherPayModel = 'fixed' | 'per_session' | 'percentage' | 'subscription_percentage' | 'per_group' | 'per_student';
 
 export type GroupStatus = 'open' | 'full' | 'ended';
 

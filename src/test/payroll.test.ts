@@ -109,6 +109,8 @@ function ctx(o: Partial<PayrollContext> = {}): PayrollContext {
     attendance: o.attendance || [],
     payments: o.payments || [],
     advances: o.advances || [],
+    installments: o.installments || [],
+    students: o.students || [],
   };
 }
 
@@ -254,6 +256,28 @@ describe('calcTeacherPayroll — نسبة من المحصّل (percentage)', () 
       payments: [payment({ groupId: 'g1', amount: 1000, date: '2026-02-15' })],
     }));
     expect(r.base).toBe(0);
+  });
+});
+
+describe('calcTeacherPayroll — مبلغ ثابت لكل طالب (per_student)', () => {
+  it('بيحسب مبلغ ثابت عن كل طالب في المجموعة', () => {
+    const t = teacher({ id: 't1', payModel: 'per_student', payRate: 40 });
+    const g1 = group({ id: 'g1', teacherId: 't1' });
+    const r = calcTeacherPayroll(t, PERIOD, ctx({
+      groups: [g1],
+      installments: [
+        { id: '1', studentId: 's1', groupId: 'g1', amount: 200, dueDate: '2026-03-01', status: 'pending', createdAt: '', updatedAt: '' },
+        { id: '2', studentId: 's2', groupId: 'g1', amount: 200, dueDate: '2026-03-05', status: 'paid', createdAt: '', updatedAt: '' },
+        { id: '3', studentId: 's1', groupId: 'g2', amount: 200, dueDate: '2026-03-01', status: 'pending', createdAt: '', updatedAt: '' }
+      ],
+      students: [
+        { id: 's1', name: 'Student 1', age: 10, gender: 'male', parentPhone: '1', status: 'active', enrolledGroups: [], totalPaid: 0, createdAt: '', updatedAt: '' },
+        { id: 's2', name: 'Student 2', age: 10, gender: 'male', parentPhone: '2', status: 'active', enrolledGroups: [], totalPaid: 0, createdAt: '', updatedAt: '' }
+      ]
+    }));
+    expect(r.model).toBe('per_student');
+    expect(r.base).toBe(2); // 2 students in g1
+    expect(r.gross).toBe(80); // 40 * 2
   });
 });
 

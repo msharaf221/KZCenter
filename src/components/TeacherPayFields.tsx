@@ -30,7 +30,7 @@ export default function TeacherPayFields({ value, onChange, disabled }: Props) {
         </div>
         <div>
           <label htmlFor={`${id}-rate`} className="block text-sm font-semibold text-gray-700 mb-1">
-            {percentage ? 'نسبة المدرس (%)' : model === 'fixed' ? 'الراتب الشهري' : model === 'per_session' ? 'أجر الحصة' : 'أجر المجموعة شهرياً'}
+            {percentage ? 'نسبة المدرس (%)' : model === 'fixed' ? 'الراتب الشهري' : model === 'per_session' ? 'أجر الحصة' : model === 'per_group' ? 'أجر المجموعة شهرياً' : 'أجر الطالب شهرياً'}
           </label>
           <input id={`${id}-rate`} type="number" min="0" max={percentage ? 100 : undefined} step="0.01" inputMode="decimal"
             value={amount !== undefined && Number.isFinite(amount) ? amount : ''} required
@@ -56,6 +56,8 @@ export default function TeacherPayFields({ value, onChange, disabled }: Props) {
           <p>عدد الأيام المختلفة التي سُجّل فيها حضور للمجموعة في الشهر × أجر الحصة.</p>
         ) : model === 'per_group' ? (
           <p>عدد المجموعات النشطة للمدرس في الشهر × أجر المجموعة.</p>
+        ) : model === 'per_student' ? (
+          <p>مبلغ ثابت عن كل طالب له اشتراك (قسط) في الشهر، بغض النظر عن قيمة الدفع.</p>
         ) : <p>مبلغ ثابت كل شهر، لا يتوقف على تحصيل اشتراكات الطلاب.</p>}
       </div>
       <div>

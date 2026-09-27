@@ -8,6 +8,7 @@ export const PAY_MODEL_LABEL: Record<TeacherPayModel, string> = {
   per_session: 'بالحصص المسلَّمة',
   percentage: 'نسبة من المحصّل',
   per_group: 'مبلغ لكل مجموعة',
+  per_student: 'مبلغ ثابت لكل طالب',
 };
 
 export function isPercentageModel(model: TeacherPayModel): boolean {
@@ -38,6 +39,8 @@ export function describeTeacherPay(t: TeacherPaySettings, currency?: string): st
       return `${formatCurrency(t.payRate || 0, currency)} / حصة`;
     case 'per_group':
       return `${formatCurrency(t.payRate || 0, currency)} / مجموعة / شهر`;
+    case 'per_student':
+      return `${formatCurrency(t.payRate || 0, currency)} / طالب / شهر`;
     default:
       return `${formatCurrency(t.salary || 0, currency)} / شهر (ثابت)`;
   }
