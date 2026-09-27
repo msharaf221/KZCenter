@@ -260,6 +260,10 @@ export default function StudentFormDialog({ editor, students, groups, courses, o
                           value={fromSession}
                           onChange={n => setStartSessions({ ...startSessions, [g.id]: n })}
                         />
+                        <div className="bg-indigo-50 border border-indigo-100 px-3 py-2 rounded-lg text-xs flex justify-between items-center my-2">
+                          <span className="text-indigo-700 font-semibold">المطلوب لهذا الشهر بناءً على الحصة المحددة:</span>
+                          <span className="font-bold text-indigo-900">{formatCurrency(firstMonth, settings?.currency)}</span>
+                        </div>
                         <div className="flex flex-wrap items-center gap-2">
                           <label className="text-xs text-gray-500">سعر خاص</label>
                           <input

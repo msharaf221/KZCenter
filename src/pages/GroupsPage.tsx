@@ -15,10 +15,10 @@ import type { Group, GroupStatus, ScheduleItem, PaymentMethod } from '../domain/
 import { METHOD_ORDER, METHOD_LABEL } from '../lib/cashbox';
 import { useCommandTask } from '../hooks/useCommandTask';
 import { usePageResource } from '../hooks/usePageResource';
-import { resolveSessionsPerMonth } from '../lib/billing';
+import { resolveSessionsPerMonth, effectiveMonthlyPrice, proratedFirstPeriod } from '../lib/billing';
 import { notify } from '../lib/notifications';
 import { SUBJECTS, getSubject, type SubjectId } from '../lib/subjects';
-import { getContrastColor } from '../lib/utils';
+import { getContrastColor, formatCurrency } from '../lib/utils';
 import { deleteCatalogRecord, saveGroup } from '../services/commands/catalog';
 import { enrollGroupStudent, removeGroupStudent } from '../services/commands/studentFinance';
 import { loadGroupsCatalog } from '../services/queries/groups';
@@ -349,13 +349,21 @@ export default function GroupsPage() {
                 courseSessionsPerMonth: vc?.sessionsPerMonth,
                 settingSessionsPerMonth: settings?.sessionsPerMonth,
               });
+              const monthly = vc ? effectiveMonthlyPrice({ coursePrice: vc.price }) : 0;
+              const firstMonth = startSessionToAdd > 1 ? proratedFirstPeriod(monthly, startSessionToAdd, n) : monthly;
               return (
-                <SessionPicker
-                  size="sm"
-                  sessions={n}
-                  value={startSessionToAdd}
-                  onChange={setStartSessionToAdd}
-                />
+                <div className="space-y-2">
+                  <SessionPicker
+                    size="sm"
+                    sessions={n}
+                    value={startSessionToAdd}
+                    onChange={setStartSessionToAdd}
+                  />
+                  <div className="bg-indigo-50 border border-indigo-100 px-3 py-2 rounded-lg text-xs flex justify-between items-center">
+                    <span className="text-indigo-700 font-semibold">المطلوب لهذا الشهر بناءً على الحصة المحددة:</span>
+                    <span className="font-bold text-indigo-900">{formatCurrency(firstMonth, settings?.currency)}</span>
+                  </div>
+                </div>
               );
             })()}
           </div>
