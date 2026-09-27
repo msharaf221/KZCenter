@@ -320,7 +320,7 @@ export default function GroupsPage() {
           <div className="mb-4 space-y-2">
             <div className="flex flex-col sm:flex-row gap-2">
               <select value={selectedStudentToAdd} onChange={e => setSelectedStudentToAdd(e.target.value)}
-                className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
+                className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white min-w-0">
                 <option value="">اختر طالباً للإضافة...</option>
                 {students.filter(s => !s.deleted && !viewGroup.studentIds.includes(s.id)).map(s => (
                   <option key={s.id} value={s.id}>{s.name} - {s.parentPhone}</option>
@@ -328,9 +328,9 @@ export default function GroupsPage() {
               </select>
               <input type="number" placeholder="دفع دلوقتي" min="0"
                 value={paymentAmountToAdd} onChange={e => setPaymentAmountToAdd(e.target.value === '' ? '' : +e.target.value)}
-                className="w-full sm:w-28 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none" />
+                className="w-full sm:w-28 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none min-w-0" />
               <button disabled={task.pending || !can('groups', 'edit') || !selectedStudentToAdd} onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
-                className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors"
+                className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors whitespace-nowrap shrink-0"
                 style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
                 إضافة
               </button>
@@ -358,25 +358,25 @@ export default function GroupsPage() {
               const student = students.find(s => s.id === sid);
               if (!student) return null;
               return (
-                <div key={sid} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                  <div className="flex items-center gap-2 cursor-pointer group" onClick={() => navigate(`/students/${sid}`)} title="عرض ملف الطالب">
-                    <span className="text-xl">{student.gender === 'male' ? '👦' : '👧'}</span>
-                    <div>
-                      <p className="text-sm font-semibold group-hover:text-indigo-600 group-hover:underline transition-colors">{student.name}</p>
-                      <p className="text-xs text-gray-500">{student.parentPhone}</p>
+                <div key={sid} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl gap-2">
+                  <div className="flex items-center gap-2 cursor-pointer group min-w-0 flex-1" onClick={() => navigate(`/students/${sid}`)} title="عرض ملف الطالب">
+                    <span className="text-xl shrink-0">{student.gender === 'male' ? '👦' : '👧'}</span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold group-hover:text-indigo-600 group-hover:underline transition-colors truncate">{student.name}</p>
+                      <p className="text-xs text-gray-500 truncate">{student.parentPhone}</p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 shrink-0">
                     <button disabled={!can('payments', 'create') || task.pending} onClick={() => setRenewTarget({ studentId: sid, studentName: student.name, groupId: viewGroup.id })}
-                      className="text-xs text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded-lg transition-colors" title="تجديد / استكمال الاشتراك">
+                      className="text-xs text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded-lg transition-colors whitespace-nowrap" title="تجديد / استكمال الاشتراك">
                       تجديد
                     </button>
                     <button disabled={!can('students', 'edit') || task.pending} onClick={() => setTransferTarget({ studentId: sid, studentName: student.name, fromGroupId: viewGroup.id })}
-                      className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors">
+                      className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors whitespace-nowrap">
                       تحويل
                     </button>
                     <button disabled={task.pending || !can('groups', 'edit')} onClick={() => removeStudentFromGroup(viewGroup.id, sid)}
-                      className="text-xs text-red-600 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors">
+                      className="text-xs text-red-600 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors whitespace-nowrap">
                       إزالة
                     </button>
                   </div>
