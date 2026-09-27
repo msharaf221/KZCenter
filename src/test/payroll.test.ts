@@ -266,9 +266,9 @@ describe('calcTeacherPayroll — مبلغ ثابت لكل طالب (per_student)
     const r = calcTeacherPayroll(t, PERIOD, ctx({
       groups: [g1],
       installments: [
-        { id: '1', studentId: 's1', groupId: 'g1', amount: 200, dueDate: '2026-03-01', status: 'pending', createdAt: '', updatedAt: '' },
-        { id: '2', studentId: 's2', groupId: 'g1', amount: 200, dueDate: '2026-03-05', status: 'paid', createdAt: '', updatedAt: '' },
-        { id: '3', studentId: 's1', groupId: 'g2', amount: 200, dueDate: '2026-03-01', status: 'pending', createdAt: '', updatedAt: '' }
+        { id: '1', studentId: 's1', groupId: 'g1', amount: 200, dueDate: '2026-03-01', status: 'pending', createdAt: '', updatedAt: '' } as any,
+        { id: '2', studentId: 's2', groupId: 'g1', amount: 200, dueDate: '2026-03-05', status: 'paid', createdAt: '', updatedAt: '' } as any,
+        { id: '3', studentId: 's1', groupId: 'g2', amount: 200, dueDate: '2026-03-01', status: 'pending', createdAt: '', updatedAt: '' } as any
       ],
       students: [
         { id: 's1', name: 'Student 1', age: 10, gender: 'male', parentPhone: '1', status: 'active', enrolledGroups: [], totalPaid: 0, createdAt: '', updatedAt: '' },

@@ -27,7 +27,7 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' }:
       className={`${sizeClasses[size]} max-h-[90vh] flex flex-col`}
     >
       <div className="flex items-center justify-between p-5 border-b border-gray-100 gap-4">
-        <h2 id={titleId} className="text-lg font-bold text-gray-900 truncate">
+        <h2 id={titleId} className="text-lg font-bold text-gray-900 truncate min-w-0">
           {title}
         </h2>
         <button
