@@ -1,4 +1,4 @@
-import { ArrowRight, BookOpen, CalendarDays, GraduationCap, Mail, MessageCircle, Phone, PhoneCall, StickyNote, Users2, Wallet } from 'lucide-react';
+import { ArrowRight, Banknote, BookOpen, CalendarDays, GraduationCap, Mail, MessageCircle, Phone, PhoneCall, StickyNote, Users2, Wallet } from 'lucide-react';
 import { useCallback, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
@@ -36,16 +36,17 @@ export default function TeacherProfilePage() {
   const primaryColor = settings?.primaryColor || '#6366f1';
   const query = useCallback(() => loadTeacherProfile(id || ''), [id]);
   const { data, loading, error, reload } = usePageResource(query, emptyTeacherProfile());
-  const { teacher, groups, students } = data;
+  const { teacher, groups, students, expenses } = data;
   useEffect(() => {
     if (!loading && !error && data.requestedId === id && !data.teacher) navigate('/teachers');
   }, [loading, error, data, id, navigate]);
-
 
   if (error) return <PageReadError title="ملف المدرس" onRetry={reload} />;
 
   if (loading || data.requestedId !== id) return <Layout title="جاري التحميل..."><div className="p-8 text-center animate-pulse">جاري التحميل...</div></Layout>;
   if (!teacher) return null;
+
+  const totalPaid = expenses.reduce((sum, e) => sum + e.amount, 0);
 
   return (
     <Layout title={`ملف المدرس: ${teacher.name}`}>
@@ -88,9 +89,9 @@ export default function TeacherProfilePage() {
 
             <div className="flex flex-wrap gap-2 text-xs font-medium">
               {showMoney && (
-                <button onClick={() => navigate(`/payroll?teacher=${encodeURIComponent(teacher.id)}`)}
+                <button onClick={() => navigate('/payroll')}
                   className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-xl border border-indigo-100 hover:bg-indigo-100">
-                  <Wallet size={14} /> كشف المرتبات
+                  <Banknote size={14} /> إضافة دفعة راتب
                 </button>
               )}
               <a href={getWhatsAppLink(teacher.phone)} target="_blank" rel="noreferrer" title={`واتساب ${teacher.phone}`}
@@ -115,6 +116,37 @@ export default function TeacherProfilePage() {
 
         {/* Tables */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          
+          {/* Expenses/Salaries Payments (NEW) */}
+          {showMoney && (
+            <div className="lg:col-span-2 bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden flex flex-col">
+              <div className="flex justify-between items-center mb-4 border-b border-gray-50 pb-4">
+                <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                  <Banknote className="text-emerald-500" /> دفعات الرواتب
+                </h2>
+                <div className="text-left">
+                  <p className="text-xs text-gray-500">إجمالي المنصرف ({expenses.length} دفعات)</p>
+                  <p className="text-xl font-bold text-emerald-600" dir="ltr">{formatCurrency(totalPaid, settings?.currency)}</p>
+                </div>
+              </div>
+              <div className="overflow-auto flex-1 max-h-[300px]">
+                <table className="w-full text-right">
+                  <thead><tr className="border-b border-gray-100 text-sm text-gray-500"><th className="pb-3 font-semibold">التاريخ</th><th className="pb-3 font-semibold">المبلغ</th><th className="pb-3 font-semibold">البيان</th></tr></thead>
+                  <tbody className="divide-y divide-gray-50 text-sm">
+                    {expenses.length === 0 ? <tr><td colSpan={3} className="py-8 text-center text-gray-400">لا توجد دفعات رواتب مسجلة لهذا المدرس</td></tr> :
+                     expenses.map(e => (
+                      <tr key={e.id} className="hover:bg-gray-50">
+                        <td className="py-3 text-gray-500 whitespace-nowrap">{formatDate(e.date, 'YYYY/MM/DD')}</td>
+                        <td className="py-3 font-bold text-gray-900 whitespace-nowrap">{formatCurrency(e.amount, settings?.currency)}</td>
+                        <td className="py-3 text-gray-600 truncate">{e.description}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Groups */}
           <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 overflow-hidden flex flex-col h-full">
             <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2"><Users2 className="text-indigo-500" /> مجموعات المدرس</h2>
@@ -124,8 +156,8 @@ export default function TeacherProfilePage() {
                 <tbody className="divide-y divide-gray-50 text-sm">
                   {groups.length === 0 ? <tr><td colSpan={3} className="py-4 text-center text-gray-400">لا توجد مجموعات</td></tr> :
                    groups.map(g => (
-                    <tr key={g.id} className="hover:bg-gray-50">
-                      <td className="py-3 font-medium">{g.name}</td>
+                    <tr key={g.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/groups/${g.id}`)}>
+                      <td className="py-3 font-medium text-indigo-600 hover:underline">{g.name}</td>
                       <td className="py-3 text-gray-600">{g.courseName}</td>
                       <td className="py-3 text-center">{g.studentIds.length}/{g.maxStudents}</td>
                     </tr>
@@ -149,10 +181,10 @@ export default function TeacherProfilePage() {
                       <tr key={s.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/students/${s.id}`)}>
                         <td className="py-3 font-medium text-indigo-600 hover:underline">{s.name}</td>
                         <td className="py-3 text-center">
-                          {remaining > 0 ? <span className="text-red-600 font-bold">{formatCurrency(remaining, settings?.currency)}</span> : <span className="text-green-600 font-bold">مسدد</span>}
+                          {remaining > 0 ? <span className="text-red-500 font-bold">{formatCurrency(remaining, settings?.currency)}</span> : <span className="text-gray-400">—</span>}
                         </td>
                       </tr>
-                    );
+                     );
                    })}
                 </tbody>
               </table>
