@@ -368,15 +368,111 @@ export interface StudentCardPrintOptions {
   courseName?: string;
 }
 
+
+function getCardStyles(primary: string) {
+  return `
+    .card-wrap {
+      width: 100%; max-width: 340px; height: 215px; border-radius: 12px;
+      overflow: hidden; background: #ffffff;
+      display: flex; flex-direction: column; justify-content: space-between;
+      page-break-inside: avoid; position: relative;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+      border: 1px solid #e2e8f0;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .card-wrap::before {
+      content: ''; position: absolute; top: 0; right: 0; bottom: 0; width: 6px;
+      background: ${primary}; z-index: 5;
+    }
+    .card-header {
+      padding: 12px 16px 4px; display: flex; align-items: center; justify-content: space-between;
+      position: relative; z-index: 2; margin-right: 6px;
+    }
+    .card-header .title { font-size: 13px; font-weight: 800; color: ${primary}; }
+    .card-header .badge { font-size: 9px; background: #f1f5f9; color: #475569; padding: 3px 8px; border-radius: 12px; font-weight: 700; border: 1px solid #e2e8f0; letter-spacing: 0.5px; }
+    .card-body {
+      padding: 4px 16px; display: flex; gap: 14px; align-items: center; flex: 1; position: relative; z-index: 2; margin-right: 6px;
+    }
+    .avatar-box {
+      width: 64px; height: 64px; border-radius: 50%; background: #f8fafc;
+      border: 2px solid ${primary}; box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden; font-size: 26px; flex-shrink: 0; position: relative;
+      padding: 2px;
+    }
+    .avatar-box img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+    .info-box { flex: 1; min-width: 0; font-size: 11px; }
+    .student-name { font-size: 15px; font-weight: 800; color: #0f172a; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -0.3px; }
+    .info-grid { display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; align-items: baseline; }
+    .info-grid span { color: #64748b; font-size: 10px; }
+    .info-grid b { color: #1e293b; font-size: 11px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    
+    .card-bg-pattern {
+      position: absolute; left: -20px; top: -20px; width: 140px; height: 140px;
+      background: radial-gradient(circle, ${primary} 0%, transparent 70%);
+      opacity: 0.06; z-index: 1; border-radius: 50%;
+    }
+    .card-bg-pattern-2 {
+      position: absolute; right: -30px; bottom: 20px; width: 100px; height: 100px;
+      background: radial-gradient(circle, ${primary} 0%, transparent 70%);
+      opacity: 0.05; z-index: 1; border-radius: 50%;
+    }
+
+    .card-footer {
+      background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 8px 16px;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      position: relative; z-index: 2; height: 55px; margin-right: 6px;
+    }
+    .barcode-area { flex: 1; display: flex; align-items: center; justify-content: flex-start; overflow: hidden; }
+    .barcode-area svg { max-height: 38px; width: auto; max-width: 100%; }
+    .qr-area { width: 40px; height: 40px; flex-shrink: 0; background: #fff; padding: 2px; border-radius: 6px; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; }
+    .qr-area svg { width: 100%; height: 100%; }
+  `;
+}
+
+function generateCardHtmlString(student: Student, opts: StudentCardPrintOptions, primary: string, centerName: string) {
+  const code = getStudentCode(student);
+  const barcodeSvg = generateBarcodeSvg(code, { height: 38, showText: true });
+  const qrSvg = generateQrSvg(code, { size: 40 });
+  const { groupName, courseName } = opts;
+  return `
+    <div class="card-wrap">
+      <div class="card-bg-pattern"></div>
+      <div class="card-bg-pattern-2"></div>
+      <div class="card-header">
+        <span class="title">${escapeHtml(centerName)}</span>
+        <span class="badge">بطاقة طالب</span>
+      </div>
+      <div class="card-body">
+        <div class="avatar-box">
+          ${student.avatar ? `<img src="${escapeHtml(student.avatar)}" alt="avatar" />` : (student.gender === 'female' ? '👧' : '👦')}
+        </div>
+        <div class="info-box">
+          <div class="student-name">${escapeHtml(student.name)}</div>
+          <div class="info-grid">
+            <span>الكود:</span><b class="font-mono" style="color: ${primary}">${escapeHtml(code)}</b>
+            ${student.gradeLevel ? `<span>الصف:</span><b>${escapeHtml(student.gradeLevel)}</b>` : ''}
+            ${groupName ? `<span>المجموعة:</span><b>${escapeHtml(groupName)}</b>` : ''}
+            ${courseName ? `<span>الكورس:</span><b>${escapeHtml(courseName)}</b>` : ''}
+            <span>ولي الأمر:</span><b dir="ltr" style="text-align: right; display: inline-block;">${escapeHtml(student.parentPhone)}</b>
+          </div>
+        </div>
+      </div>
+      <div class="card-footer">
+        <div class="barcode-area">${barcodeSvg}</div>
+        <div class="qr-area">${qrSvg}</div>
+      </div>
+    </div>
+  `;
+}
+
 /**
  * بناء قالب بطاقة/كارنيه الطالب المطبوع (CR80 Badge Format) مع باركود و QR
  */
 export function buildStudentCardHtml(student: Student, opts: StudentCardPrintOptions = {}): string {
-  const { settings, groupName, courseName } = opts;
+  const { settings } = opts;
   const primary = settings?.primaryColor || '#6366f1';
-  const code = getStudentCode(student);
-  const barcodeSvg = generateBarcodeSvg(code, { height: 38, showText: true });
-  const qrSvg = generateQrSvg(code, { size: 68 });
   const centerName = settings?.centerName || 'المركز التعليمي';
 
   return `
@@ -389,66 +485,13 @@ export function buildStudentCardHtml(student: Student, opts: StudentCardPrintOpt
         font-family: 'Cairo', 'Segoe UI', Tahoma, sans-serif;
         direction: rtl; background: #fff;
       }
-      .card-wrap {
-        width: 340px; height: 215px; border-radius: 14px;
-        border: 2px solid ${primary}; overflow: hidden;
-        box-shadow: 0 4px 14px rgba(0,0,0,0.08); background: #ffffff;
-        display: flex; flex-direction: column; justify-content: space-between;
-        margin: 0 auto 16px; page-break-inside: avoid; position: relative;
-      }
-      .card-header {
-        background: ${primary}; color: #fff; padding: 8px 12px;
-        display: flex; align-items: center; justify-content: space-between;
-      }
-      .card-header .title { font-size: 13px; font-weight: 800; }
-      .card-header .badge { font-size: 10px; background: rgba(255,255,255,0.2); padding: 2px 6px; border-radius: 6px; }
-      .card-body {
-        padding: 8px 12px; display: flex; gap: 10px; align-items: center; flex: 1;
-      }
-      .avatar-box {
-        width: 62px; height: 62px; border-radius: 12px; background: #f1f5f9;
-        border: 1.5px solid #cbd5e1; display: flex; align-items: center; justify-content: center;
-        overflow: hidden; font-size: 26px; flex-shrink: 0;
-      }
-      .avatar-box img { width: 100%; height: 100%; object-fit: cover; }
-      .info-box { flex: 1; min-width: 0; font-size: 11px; }
-      .student-name { font-size: 14px; font-weight: 800; color: #0f172a; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .info-line { color: #475569; margin: 1px 0; display: flex; gap: 4px; }
-      .info-line b { color: #0f172a; }
-      .card-footer {
-        background: #f8fafc; border-top: 1px dashed #cbd5e1; padding: 6px 10px;
-        display: flex; align-items: center; justify-content: space-between; gap: 6px;
-      }
-      .barcode-area { flex: 1; overflow: hidden; }
-      .qr-area { width: 68px; height: 68px; flex-shrink: 0; }
+      ${getCardStyles(primary)}
       @media print {
         body { padding: 0; }
         .no-print { display: none !important; }
       }
     </style>
-    <div class="card-wrap">
-      <div class="card-header">
-        <span class="title">${escapeHtml(centerName)}</span>
-        <span class="badge">بطاقة طالب</span>
-      </div>
-      <div class="card-body">
-        <div class="avatar-box">
-          ${student.avatar ? `<img src="${escapeHtml(student.avatar)}" alt="avatar" />` : (student.gender === 'female' ? '👧' : '👦')}
-        </div>
-        <div class="info-box">
-          <div class="student-name">${escapeHtml(student.name)}</div>
-          <div class="info-line"><span>الكود:</span><b class="font-mono text-indigo-700">${escapeHtml(code)}</b></div>
-          ${student.gradeLevel ? `<div class="info-line"><span>الصف:</span><b>${escapeHtml(student.gradeLevel)}</b></div>` : ''}
-          ${groupName ? `<div class="info-line"><span>المجموعة:</span><b>${escapeHtml(groupName)}</b></div>` : ''}
-          ${courseName ? `<div class="info-line"><span>الكورس:</span><b>${escapeHtml(courseName)}</b></div>` : ''}
-          <div class="info-line"><span>ولي الأمر:</span><b>${escapeHtml(student.parentPhone)}</b></div>
-        </div>
-      </div>
-      <div class="card-footer">
-        <div class="barcode-area">${barcodeSvg}</div>
-        <div class="qr-area">${qrSvg}</div>
-      </div>
-    </div>
+    ${generateCardHtmlString(student, opts, primary, centerName)}
     <script>window.onload = function () { setTimeout(function () { window.print(); }, 250); };${SCRIPT_CLOSE}
   `;
 }
@@ -465,40 +508,11 @@ export function printStudentCard(student: Student, opts: StudentCardPrintOptions
  * طباعة كارنيهات مجموعة من الطلاب في ورقة A4
  */
 export function printBatchStudentCards(students: Student[], opts: StudentCardPrintOptions = {}): void {
-  const { settings, groupName, courseName } = opts;
+  const { settings } = opts;
   const primary = settings?.primaryColor || '#6366f1';
   const centerName = settings?.centerName || 'المركز التعليمي';
 
-  const cardsHtml = students.map(student => {
-    const code = getStudentCode(student);
-    const barcodeSvg = generateBarcodeSvg(code, { height: 34, showText: true });
-    const qrSvg = generateQrSvg(code, { size: 60 });
-    return `
-      <div class="card-wrap">
-        <div class="card-header">
-          <span class="title">${escapeHtml(centerName)}</span>
-          <span class="badge">بطاقة طالب</span>
-        </div>
-        <div class="card-body">
-          <div class="avatar-box">
-            ${student.avatar ? `<img src="${escapeHtml(student.avatar)}" alt="avatar" />` : (student.gender === 'female' ? '👧' : '👦')}
-          </div>
-          <div class="info-box">
-            <div class="student-name">${escapeHtml(student.name)}</div>
-            <div class="info-line"><span>الكود:</span><b class="font-mono">${escapeHtml(code)}</b></div>
-            ${student.gradeLevel ? `<div class="info-line"><span>الصف:</span><b>${escapeHtml(student.gradeLevel)}</b></div>` : ''}
-            ${groupName ? `<div class="info-line"><span>المجموعة:</span><b>${escapeHtml(groupName)}</b></div>` : ''}
-            ${courseName ? `<div class="info-line"><span>الكورس:</span><b>${escapeHtml(courseName)}</b></div>` : ''}
-            <div class="info-line"><span>ولي الأمر:</span><b>${escapeHtml(student.parentPhone)}</b></div>
-          </div>
-        </div>
-        <div class="card-footer">
-          <div class="barcode-area">${barcodeSvg}</div>
-          <div class="qr-area">${qrSvg}</div>
-        </div>
-      </div>
-    `;
-  }).join('');
+  const cardsHtml = students.map(student => generateCardHtmlString(student, opts, primary, centerName)).join('');
 
   const fullHtml = `
     ${fontLink()}
@@ -513,36 +527,7 @@ export function printBatchStudentCards(students: Student[], opts: StudentCardPri
       .grid-container {
         display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px;
       }
-      .card-wrap {
-        border-radius: 12px; border: 1.5px solid ${primary}; overflow: hidden;
-        background: #ffffff; display: flex; flex-direction: column; justify-content: space-between;
-        page-break-inside: avoid; height: 200px;
-      }
-      .card-header {
-        background: ${primary}; color: #fff; padding: 6px 10px;
-        display: flex; align-items: center; justify-content: space-between;
-      }
-      .card-header .title { font-size: 12px; font-weight: 800; }
-      .card-header .badge { font-size: 9px; background: rgba(255,255,255,0.2); padding: 1px 5px; border-radius: 5px; }
-      .card-body {
-        padding: 6px 10px; display: flex; gap: 8px; align-items: center; flex: 1;
-      }
-      .avatar-box {
-        width: 52px; height: 52px; border-radius: 10px; background: #f1f5f9;
-        border: 1px solid #cbd5e1; display: flex; align-items: center; justify-content: center;
-        overflow: hidden; font-size: 22px; flex-shrink: 0;
-      }
-      .avatar-box img { width: 100%; height: 100%; object-fit: cover; }
-      .info-box { flex: 1; min-width: 0; font-size: 10.5px; }
-      .student-name { font-size: 13px; font-weight: 800; color: #0f172a; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .info-line { color: #475569; margin: 1px 0; display: flex; gap: 4px; }
-      .info-line b { color: #0f172a; }
-      .card-footer {
-        background: #f8fafc; border-top: 1px dashed #cbd5e1; padding: 4px 8px;
-        display: flex; align-items: center; justify-content: space-between; gap: 4px;
-      }
-      .barcode-area { flex: 1; overflow: hidden; }
-      .qr-area { width: 60px; height: 60px; flex-shrink: 0; }
+      ${getCardStyles(primary)}
       @media print {
         body { padding: 0; }
         .no-print { display: none !important; }
