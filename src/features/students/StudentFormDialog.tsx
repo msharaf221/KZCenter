@@ -8,6 +8,7 @@ import { findStudentDuplicates } from '../../domain/studentIdentity';
 import { effectiveMonthlyPrice, proratedFirstPeriod, resolveSessionsPerMonth } from '../../lib/billing';
 import { notify } from '../../lib/notifications';
 import { formatCurrency, getContrastColor } from '../../lib/utils';
+import { METHOD_ORDER, METHOD_LABEL } from '../../lib/cashbox';
 import type { StudentEditor } from './useStudentEditor';
 
 interface Props {
@@ -30,6 +31,8 @@ export default function StudentFormDialog({ editor, students, groups, courses, o
     setForm,
     initialPayments,
     setInitialPayments,
+    initialPaymentMethod,
+    setInitialPaymentMethod,
     startSessions,
     setStartSessions,
     enrollPricing,
@@ -294,6 +297,15 @@ export default function StudentFormDialog({ editor, students, groups, courses, o
                             >
                               المبلغ كله
                             </button>
+                          )}
+                          {(initialPayments[g.id] || 0) > 0 && (
+                            <select
+                              value={initialPaymentMethod}
+                              onChange={e => setInitialPaymentMethod(e.target.value as any)}
+                              className="px-2 py-1 border border-gray-200 rounded-lg text-[11px] bg-white text-gray-700 focus:outline-none focus:border-indigo-500"
+                            >
+                              {METHOD_ORDER.map(m => <option key={m} value={m}>{METHOD_LABEL[m]}</option>)}
+                            </select>
                           )}
                         </div>
                         {course && (

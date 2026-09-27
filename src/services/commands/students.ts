@@ -31,10 +31,13 @@ export interface EnrollmentPricing {
   discountPercent?: number;
   discountReason?: string;
 }
+import type { PaymentMethod } from '../../domain/models';
+
 export interface StudentSubmission {
   draft: StudentDraft;
   id?: string;
   initialPayments?: Record<string, number>;
+  initialPaymentMethod?: PaymentMethod;
   startSessions?: Record<string, number>;
   pricing?: Record<string, EnrollmentPricing>;
   /** Memberships shown when opening an existing profile, if known by the UI. */
@@ -88,7 +91,7 @@ export async function saveStudent(actor: Actor, input: StudentSubmission) {
         discountAmount: pricing.discountAmount && pricing.discountAmount > 0 ? pricing.discountAmount : undefined,
         discountPercent: pricing.discountPercent && pricing.discountPercent > 0 ? pricing.discountPercent : undefined,
         discountReason: pricing.discountReason || undefined,
-        paymentMethod: 'cash', collectedBy: actor.id, collectedByName: actor.username,
+        paymentMethod: input.initialPaymentMethod || 'cash', collectedBy: actor.id, collectedByName: actor.username,
       });
     }
     if (added.length || removed.length) await unit.recalculate(student.id);

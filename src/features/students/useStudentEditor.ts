@@ -30,6 +30,7 @@ export function useStudentEditor() {
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [form, setForm] = useState<Omit<Student, 'id' | 'createdAt' | 'updatedAt'>>(INITIAL_FORM);
   const [initialPayments, setInitialPayments] = useState<Record<string, number>>({});
+  const [initialPaymentMethod, setInitialPaymentMethod] = useState<import('../../domain/models').PaymentMethod>('cash');
   const [startSessions, setStartSessions] = useState<Record<string, number>>({});
   const [enrollPricing, setEnrollPricing] = useState<Record<string, EnrollPricing>>({});
 
@@ -37,6 +38,7 @@ export function useStudentEditor() {
     setEditingStudent(null);
     setForm(INITIAL_FORM);
     setInitialPayments({});
+    setInitialPaymentMethod('cash');
     setStartSessions({});
     setEnrollPricing({});
     setShowModal(true);
@@ -45,6 +47,7 @@ export function useStudentEditor() {
   function openEdit(student: Student) {
     setEditingStudent(student);
     setInitialPayments({});
+    setInitialPaymentMethod('cash');
     setStartSessions({});
     setEnrollPricing({});
     setForm({
@@ -72,6 +75,8 @@ export function useStudentEditor() {
     setForm,
     initialPayments,
     setInitialPayments,
+    initialPaymentMethod,
+    setInitialPaymentMethod,
     startSessions,
     setStartSessions,
     enrollPricing,

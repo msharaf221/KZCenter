@@ -11,7 +11,8 @@ import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Modal from '../components/ui/Modal';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import type { Group, GroupStatus, ScheduleItem } from '../domain/models';
+import type { Group, GroupStatus, ScheduleItem, PaymentMethod } from '../domain/models';
+import { METHOD_ORDER, METHOD_LABEL } from '../lib/cashbox';
 import { useCommandTask } from '../hooks/useCommandTask';
 import { usePageResource } from '../hooks/usePageResource';
 import { resolveSessionsPerMonth } from '../lib/billing';
@@ -48,6 +49,7 @@ export default function GroupsPage() {
   const [viewGroup, setViewGroup] = useState<Group | null>(null);
   const [selectedStudentToAdd, setSelectedStudentToAdd] = useState('');
   const [paymentAmountToAdd, setPaymentAmountToAdd] = useState<number | ''>('');
+  const [paymentMethodToAdd, setPaymentMethodToAdd] = useState<PaymentMethod>('cash');
   const [startSessionToAdd, setStartSessionToAdd] = useState(1);
   const [transferTarget, setTransferTarget] = useState<{ studentId: string; studentName: string; fromGroupId: string } | null>(null);
   const [renewTarget, setRenewTarget] = useState<{ studentId: string; studentName: string; groupId: string } | null>(null);
@@ -109,11 +111,11 @@ export default function GroupsPage() {
   async function addStudentToGroup(groupId: string, studentId: string) {
     if (!studentId) return;
     await task.run(async () => {
-      await enrollGroupStudent(user, studentId, groupId, paymentAmountToAdd || undefined, { startSession: startSessionToAdd, paymentMethod: 'cash' });
+      await enrollGroupStudent(user, studentId, groupId, paymentAmountToAdd || undefined, { startSession: startSessionToAdd, paymentMethod: paymentMethodToAdd });
       notify.success('تم إضافة الطالب إلى المجموعة');
       await refreshViewedGroup(groupId);
       if (!task.isActive()) return;
-      setSelectedStudentToAdd(''); setPaymentAmountToAdd(''); setStartSessionToAdd(1);
+      setSelectedStudentToAdd(''); setPaymentAmountToAdd(''); setPaymentMethodToAdd('cash'); setStartSessionToAdd(1);
     });
   }
 
@@ -328,7 +330,13 @@ export default function GroupsPage() {
               </select>
               <input type="number" placeholder="دفع دلوقتي" min="0"
                 value={paymentAmountToAdd} onChange={e => setPaymentAmountToAdd(e.target.value === '' ? '' : +e.target.value)}
-                className="w-full sm:w-28 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none min-w-0" />
+                className="w-full sm:w-24 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none min-w-0" />
+              {!!paymentAmountToAdd && (
+                <select value={paymentMethodToAdd} onChange={e => setPaymentMethodToAdd(e.target.value as any)}
+                  className="w-full sm:w-20 px-2 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white shrink-0">
+                  {METHOD_ORDER.map(m => <option key={m} value={m}>{METHOD_LABEL[m]}</option>)}
+                </select>
+              )}
               <button disabled={task.pending || !can('groups', 'edit') || !selectedStudentToAdd} onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
                 className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors whitespace-nowrap shrink-0"
                 style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>

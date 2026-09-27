@@ -1,0 +1,39 @@
+--- payroll.test.ts
++++ payroll.test.ts
+@@ -201,6 +201,36 @@
+       expect(res.base).toBe(600); // 300 + 300
+       expect(res.gross).toBe(300); // 50%
+     });
++
++    it('مبلغ ثابت لكل طالب (per_student)', () => {
++      const t: Teacher = { ...teacher, payModel: 'per_student', payRate: 40, salary: 0 };
++      const install1 = createTestInstallment({
++        groupId: 'g1',
++        studentId: 's1',
++        amount: 200,
++        dueDate: '2023-10-01',
++        status: 'pending'
++      });
++      const install2 = createTestInstallment({
++        groupId: 'g1',
++        studentId: 's2',
++        amount: 200,
++        dueDate: '2023-10-05',
++        status: 'paid'
++      });
++      // s3 is in another group or deleted installment...
++      
++      const ctx = {
++        ...baseCtx,
++        groups: [group],
++        students: [{ id: 's1', name: 'A' }, { id: 's2', name: 'B' }] as any,
++        installments: [install1, install2],
++      };
++
++      const res = calcTeacherPayroll(t, '2023-10', ctx);
++      expect(res.gross).toBe(80); // 40 EGP * 2 students = 80
++      expect(res.base).toBe(2); // 2 students
++    });
+   });
+ 
+   describe('calcTeacherPayroll — جنيه/مجموعة (per_group)', () => {

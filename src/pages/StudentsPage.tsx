@@ -25,7 +25,7 @@ const PAGE_SIZE = 24;
 export default function StudentsPage() {
   const task = useCommandTask();
   const editor = useStudentEditor();
-  const { setShowModal, editingStudent, form, initialPayments, startSessions, enrollPricing, openAdd, openEdit } = editor;
+  const { setShowModal, editingStudent, form, initialPayments, initialPaymentMethod, startSessions, enrollPricing, openAdd, openEdit } = editor;
   const navigate = useNavigate();
   const { settings } = useApp();
   const { can, user } = useAuth();
@@ -64,7 +64,7 @@ export default function StudentsPage() {
 
   async function handleSave() {
     await task.run(async () => {
-      const result = await saveStudent(user, { id: editingStudent?.id, baselineGroupIds: editingStudent?.enrolledGroups, draft: form, initialPayments, startSessions, pricing: enrollPricing });
+      const result = await saveStudent(user, { id: editingStudent?.id, baselineGroupIds: editingStudent?.enrolledGroups, draft: form, initialPayments, initialPaymentMethod, startSessions, pricing: enrollPricing });
       if (editingStudent) notify.success('تم تحديث بيانات الطالب'); else { notifyNewStudent(form.name); notify.success('تم إضافة الطالب بنجاح'); }
       for (const warning of result.warnings) notify.error(warning);
       setShowModal(false);
