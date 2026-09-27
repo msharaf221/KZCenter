@@ -322,7 +322,7 @@ export default function GroupsPage() {
               <select value={selectedStudentToAdd} onChange={e => setSelectedStudentToAdd(e.target.value)}
                 className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white">
                 <option value="">اختر طالباً للإضافة...</option>
-                {students.filter(s => !viewGroup.studentIds.includes(s.id)).map(s => (
+                {students.filter(s => !s.deleted && !viewGroup.studentIds.includes(s.id)).map(s => (
                   <option key={s.id} value={s.id}>{s.name} - {s.parentPhone}</option>
                 ))}
               </select>
