@@ -320,7 +320,7 @@ export default function GroupsPage() {
           <div className="mb-4 space-y-2">
             <div className="flex flex-col sm:flex-row gap-2">
               <select value={selectedStudentToAdd} onChange={e => setSelectedStudentToAdd(e.target.value)}
-                className="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white min-w-0">
+                className="flex-1 w-full sm:w-0 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white min-w-0 text-ellipsis">
                 <option value="">اختر طالباً للإضافة...</option>
                 {students.filter(s => !s.deleted && !viewGroup.studentIds.includes(s.id)).map(s => (
                   <option key={s.id} value={s.id}>{s.name} - {s.parentPhone}</option>
