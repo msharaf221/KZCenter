@@ -90,7 +90,7 @@ function centerStyles(settings?: Settings | null): string {
 }
 
 function openPrintWindow(html: string, title: string): Window | null {
-  const win = window.open('', '_blank', 'width=1100,height=800');
+  const win = window.open('', '_blank');
   if (!win) {
     // المتصفح منع النافذة المنبثقة — نطبع في الإطار الحالي بدل ما نفشل بصمت
     const old = document.body.innerHTML;

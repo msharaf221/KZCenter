@@ -332,7 +332,7 @@ export default function GroupsPage() {
                 value={paymentAmountToAdd} onChange={e => setPaymentAmountToAdd(e.target.value === '' ? '' : +e.target.value)}
                 className="w-full sm:w-24 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none min-w-0" />
               {!!paymentAmountToAdd && (
-                <select value={paymentMethodToAdd} onChange={e => setPaymentMethodToAdd(e.target.value as any)}
+                <select value={paymentMethodToAdd} onChange={e => setPaymentMethodToAdd(e.target.value as PaymentMethod)}
                   className="w-full sm:w-20 px-2 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white shrink-0">
                   {METHOD_ORDER.map(m => <option key={m} value={m}>{METHOD_LABEL[m]}</option>)}
                 </select>

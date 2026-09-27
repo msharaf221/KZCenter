@@ -124,9 +124,24 @@ export default function TeacherProfilePage() {
                 <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                   <Banknote className="text-emerald-500" /> دفعات الرواتب
                 </h2>
-                <div className="text-left">
-                  <p className="text-xs text-gray-500">إجمالي المنصرف ({expenses.length} دفعات)</p>
-                  <p className="text-xl font-bold text-emerald-600" dir="ltr">{formatCurrency(totalPaid, settings?.currency)}</p>
+                <div className="flex items-center gap-6">
+                  <div className="text-left">
+                    <p className="text-xs text-gray-500">الراتب المتوقع (شهرياً)</p>
+                    <p className="text-lg font-bold text-indigo-600" dir="ltr">
+                      {(() => {
+                        if (teacher.payModel === 'fixed') return formatCurrency(teacher.salary || 0, settings?.currency);
+                        if (teacher.payModel === 'per_student') return formatCurrency(students.length * (teacher.payRate || 0), settings?.currency);
+                        if (teacher.payModel === 'per_group') return formatCurrency(groups.length * (teacher.payRate || 0), settings?.currency);
+                        if (teacher.payModel === 'percentage' || teacher.payModel === 'subscription_percentage') return `نسبة (${teacher.payRate || 0}%)`;
+                        return formatCurrency(teacher.salary || 0, settings?.currency);
+                      })()}
+                    </p>
+                  </div>
+                  <div className="h-10 w-px bg-gray-200"></div>
+                  <div className="text-left">
+                    <p className="text-xs text-gray-500">المنصرف ({expenses.length})</p>
+                    <p className="text-lg font-bold text-emerald-600" dir="ltr">{formatCurrency(totalPaid, settings?.currency)}</p>
+                  </div>
                 </div>
               </div>
               <div className="overflow-auto flex-1 max-h-[300px]">

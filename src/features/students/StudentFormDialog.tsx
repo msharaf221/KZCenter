@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import SessionPicker from '../../components/SessionPicker';
 import Modal from '../../components/ui/Modal';
 import { useApp } from '../../contexts/AppContext';
-import type { Course, Gender, Group, Student, StudentStatus } from '../../domain/models';
+import type { Course, Gender, Group, Student, StudentStatus, PaymentMethod } from '../../domain/models';
 import { findStudentDuplicates } from '../../domain/studentIdentity';
 import { effectiveMonthlyPrice, proratedFirstPeriod, resolveSessionsPerMonth } from '../../lib/billing';
 import { notify } from '../../lib/notifications';
@@ -305,7 +305,7 @@ export default function StudentFormDialog({ editor, students, groups, courses, o
                           {(initialPayments[g.id] || 0) > 0 && (
                             <select
                               value={initialPaymentMethod}
-                              onChange={e => setInitialPaymentMethod(e.target.value as any)}
+                              onChange={e => setInitialPaymentMethod(e.target.value as PaymentMethod)}
                               className="px-2 py-1 border border-gray-200 rounded-lg text-[11px] bg-white text-gray-700 focus:outline-none focus:border-indigo-500"
                             >
                               {METHOD_ORDER.map(m => <option key={m} value={m}>{METHOD_LABEL[m]}</option>)}
