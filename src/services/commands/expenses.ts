@@ -5,7 +5,7 @@ import { requireChoice, requireDate, requireLive, requireMoney, requireText } fr
 import { generateId } from '../../lib/ids';
 import { commandAudit, requirePermission, type Actor } from './access';
 
-export type ExpenseDraft = Pick<Expense, 'category' | 'amount' | 'description' | 'date'>;
+export type ExpenseDraft = Pick<Expense, 'category' | 'amount' | 'description' | 'date' | 'teacherId'>;
 const categories: ExpenseCategory[] = ['salaries', 'bills', 'maintenance', 'purchases', 'rent', 'other'];
 const LINKED_ERROR = 'سند صرف المرتب مرتبط بكشف معتمد ولا يُعدّل أو يُحذف يدوياً';
 
@@ -27,6 +27,7 @@ export async function saveExpense(actor: Actor, draft: ExpenseDraft, id?: string
       amount: draft.amount,
       description: draft.description,
       date: draft.date,
+      teacherId: draft.teacherId,
       createdAt: current?.createdAt || now,
       updatedAt: now,
     };
