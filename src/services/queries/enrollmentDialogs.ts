@@ -1,8 +1,9 @@
 import dayjs from 'dayjs';
 import { readSnapshot } from '../../data/readers';
 import { requireLive } from '../../domain/validation';
-import { effectiveMonthlyPrice, renewalInfo } from '../../lib/billing';
+import { renewalInfo } from '../../lib/billing';
 import { orderedInstallments } from '../../domain/ledger/balance';
+import { calculateEffectivePrice } from '../pricingService';
 
 export async function loadRenewalDialog(studentId: string, groupId: string, upcomingDueDays = 7) {
   const data = await readSnapshot(['students', 'groups', 'courses', 'enrollments', 'installments']);
@@ -14,6 +15,13 @@ export async function loadRenewalDialog(studentId: string, groupId: string, upco
   const installments = orderedInstallments(data.installments.filter(row => row.studentId === studentId && row.groupId === groupId), dayjs().format('YYYY-MM-DD'));
   const info = renewalInfo(installments, dayjs().format('YYYY-MM-DD'), upcomingDueDays);
   const oldRemaining = Math.round(installments.filter(row => row.status !== 'cancelled').reduce((sum, row) => sum + Math.max(0, row.amount - row.paidAmount), 0) * 100) / 100;
-  const monthlyPrice = effectiveMonthlyPrice({ coursePrice: course?.price || 0, priceOverride: enrollment?.priceOverride, discountAmount: enrollment?.discountAmount, discountPercent: enrollment?.discountPercent });
+  const monthlyPrice = calculateEffectivePrice({
+    enrollment,
+    group,
+    course,
+    priceOverride: enrollment?.priceOverride,
+    discountAmount: enrollment?.discountAmount,
+    discountPercent: enrollment?.discountPercent,
+  });
   return { group, course, enrollment, info, oldRemaining, monthlyPrice, startDate: info.nextStartDate };
 }

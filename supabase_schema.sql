@@ -74,15 +74,17 @@ CREATE TABLE IF NOT EXISTS groups (
   max_students INTEGER DEFAULT 20,
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'full', 'ended')),
   student_ids UUID[] DEFAULT '{}',
+  price NUMERIC(10,2),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   deleted BOOLEAN DEFAULT FALSE
 );
 
 -- أعمدة المواد (كاتالوج المواد: english / math / hesab / arabic / quran)
--- المادة بتحكم سعر الكورس الشهري وبتخلي التقارير تتجمّع بالمادة مش بالاسم الحر.
+-- المادة للتصنيف والفلاتر والتقارير؛ الكورس والمجموعة يحددان السعر
 ALTER TABLE courses  ADD COLUMN IF NOT EXISTS subject_id TEXT;
 ALTER TABLE groups   ADD COLUMN IF NOT EXISTS subject_id TEXT;
+ALTER TABLE groups   ADD COLUMN IF NOT EXISTS price NUMERIC(10,2);
 ALTER TABLE teachers ADD COLUMN IF NOT EXISTS subject_ids TEXT[] DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_courses_subject ON courses(subject_id);
 CREATE INDEX IF NOT EXISTS idx_groups_subject ON groups(subject_id);

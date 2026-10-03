@@ -99,7 +99,9 @@ export interface BalanceSummary {
 export interface PricingInput {
   /** سعر الكورس الشهري */
   coursePrice: number;
-  /** سعر خاص بالتسجيل (يتجاوز سعر الكورس) */
+  /** سعر المجموعة الشهري (اختياري: يتجاوز سعر الكورس) */
+  groupPrice?: number | null;
+  /** سعر خاص بالتسجيل (يتجاوز سعر الكورس وسعر المجموعة) */
   priceOverride?: number | null;
   /** خصم ثابت (جنيه) على كل قسط */
   discountAmount?: number | null;
@@ -109,11 +111,21 @@ export interface PricingInput {
 
 /**
  * السعر الشهري الفعلي بعد السعر الخاص والخصومات.
- * الترتيب: priceOverride (لو موجود) → خصم النسبة → خصم المبلغ → لا يقل عن صفر.
+ * الترتيب: priceOverride (لو موجود) → سعر المجموعة (لو محدد) → سعر الكورس → خصم النسبة → خصم المبلغ → لا يقل عن صفر.
+ * يُفرّق بدقة بين السعر غير المحدد (null/undefined) والسعر 0.
  */
 export function effectiveMonthlyPrice(p: PricingInput): number {
-  const hasOverride = p.priceOverride !== undefined && p.priceOverride !== null && p.priceOverride >= 0;
-  const base = hasOverride ? Number(p.priceOverride) : (p.coursePrice || 0);
+  const hasOverride = typeof p.priceOverride === 'number' && Number.isFinite(p.priceOverride) && p.priceOverride >= 0;
+  const hasGroup = typeof p.groupPrice === 'number' && Number.isFinite(p.groupPrice) && p.groupPrice >= 0;
+
+  let base: number;
+  if (hasOverride) {
+    base = Number(p.priceOverride);
+  } else if (hasGroup) {
+    base = Number(p.groupPrice);
+  } else {
+    base = typeof p.coursePrice === 'number' && Number.isFinite(p.coursePrice) ? p.coursePrice : 0;
+  }
 
   let price = Math.max(0, base);
   const pct = Math.min(100, Math.max(0, p.discountPercent || 0));
@@ -132,20 +144,20 @@ export function discountBreakdown(p: PricingInput): {
   byPercent: number;
   byAmount: number;
 } {
-  const courseBase = Math.max(0, p.coursePrice || 0);
-  const afterOverride = p.priceOverride !== undefined && p.priceOverride !== null && p.priceOverride >= 0
-    ? Math.max(0, Number(p.priceOverride))
-    : courseBase;
+  const hasGroup = typeof p.groupPrice === 'number' && Number.isFinite(p.groupPrice) && p.groupPrice >= 0;
+  const catalogBase = Math.max(0, hasGroup ? Number(p.groupPrice) : (typeof p.coursePrice === 'number' && Number.isFinite(p.coursePrice) ? p.coursePrice : 0));
+  const hasOverride = typeof p.priceOverride === 'number' && Number.isFinite(p.priceOverride) && p.priceOverride >= 0;
+  const afterOverride = hasOverride ? Math.max(0, Number(p.priceOverride)) : catalogBase;
   const pct = Math.min(100, Math.max(0, p.discountPercent || 0));
   const afterPercent = afterOverride * (1 - pct / 100);
   const amountCut = Math.min(afterPercent, Math.max(0, p.discountAmount || 0));
   const final = round2(Math.max(0, afterPercent - amountCut));
 
   return {
-    base: round2(courseBase),
+    base: round2(catalogBase),
     final,
-    saved: round2(Math.max(0, courseBase - final)),
-    byOverride: round2(Math.max(0, courseBase - afterOverride)),
+    saved: round2(Math.max(0, catalogBase - final)),
+    byOverride: round2(Math.max(0, catalogBase - afterOverride)),
     byPercent: round2(Math.max(0, afterOverride - afterPercent)),
     byAmount: round2(amountCut),
   };

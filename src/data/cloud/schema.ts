@@ -73,6 +73,7 @@ export interface Database {
           max_students: number;
           status: 'open' | 'full' | 'ended';
           student_ids: string[];
+          price: number | null;
           created_at: string;
           updated_at: string;
           deleted: boolean;

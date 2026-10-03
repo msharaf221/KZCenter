@@ -1,4 +1,5 @@
-import type { SubjectId, SubjectPrices } from '../lib/subjects';
+import type { Subject, SubjectId, SubjectPrices } from '../lib/subjects';
+export type { Subject, SubjectId, SubjectPrices } from '../lib/subjects';
 
 // ==================== INTERFACES ====================
 
@@ -197,11 +198,11 @@ export interface Course {
   category: string;
   description?: string;
   /**
-   * المادة اللي الكورس بيدرّسها (english / math / hesab / arabic / quran).
-   * لما تكون محددة، سعر الكورس بيتحكم فيه سعر المادة (من الإعدادات أو الافتراضي)،
-   * والتقارير بتقدر تجمّع الفلوس والمجموعات بالمادة مش بالاسم الحر.
+   * المادة التي يتبعها الكورس (لأغراض التصنيف والفلاتر والتقارير).
+   * المادة لم تعد تحدد السعر، فلكل كورس سعره المستقل.
    */
   subjectId?: SubjectId;
+  /** السعر الشهري للكورس (مستقل ولا يُشتق من المادة) */
   price: number;
   durationMonths: number;
   icon: string;
@@ -239,6 +240,12 @@ export interface Group {
   maxStudents: number;
   status: GroupStatus;
   studentIds: string[];
+  /**
+   * السعر الشهري الخاص بالمجموعة (اختياري).
+   * إذا لم يُحدد (undefined/null)، ترث المجموعة سعر الكورس المرتبطة به.
+   * السعر 0 مسموح به تماماً ويُفرّق عن غير المحدد.
+   */
+  price?: number;
   createdAt: string;
   updatedAt: string;
   deleted?: boolean;
@@ -383,8 +390,8 @@ export interface Settings {
   /** عدد الحصص في الشهر افتراضياً (لو الكورس/المجموعة مش محددة) */
   sessionsPerMonth?: number;
   /**
-   * أسعار المواد الشهرية (تتجاوز الافتراضي في `lib/subjects`).
-   * مثال: { english: 250, math: 250, hesab: 200, arabic: 200, quran: 200 }
+   * @deprecated تم إلغاء التسعير بالمواد لصالح تسعير الكورس والمجموعة مباشرة.
+   * الحقل محفوظ للتوافق مع استعادة النسخ الاحتياطية القديمة فقط.
    */
   subjectPrices?: SubjectPrices;
   /** بادئة رقم الإيصال (افتراضي: السنة) */
@@ -413,6 +420,8 @@ export interface Settings {
     token?: string;
     apiUrl?: string;
   };
+  /** المواد الدراسية المخصصة وإعدادات المواد المعدلة من قبل المستخدم */
+  customSubjects?: Subject[];
 }
 
 /** رسالة لولي أمر (سجل مراسلات) */

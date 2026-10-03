@@ -5,11 +5,12 @@ import { carriedEnrollmentPricing } from '../domain/ledger/pricing';
 import type { Course, Group, Teacher } from '../domain/models';
 import { useAsyncResource } from '../hooks/useAsyncResource';
 import { useCommandTask } from '../hooks/useCommandTask';
-import { effectiveMonthlyPrice, proratedFirstPeriod, resolveSessionsPerMonth } from '../lib/billing';
+import { proratedFirstPeriod, resolveSessionsPerMonth } from '../lib/billing';
 import { notify } from '../lib/notifications';
 import { formatCurrency, getContrastColor } from '../lib/utils';
 import { getStudentBalance } from '../services/balanceService';
 import { transferGroupStudent } from '../services/commands/studentFinance';
+import { calculateEffectivePrice } from '../services/pricingService';
 import { loadRenewalDialog } from '../services/queries/enrollmentDialogs';
 import SessionPicker from './SessionPicker';
 import Modal from './ui/Modal';
@@ -73,7 +74,15 @@ function TransferForm({
 
   const target = candidates.find(c => c.group.id === toGroupId);
   const agreement = data?.source.enrollment;
-  const targetPrice = effectiveMonthlyPrice({ coursePrice: target?.course?.price || 0, ...carriedEnrollmentPricing(agreement, target?.group.courseId === fromGroup?.courseId) });
+  const carried = carriedEnrollmentPricing(agreement, target?.group.courseId === fromGroup?.courseId);
+  const targetPrice = calculateEffectivePrice({
+    enrollment: carried,
+    group: target?.group,
+    course: target?.course,
+    priceOverride: carried.priceOverride,
+    discountAmount: carried.discountAmount,
+    discountPercent: carried.discountPercent,
+  });
   const targetSessions = resolveSessionsPerMonth({
     courseSessionsPerMonth: target?.course?.sessionsPerMonth,
     settingSessionsPerMonth: settings?.sessionsPerMonth,

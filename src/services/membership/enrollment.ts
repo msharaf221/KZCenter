@@ -3,9 +3,10 @@ import { requireRule } from '../../domain/errors';
 import { validateEnrollmentInput } from '../../domain/ledger/validation';
 import type { EnrollOptions } from '../../domain/membership/types';
 import type { Enrollment, Payment } from '../../domain/models';
-import { buildMonthlyPlan, effectiveMonthlyPrice, installmentRemaining, proratedFirstPeriod, resolveSessionsPerMonth, type Installment, type InstallmentStatus, type PricingInput } from '../../lib/billing';
+import { buildMonthlyPlan, installmentRemaining, proratedFirstPeriod, resolveSessionsPerMonth, type Installment, type InstallmentStatus } from '../../lib/billing';
 import { generateId } from '../../lib/ids';
 import type { BillingUnit } from '../billing/unitOfWork';
+import { calculateEffectivePrice } from '../pricingService';
 
 /** Composable work: callers own the transaction. Expected failures throw so the entire caller rolls back. */
 export async function enrollInUnit(unit: BillingUnit, studentId: string, groupId: string, initialPayment?: number, opts?: EnrollOptions) {
@@ -37,14 +38,15 @@ export async function enrollInUnit(unit: BillingUnit, studentId: string, groupId
   const course = await unit.get('courses', group.courseId);
   const policy = await unit.policy();
 
-  // التسعير الفعلي: سعر خاص → خصم نسبة → خصم مبلغ
-  const pricing: PricingInput = {
-    coursePrice: course?.price || 0,
+  // التسعير الفعلي المركزي: سعر الطالب الخاص → سعر المجموعة → سعر الكورس → الخصومات
+  const monthlyPrice = calculateEffectivePrice({
+    student,
+    group,
+    course,
     priceOverride: opts?.priceOverride,
     discountAmount: opts?.discountAmount,
     discountPercent: opts?.discountPercent,
-  };
-  const monthlyPrice = effectiveMonthlyPrice(pricing);
+  });
 
   const enrollment: Enrollment = {
     id: enrollmentId,
@@ -73,7 +75,11 @@ export async function enrollInUnit(unit: BillingUnit, studentId: string, groupId
 
   // النظام شهر بشهر: التسجيل بيفتح شهر واحد بس، والشهر اللي بعده بالتجديد
   const plan = buildMonthlyPlan({
-    ...pricing,
+    coursePrice: course?.price || 0,
+    groupPrice: group.price,
+    priceOverride: opts?.priceOverride,
+    discountAmount: opts?.discountAmount,
+    discountPercent: opts?.discountPercent,
     durationMonths: 1,
     startDate: now,
     dueDayOfMonth: policy.dueDayOfMonth,

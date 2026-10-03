@@ -15,12 +15,13 @@ import type { Group, GroupStatus, ScheduleItem, PaymentMethod } from '../domain/
 import { METHOD_ORDER, METHOD_LABEL } from '../lib/cashbox';
 import { useCommandTask } from '../hooks/useCommandTask';
 import { usePageResource } from '../hooks/usePageResource';
-import { resolveSessionsPerMonth, effectiveMonthlyPrice, proratedFirstPeriod } from '../lib/billing';
+import { resolveSessionsPerMonth, proratedFirstPeriod } from '../lib/billing';
 import { notify } from '../lib/notifications';
-import { SUBJECTS, getSubject, type SubjectId } from '../lib/subjects';
+import { getAllSubjects, getSubject, type SubjectId } from '../lib/subjects';
 import { getContrastColor, formatCurrency } from '../lib/utils';
 import { deleteCatalogRecord, saveGroup } from '../services/commands/catalog';
 import { enrollGroupStudent, removeGroupStudent } from '../services/commands/studentFinance';
+import { calculateEffectivePrice } from '../services/pricingService';
 import { loadGroupsCatalog } from '../services/queries/groups';
 
 const DAYS = [
@@ -56,6 +57,7 @@ export default function GroupsPage() {
   const [form, setForm] = useState({
     name: '', courseId: '', levelId: '', teacherId: '',
     maxStudents: 20, status: 'open' as GroupStatus,
+    price: '' as number | '',
     schedule: [{ days: [], startTime: '09:00', endTime: '10:00', room: '' }] as ScheduleItem[],
   });
 
@@ -66,13 +68,13 @@ export default function GroupsPage() {
 
   function openAdd() {
     setEditing(null);
-    setForm({ name: '', courseId: courses[0]?.id || '', levelId: '', teacherId: teachers[0]?.id || '', maxStudents: 20, status: 'open', schedule: [{ days: [], startTime: '09:00', endTime: '10:00', room: '' }] });
+    setForm({ name: '', courseId: courses[0]?.id || '', levelId: '', teacherId: teachers[0]?.id || '', maxStudents: 20, status: 'open', price: '', schedule: [{ days: [], startTime: '09:00', endTime: '10:00', room: '' }] });
     setShowModal(true);
   }
 
   function openEdit(g: Group) {
     setEditing(g);
-    setForm({ name: g.name, courseId: g.courseId, levelId: g.levelId || '', teacherId: g.teacherId, maxStudents: g.maxStudents, status: g.status, schedule: [...g.schedule] });
+    setForm({ name: g.name, courseId: g.courseId, levelId: g.levelId || '', teacherId: g.teacherId, maxStudents: g.maxStudents, status: g.status, price: typeof g.price === 'number' ? g.price : '', schedule: [...g.schedule] });
     setShowModal(true);
   }
 
@@ -88,7 +90,8 @@ export default function GroupsPage() {
 
   async function handleSave() {
     await task.run(async () => {
-      await saveGroup(user, form, editing?.id);
+      const priceVal = form.price === '' ? null : Number(form.price);
+      await saveGroup(user, { ...form, price: priceVal }, editing?.id);
       notify.success(editing ? 'تم تحديث المجموعة' : 'تمت الإضافة بنجاح');
 
       setShowModal(false);
@@ -137,7 +140,7 @@ export default function GroupsPage() {
           <select value={subjectFilter} onChange={e => setSubjectFilter(e.target.value as SubjectId | '')}
             className="px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none">
             <option value="">كل المواد</option>
-            {SUBJECTS.map(s => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
+            {getAllSubjects(settings?.customSubjects).map(s => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
           </select>
           {canWrite && (
             <button onClick={openAdd}
@@ -163,7 +166,7 @@ export default function GroupsPage() {
                       <h3 className="font-bold text-gray-900">{group.name}</h3>
                       <p className="text-xs text-gray-500">{course?.name} {course?.icon}</p>
                       {(() => {
-                        const subject = getSubject(group.subjectId ?? course?.subjectId);
+                        const subject = getSubject(group.subjectId ?? course?.subjectId, settings?.customSubjects);
                         return subject ? (
                           <span className="inline-block mt-1 text-[11px] px-2 py-0.5 rounded-full text-white"
                             style={{ backgroundColor: subject.color }}>
@@ -174,7 +177,18 @@ export default function GroupsPage() {
                     </div>
                     <Badge status={group.status} />
                   </div>
-                  <p className="text-xs text-gray-600 mb-2">👨‍🏫 {teacher?.name || 'غير محدد'}</p>
+                  <div className="flex items-center justify-between text-xs mb-2">
+                    <p className="text-gray-600">👨‍🏫 {teacher?.name || 'غير محدد'}</p>
+                    {typeof group.price === 'number' ? (
+                      <span className="font-semibold text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-lg text-[11px]" title="سعر شهري خاص بهذه المجموعة">
+                        {formatCurrency(group.price, settings?.currency)} <span className="text-[10px] font-normal">(خاص)</span>
+                      </span>
+                    ) : (
+                      <span className="text-gray-500 bg-gray-50 px-2 py-0.5 rounded-lg text-[11px]" title="سعر موروث من الكورس">
+                        {formatCurrency(course?.price || 0, settings?.currency)} <span className="text-[10px] text-gray-400">(موروث)</span>
+                      </span>
+                    )}
+                  </div>
 
                   {/* Fill bar */}
                   <div className="mb-3">
@@ -230,7 +244,7 @@ export default function GroupsPage() {
                 <option value="">اختر كورساً</option>
                 {courses.map(c => (
                   <option key={c.id} value={c.id}>
-                    {c.icon} {c.name}{c.subjectId ? ` — ${getSubject(c.subjectId)!.name} (${c.price})` : ''}
+                    {c.icon} {c.name}{c.subjectId ? ` — ${getSubject(c.subjectId, settings?.customSubjects)?.name || c.subjectId} (${c.price})` : ''}
                   </option>
                 ))}
               </select>
@@ -264,6 +278,40 @@ export default function GroupsPage() {
                 <option value="full">مكتملة</option>
                 <option value="ended">منتهية</option>
               </select>
+            </div>
+            <div className="col-span-2">
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-semibold text-gray-700">السعر الشهري للمجموعة (اختياري)</label>
+                {form.price !== '' ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs bg-emerald-50 text-emerald-700 font-semibold px-2 py-0.5 rounded-full border border-emerald-200">
+                      سعر خاص بالمجموعة
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setForm(f => ({ ...f, price: '' }))}
+                      className="text-xs text-indigo-600 hover:text-indigo-800 underline"
+                    >
+                      استعادة سعر الكورس
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-xs text-gray-400">
+                    موروث من الكورس {selectedCourse ? `(${formatCurrency(selectedCourse.price, settings?.currency)})` : ''}
+                  </span>
+                )}
+              </div>
+              <input
+                type="number"
+                min={0}
+                value={form.price}
+                onChange={e => setForm({ ...form, price: e.target.value === '' ? '' : Math.max(0, +e.target.value) })}
+                placeholder={selectedCourse ? `موروث من الكورس (${selectedCourse.price} ${settings?.currency || 'EGP'})` : 'موروث من الكورس'}
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <p className="text-[11px] text-gray-400 mt-1">
+                اترك الحقل فارغاً لترث المجموعة سعر الكورس تلقائياً. إدخال 0 يعني مجموعة مجانية. تعديل السعر يؤثر على التسجيلات والتجديدات الجديدة فقط.
+              </p>
             </div>
           </div>
 
@@ -349,7 +397,7 @@ export default function GroupsPage() {
                 courseSessionsPerMonth: vc?.sessionsPerMonth,
                 settingSessionsPerMonth: settings?.sessionsPerMonth,
               });
-              const monthly = vc ? effectiveMonthlyPrice({ coursePrice: vc.price }) : 0;
+              const monthly = vc ? calculateEffectivePrice({ group: viewGroup, course: vc }) : 0;
               const firstMonth = startSessionToAdd > 1 ? proratedFirstPeriod(monthly, startSessionToAdd, n) : monthly;
               return (
                 <div className="space-y-2">

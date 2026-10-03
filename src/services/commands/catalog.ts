@@ -17,7 +17,9 @@ export type CourseDraft = Omit<Course, 'id' | 'createdAt' | 'updatedAt' | 'delet
 export type GroupDraft = Pick<
   Group,
   'name' | 'courseId' | 'levelId' | 'teacherId' | 'maxStudents' | 'status' | 'schedule'
->;
+> & {
+  price?: number | null;
+};
 export type InventoryDraft = Pick<InventoryItem, 'name' | 'type' | 'costPrice' | 'sellPrice' | 'stock' | 'courseId'>;
 
 export async function saveTeacher(actor: Actor, draft: TeacherDraft, id?: string, updatePay = true): Promise<Teacher> {
@@ -99,7 +101,11 @@ export async function saveCourse(
       updatedAt: now,
     };
     await tx.objectStore('courses').put(course);
-    return { course, priceChanged: !!current && current.price !== course.price };
+    return {
+      course,
+      priceChanged: !!current && current.price !== course.price,
+      oldPrice: current?.price,
+    };
   });
   let recalculated = 0;
   if (result.priceChanged) {
@@ -110,11 +116,14 @@ export async function saveCourse(
       recalculated++;
     }
   }
+  const priceDetail = result.priceChanged
+    ? ` (تعديل السعر: من ${result.oldPrice} إلى ${result.course.price})`
+    : '';
   commandAudit(actor, {
     action: id ? 'update' : 'create',
     entity: 'course',
     entityId: result.course.id,
-    details: `${id ? 'تعديل' : 'إضافة'} كورس: ${result.course.name}`,
+    details: `${id ? 'تعديل' : 'إضافة'} كورس: ${result.course.name}${priceDetail}`,
   });
   return { course: result.course, recalculated };
 }
@@ -122,6 +131,9 @@ export async function saveCourse(
 export async function saveGroup(actor: Actor, draft: GroupDraft, id?: string): Promise<Group> {
   requirePermission(actor, 'groups', id ? 'edit' : 'create');
   requireText(draft.name, 'اسم المجموعة مطلوب');
+  if (draft.price !== undefined && draft.price !== null) {
+    requireMoney(draft.price);
+  }
   requireNumber(draft.maxStudents, 'سعة المجموعة غير صحيحة', 1, true);
   requireChoice(draft.status, ['open', 'full', 'ended'], 'حالة المجموعة غير صحيحة');
   requireRule(Array.isArray(draft.schedule), 'الجدول غير صحيح');
@@ -130,6 +142,9 @@ export async function saveGroup(actor: Actor, draft: GroupDraft, id?: string): P
     requireLive(await tx.objectStore('teachers').get(draft.teacherId), 'اختر مدرساً موجوداً');
     const current = id ? requireLive(await tx.objectStore('groups').get(id), 'المجموعة غير موجودة') : undefined;
     const now = new Date().toISOString();
+    const effectiveGroupPrice = typeof draft.price === 'number' && Number.isFinite(draft.price) && draft.price >= 0
+      ? draft.price
+      : undefined;
     const row: Group = {
       ...current,
       id: current?.id || generateId(),
@@ -141,20 +156,27 @@ export async function saveGroup(actor: Actor, draft: GroupDraft, id?: string): P
       maxStudents: draft.maxStudents,
       status: draft.status,
       schedule: draft.schedule,
+      price: effectiveGroupPrice,
       studentIds: current?.studentIds || [],
       createdAt: current?.createdAt || now,
       updatedAt: now,
     };
     await tx.objectStore('groups').put(row);
-    return row;
+    const priceChanged = !!current && current.price !== row.price;
+    const oldPriceLabel = current?.price !== undefined ? `${current.price}` : 'موروث من الكورس';
+    const newPriceLabel = row.price !== undefined ? `${row.price}` : 'موروث من الكورس';
+    return { row, priceChanged, oldPriceLabel, newPriceLabel };
   });
+  const priceDetail = saved.priceChanged
+    ? ` (تعديل السعر: من ${saved.oldPriceLabel} إلى ${saved.newPriceLabel})`
+    : '';
   commandAudit(actor, {
     action: id ? 'update' : 'create',
     entity: 'group',
-    entityId: saved.id,
-    details: `${id ? 'تعديل' : 'إضافة'} مجموعة: ${saved.name}`,
+    entityId: saved.row.id,
+    details: `${id ? 'تعديل' : 'إضافة'} مجموعة: ${saved.row.name}${priceDetail}`,
   });
-  return saved;
+  return saved.row;
 }
 
 export async function saveInventoryItem(actor: Actor, draft: InventoryDraft, id?: string): Promise<InventoryItem> {

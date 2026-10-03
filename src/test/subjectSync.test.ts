@@ -124,12 +124,12 @@ describe('guessCourseSubject', () => {
 });
 
 describe('syncSubjects — الربط والتسعير', () => {
-  it('بيربط الكورسات المستوردة بموادها ويحط السعر الصح', async () => {
+  it('بيربط الكورسات بموادها من غير تغيير أسعارها بالوضع الافتراضي', async () => {
     const teacher = await seedTeacher('ولاء');
-    const eng = await seedCourse({ name: 's.r', price: 0 });
+    const eng = await seedCourse({ name: 's.r', price: 150 });
     const quran = await seedCourse({ name: 'تحفيظ', price: 0 });
-    const math = await seedCourse({ name: 'Math', price: 0 });
-    const hesab = await seedCourse({ name: 'حساب', price: 0 });
+    const math = await seedCourse({ name: 'Math', price: 300 });
+    const hesab = await seedCourse({ name: 'حساب', price: 180 });
     for (const c of [eng, quran, math, hesab]) {
       await seedGroup({ name: `${c.name} السبت`, courseId: c.id, teacherId: teacher.id });
     }
@@ -139,18 +139,33 @@ describe('syncSubjects — الربط والتسعير', () => {
     const courses = await dbGetAll<Course>('courses');
     const byName = new Map(courses.map(c => [c.name, c]));
     expect(byName.get('s.r')!.subjectId).toBe('english');
-    expect(byName.get('s.r')!.price).toBe(250);
-    expect(byName.get('تحفيظ')!.price).toBe(200);
+    expect(byName.get('s.r')!.price).toBe(150);
+    expect(byName.get('تحفيظ')!.price).toBe(0);
     expect(byName.get('Math')!.subjectId).toBe('math');
-    expect(byName.get('Math')!.price).toBe(250);
+    expect(byName.get('Math')!.price).toBe(300);
     expect(byName.get('حساب')!.subjectId).toBe('hesab');
-    expect(byName.get('حساب')!.price).toBe(200);
+    expect(byName.get('حساب')!.price).toBe(180);
     expect(report.coursesLinked).toBe(4);
-    expect(report.coursesRepriced).toBe(4);
+    expect(report.coursesRepriced).toBe(0);
   });
 
-  it('بيعمل كورس للمواد اللي مفيش ليها كورس', async () => {
-    await syncSubjects();
+  it('يطبق الأسعار عند طلب ذلك صراحة عبر الخيارات', async () => {
+    const teacher = await seedTeacher('ولاء');
+    const eng = await seedCourse({ name: 's.r', price: 0 });
+    const math = await seedCourse({ name: 'Math', price: 0 });
+    await seedGroup({ name: `${eng.name} السبت`, courseId: eng.id, teacherId: teacher.id });
+    await seedGroup({ name: `${math.name} السبت`, courseId: math.id, teacherId: teacher.id });
+
+    const report = await syncSubjects({ applyPrices: true });
+    const courses = await dbGetAll<Course>('courses');
+    const byName = new Map(courses.map(c => [c.name, c]));
+    expect(byName.get('s.r')!.price).toBe(250);
+    expect(byName.get('Math')!.price).toBe(250);
+    expect(report.coursesRepriced).toBe(2);
+  });
+
+  it('بيعمل كورس للمواد اللي مفيش ليها كورس عند تفعيل createMissingCourses', async () => {
+    await syncSubjects({ createMissingCourses: true });
     const courses = await dbGetAll<Course>('courses');
     expect(courses).toHaveLength(5);
     expect(courses.map(c => c.subjectId).sort()).toEqual(
@@ -209,20 +224,20 @@ describe('syncSubjects — الربط والتسعير', () => {
     expect(after!.price).toBe(130);   // السعر اليدوي ما اتلمسش
   });
 
-  it('بيحترم أسعار المستخدم من الإعدادات', async () => {
+  it('بيحترم أسعار المستخدم من الإعدادات عند طلب تطبيق الأسعار', async () => {
     setSettingsCache({ ...DEFAULT_SETTINGS_VALUES, subjectPrices: { quran: 240 } });
     const teacher = await seedTeacher('حفصة');
     const c = await seedCourse({ name: 'قرآن', price: 0 });
     await seedGroup({ name: 'تحفيظ 1', courseId: c.id, teacherId: teacher.id });
 
-    await syncSubjects();
+    await syncSubjects({ applyPrices: true });
 
     expect((await dbGetById<Course>('courses', c.id))!.price).toBe(240);
   });
 });
 
 describe('syncSubjects — أثر الأسعار على الأقساط', () => {
-  it('بيحدّث الأقساط اللي لسه مدفعش فيها حاجة بس', async () => {
+  it('بيحدّث الأقساط اللي لسه مدفعش فيها حاجة بس عند طلب تطبيق الأسعار وتحديث الأقساط صراحة', async () => {
     const teacher = await seedTeacher('ولاء');
     const course = await seedCourse({ name: 'English', price: 0 });
     const group = await seedGroup({ name: 'level 1', courseId: course.id, teacherId: teacher.id });
@@ -232,7 +247,7 @@ describe('syncSubjects — أثر الأسعار على الأقساط', () => {
     const partiallyPaid = await seedInstallment({ studentId: student.id, groupId: group.id, amount: 100, paidAmount: 50, status: 'partial' });
     const fullyPaid = await seedInstallment({ studentId: student.id, groupId: group.id, amount: 100, paidAmount: 100, status: 'paid' });
 
-    const report = await syncSubjects();
+    const report = await syncSubjects({ applyPrices: true, updateUnpaidInstallments: true });
 
     const all = await dbGetAll<Installment>('installments');
     const byId = new Map(all.map(i => [i.id, i]));
@@ -243,7 +258,7 @@ describe('syncSubjects — أثر الأسعار على الأقساط', () => {
     expect(report.studentsRecalculated).toBe(1);
   });
 
-  it('ما بيلمسش أقساط تسجيل ليه سعر خاص أو خصم', async () => {
+  it('ما بيلمسش أقساط تسجيل ليه سعر خاص أو خصم حتى مع التحديث الصريح', async () => {
     const teacher = await seedTeacher('ولاء');
     const course = await seedCourse({ name: 'English', price: 0 });
     const group = await seedGroup({ name: 'level 1', courseId: course.id, teacherId: teacher.id });
@@ -259,22 +274,24 @@ describe('syncSubjects — أثر الأسعار على الأقساط', () => {
       studentId: student.id, groupId: group.id, amount: 150, enrollmentId: enrollment.id,
     });
 
-    const report = await syncSubjects();
+    const report = await syncSubjects({ applyPrices: true, updateUnpaidInstallments: true });
 
     expect((await dbGetById<Installment>('installments', inst.id))!.amount).toBe(150);
     expect(report.installmentsUpdated).toBe(0);
   });
 
-  it('بيقدر يتقفل تحديث الأقساط بالخيار', async () => {
+  it('الوضع الافتراضي لا يغير أسعار الكورسات ولا الأقساط غير المدفوعة', async () => {
     const teacher = await seedTeacher('ولاء');
-    const course = await seedCourse({ name: 'English', price: 0 });
+    const course = await seedCourse({ name: 'English', price: 100 });
     const group = await seedGroup({ name: 'level 1', courseId: course.id, teacherId: teacher.id });
     const student = await seedStudent('منة');
     const inst = await seedInstallment({ studentId: student.id, groupId: group.id, amount: 100 });
 
-    await syncSubjects({ updateUnpaidInstallments: false });
+    const report = await syncSubjects();
 
     expect((await dbGetById<Installment>('installments', inst.id))!.amount).toBe(100);
-    expect((await dbGetById<Course>('courses', course.id))!.price).toBe(250);
+    expect((await dbGetById<Course>('courses', course.id))!.price).toBe(100);
+    expect(report.coursesRepriced).toBe(0);
+    expect(report.installmentsUpdated).toBe(0);
   });
 });

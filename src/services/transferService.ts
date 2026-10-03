@@ -4,15 +4,14 @@ import { validateEnrollmentInput } from '../domain/ledger/validation';
 import type { Enrollment, Group } from '../domain/models';
 import {
   buildMonthlyPlan,
-  effectiveMonthlyPrice,
   InstallmentStatus,
   isCountedPayment,
-  PricingInput,
   proratedFirstPeriod,
   resolveSessionsPerMonth
 } from '../lib/billing';
 import { generateId } from '../lib/ids';
 import { billingOperation } from './billing/operation';
+import { calculateEffectivePrice } from './pricingService';
 
 // ==================== TRANSFER (تحويل بين المجموعات/المدرسين) ====================
 
@@ -130,12 +129,22 @@ export async function transferStudent(opts: {
       courseSessionsPerMonth: course?.sessionsPerMonth,
       settingSessionsPerMonth: transferPolicy.sessionsPerMonth,
     });
-    const transferPricing: PricingInput = { coursePrice: course?.price || 0, ...carriedPricing };
-    const transferMonthlyPrice = effectiveMonthlyPrice(transferPricing);
+    const transferMonthlyPrice = calculateEffectivePrice({
+      student,
+      group: toGroup,
+      course,
+      priceOverride: carriedPricing.priceOverride,
+      discountAmount: carriedPricing.discountAmount,
+      discountPercent: carriedPricing.discountPercent,
+    });
     // شهر واحد في المجموعة الجديدة (نفس قاعدة التسجيل: نفس يوم الاستحقاق وفترة السماح من الإعدادات)
     // — ولو دخل من نص الشهر يتحاسب على الحصص الباقية
     const plan = buildMonthlyPlan({
-      ...transferPricing,
+      coursePrice: course?.price || 0,
+      groupPrice: toGroup.price,
+      priceOverride: carriedPricing.priceOverride,
+      discountAmount: carriedPricing.discountAmount,
+      discountPercent: carriedPricing.discountPercent,
       durationMonths: 1,
       startDate: now,
       dueDayOfMonth: transferPolicy.dueDayOfMonth,

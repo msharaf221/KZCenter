@@ -59,9 +59,9 @@ export interface SubjectSyncReport {
 }
 
 const DEFAULT_OPTS: Required<Omit<SubjectSyncOptions, 'prices'>> = {
-  createMissingCourses: true,
-  applyPrices: true,
-  updateUnpaidInstallments: true,
+  createMissingCourses: false,
+  applyPrices: false,
+  updateUnpaidInstallments: false,
 };
 
 /** أسعار المواد الفعلية (إعدادات المستخدم فوق الافتراضي) */

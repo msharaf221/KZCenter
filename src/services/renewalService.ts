@@ -12,14 +12,13 @@ import type {
 import { requireDate, requireNumber } from '../domain/validation';
 import {
   buildMonthlyPlan,
-  effectiveMonthlyPrice,
   Installment,
   InstallmentStatus,
-  PricingInput,
   renewalInfo
 } from '../lib/billing';
 import { generateId } from '../lib/ids';
 import { withBillingTransaction } from './billing/unitOfWork';
+import { calculateEffectivePrice } from './pricingService';
 
 // ==================== RENEWAL (تجديد / استكمال الاشتراك) ====================
 
@@ -119,17 +118,26 @@ export async function renewEnrollment(opts: RenewOptions): Promise<RenewResult> 
           : info.nextStartDate;
 
       // التسعير: لو المستخدم حدد سعر/خصم جديد نستخدمه، وإلا نكمّل بنفس اتفاق التسجيل الأصلي
-      const pricing: PricingInput = {
-        coursePrice: course?.price || 0,
-        priceOverride: opts.priceOverride ?? enrollment.priceOverride,
-        discountAmount: opts.discountAmount ?? enrollment.discountAmount,
-        discountPercent: opts.discountPercent ?? enrollment.discountPercent,
-      };
-      const monthlyPrice = effectiveMonthlyPrice(pricing);
+      const effectiveOverride = opts.priceOverride !== undefined ? opts.priceOverride : enrollment.priceOverride;
+      const effectiveDiscountAmount = opts.discountAmount !== undefined ? opts.discountAmount : enrollment.discountAmount;
+      const effectiveDiscountPercent = opts.discountPercent !== undefined ? opts.discountPercent : enrollment.discountPercent;
+
+      const monthlyPrice = calculateEffectivePrice({
+        student,
+        group,
+        course,
+        priceOverride: effectiveOverride,
+        discountAmount: effectiveDiscountAmount,
+        discountPercent: effectiveDiscountPercent,
+      });
       const cycle = (enrollment.renewalCount || 0) + 1;
 
       const plan = buildMonthlyPlan({
-        ...pricing,
+        coursePrice: course?.price || 0,
+        groupPrice: group.price,
+        priceOverride: effectiveOverride,
+        discountAmount: effectiveDiscountAmount,
+        discountPercent: effectiveDiscountPercent,
         durationMonths: months,
         startDate,
         dueDayOfMonth: policy.dueDayOfMonth,
@@ -174,9 +182,9 @@ export async function renewEnrollment(opts: RenewOptions): Promise<RenewResult> 
         renewalCount: cycle,
         renewedAt: now,
         renewals: [...(enrollment.renewals || []), renewal],
-        priceOverride: pricing.priceOverride ?? undefined,
-        discountAmount: pricing.discountAmount ?? undefined,
-        discountPercent: pricing.discountPercent ?? undefined,
+        priceOverride: effectiveOverride ?? undefined,
+        discountAmount: effectiveDiscountAmount ?? undefined,
+        discountPercent: effectiveDiscountPercent ?? undefined,
         discountReason: opts.discountReason ?? enrollment.discountReason,
         updatedAt: now,
       } satisfies Enrollment);

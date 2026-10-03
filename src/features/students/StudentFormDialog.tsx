@@ -5,10 +5,11 @@ import Modal from '../../components/ui/Modal';
 import { useApp } from '../../contexts/AppContext';
 import type { Course, Gender, Group, Student, StudentStatus, PaymentMethod } from '../../domain/models';
 import { findStudentDuplicates } from '../../domain/studentIdentity';
-import { effectiveMonthlyPrice, proratedFirstPeriod, resolveSessionsPerMonth } from '../../lib/billing';
+import { proratedFirstPeriod, resolveSessionsPerMonth } from '../../lib/billing';
 import { notify } from '../../lib/notifications';
 import { formatCurrency, getContrastColor } from '../../lib/utils';
 import { METHOD_ORDER, METHOD_LABEL } from '../../lib/cashbox';
+import { calculateEffectivePrice, getCatalogPrice, isGroupPriceCustom } from '../../services/pricingService';
 import type { StudentEditor } from './useStudentEditor';
 
 interface Props {
@@ -241,9 +242,13 @@ export default function StudentFormDialog({ editor, students, groups, courses, o
                   (() => {
                     const course = courses.find(c => c.id === g.courseId);
                     const pr = enrollPricing[g.id] || {};
-                    const monthly = course
-                      ? effectiveMonthlyPrice({ coursePrice: course.price, priceOverride: pr.priceOverride })
-                      : 0;
+                    const monthly = calculateEffectivePrice({
+                      group: g,
+                      course,
+                      priceOverride: pr.priceOverride,
+                    });
+                    const baseCatalogPrice = getCatalogPrice({ group: g, course });
+                    const isCustom = isGroupPriceCustom(g);
                     const sessions = resolveSessionsPerMonth({
                       courseSessionsPerMonth: course?.sessionsPerMonth,
                       settingSessionsPerMonth: settings?.sessionsPerMonth,
@@ -269,7 +274,7 @@ export default function StudentFormDialog({ editor, students, groups, courses, o
                           <input
                             type="number"
                             min={0}
-                            placeholder={course ? String(course.price) : ''}
+                            placeholder={String(baseCatalogPrice)}
                             value={pr.priceOverride ?? ''}
                             onChange={e =>
                               setEnrollPricing(p => ({
@@ -282,6 +287,11 @@ export default function StudentFormDialog({ editor, students, groups, courses, o
                             }
                             className="w-24 px-2 py-1 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-indigo-500"
                           />
+                          <span className="text-[11px] text-gray-400">
+                            {isCustom
+                              ? `(سعر خاص بالمجموعة: ${formatCurrency(g.price!, settings?.currency)})`
+                              : `(موروث من الكورس: ${formatCurrency(course?.price || 0, settings?.currency)})`}
+                          </span>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
                           <label className="text-xs text-gray-500">دفع دلوقتي</label>
