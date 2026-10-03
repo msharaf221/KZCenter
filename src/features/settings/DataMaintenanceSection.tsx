@@ -1,20 +1,55 @@
-import { Loader2, RefreshCw, ShieldCheck, Wand2, Wrench } from 'lucide-react';
+import { Download, Loader2, RefreshCw, ShieldCheck, Wand2, Wrench } from 'lucide-react';
+import { useState } from 'react';
 import { type SubjectPrices } from '../../lib/subjects';
 import { getContrastColor } from '../../lib/utils';
+import { executeBackup } from '../../services/backup/runner';
 import { useDataMaintenance } from './useDataMaintenance';
 
 export default function DataMaintenanceSection({
   primaryColor,
-  subjectPrices,
+  subjectPrices = {},
 }: {
   primaryColor: string;
-  subjectPrices: SubjectPrices;
+  subjectPrices?: SubjectPrices;
 }) {
   const { quality, integrityReport, busy, auditing, autoFixing, checking, handleAudit, handleAutoFix, handleIntegrityCheck, dialog } = useDataMaintenance(subjectPrices);
+  const [backingUp, setBackingUp] = useState(false);
+
+  const handleInstantBackup = async () => {
+    try {
+      setBackingUp(true);
+      await executeBackup('local', true);
+    } finally {
+      setBackingUp(false);
+    }
+  };
+
+  const todayStr = new Date().toISOString().split('T')[0];
 
   return (
     <>
       {dialog}
+
+      {/* كارت النسخ الاحتياطي الفوري بالتاريخ */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+        <h2 className="text-lg font-bold text-gray-900 mb-2 flex items-center gap-2">
+          <Download size={20} className="text-indigo-600" /> نسخ احتياطي فوري (تلقائي بالتاريخ)
+        </h2>
+        <p className="text-sm text-gray-500 mb-4">
+          يقوم بإنشاء نسخة احتياطية فورية بصيغة JSON بتاريخ اليوم ({todayStr}) وحفظها تلقائياً داخل مجلد النسخ الاحتياطية (backups/) وتحميلها مباشرة لحفظ بياناتك.
+        </p>
+
+        <button
+          onClick={handleInstantBackup}
+          disabled={backingUp || busy}
+          className="flex items-center gap-2 px-4 py-2.5 text-white rounded-xl text-sm font-medium disabled:opacity-50 shadow-sm transition-opacity"
+          style={{ backgroundColor: primaryColor, color: getContrastColor(primaryColor) }}
+        >
+          {backingUp ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+          {backingUp ? 'جاري إنشاء النسخة وحفظها...' : 'تنفيذ نسخ احتياطي فوري الآن'}
+        </button>
+      </div>
+
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
         <h2 className="text-lg font-bold text-gray-900 mb-2 flex items-center gap-2">
           <ShieldCheck size={20} /> جودة الداتا والروابط

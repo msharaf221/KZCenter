@@ -26,6 +26,7 @@
     "electron:build:all": "npm run build:electron && electron-builder --win --mac --linux",
     "verify:rls": "node scripts/verify-rls.mjs",
     "check:architecture": "node scripts/check-architecture.mjs",
+    "backup": "node scripts/backup.mjs",
     "verify": "npm run typecheck && npm run lint -- --max-warnings=0 && npm run check:architecture && npm test && npm run check:pii && npm run build",
     "check:pii": "node scripts/check-no-pii.mjs --all"
   },

@@ -153,6 +153,17 @@ ipcMain.handle('backup:save-local', async (_event, data: string) => {
 
     writeFileSync(filepath, data, 'utf-8');
 
+    // Also save to project backups folder if present
+    try {
+      const projectBackups = join(process.cwd(), 'backups');
+      if (existsSync(projectBackups)) {
+        writeFileSync(join(projectBackups, `backup_${timestamp}.json`), data, 'utf-8');
+        writeFileSync(join(projectBackups, filename), data, 'utf-8');
+      }
+    } catch {
+      // Ignore project folder write errors in standalone installed electron
+    }
+
     // Clean old backups
     cleanOldBackups();
 

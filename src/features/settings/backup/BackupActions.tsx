@@ -22,9 +22,9 @@ export default function BackupActions({ isRunning, handleManualBackup, handleRes
             <HardDrive size={20} className="text-blue-600" />
           </div>
           <div className="text-right">
-            <p className="text-sm font-bold text-blue-900">نسخ احتياطي محلي</p>
+            <p className="text-sm font-bold text-blue-900">نسخ احتياطي محلي (فوري)</p>
             <p className="text-xs text-blue-600">
-              {window.electronAPI?.isElectron ? 'حفظ على الجهاز' : 'تحميل الملف'}
+              {window.electronAPI?.isElectron ? 'حفظ فوري في backups/ والجهاز' : 'حفظ تلقائي بالتاريخ وتحميل JSON'}
             </p>
           </div>
         </button>
