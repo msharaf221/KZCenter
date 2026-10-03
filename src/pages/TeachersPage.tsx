@@ -15,7 +15,7 @@ import { describeTeacherPay } from '../domain/payroll/settings';
 import { useCommandTask } from '../hooks/useCommandTask';
 import { usePageResource } from '../hooks/usePageResource';
 import { notify } from '../lib/notifications';
-import { SUBJECTS, getSubject, type SubjectId } from '../lib/subjects';
+import { getAllSubjects, getSubject, type SubjectId } from '../lib/subjects';
 import { getContrastColor } from '../lib/utils';
 import { deleteCatalogRecord, saveTeacher } from '../services/commands/catalog';
 import { loadTeachersList } from '../services/queries/teachers';
@@ -122,7 +122,7 @@ export default function TeachersPage() {
                       {(teacher.subjectIds || []).length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {(teacher.subjectIds || []).map(id => {
-                            const subject = getSubject(id);
+                            const subject = getSubject(id, settings?.customSubjects);
                             if (!subject) return null;
                             return (
                               <span key={id} className="text-[10px] px-1.5 py-0.5 rounded-full text-white"
@@ -189,7 +189,7 @@ export default function TeachersPage() {
           <div className="sm:col-span-2">
             <label className="block text-sm font-semibold text-gray-700 mb-2">المواد اللي بيدرّسها</label>
             <div className="flex flex-wrap gap-2">
-              {SUBJECTS.map(s => {
+              {getAllSubjects(settings?.customSubjects).map(s => {
                 const active = (form.subjectIds || []).includes(s.id);
                 return (
                   <button key={s.id} type="button"

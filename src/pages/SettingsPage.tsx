@@ -7,7 +7,7 @@ import DataMaintenanceSection from '../features/settings/DataMaintenanceSection'
 import GeneralSettingsSection from '../features/settings/GeneralSettingsSection';
 import NotificationSettingsSection from '../features/settings/NotificationSettingsSection';
 import PasswordSettingsSection from '../features/settings/PasswordSettingsSection';
-import SubjectPricesSection from '../features/settings/SubjectPricesSection';
+import SubjectsSettingsSection from '../features/settings/SubjectsSettingsSection';
 import { useSettingsDraft } from '../features/settings/useSettingsDraft';
 
 export default function SettingsPage() {
@@ -16,13 +16,13 @@ export default function SettingsPage() {
     <Layout title="الإعدادات">
       <div className="max-w-3xl mx-auto space-y-6">
         <GeneralSettingsSection {...editor} />
-        <SubjectPricesSection {...editor} />
+        <SubjectsSettingsSection primaryColor={editor.primaryColor} />
         <BillingSettingsSection {...editor} />
         <AppearanceSettingsSection {...editor} />
         <NotificationSettingsSection {...editor} />
         <CloudSettingsSection primaryColor={editor.primaryColor} />
         <PasswordSettingsSection primaryColor={editor.primaryColor} />
-        <DataMaintenanceSection primaryColor={editor.primaryColor} subjectPrices={editor.form.subjectPrices} />
+        <DataMaintenanceSection primaryColor={editor.primaryColor} />
         <BackupManager />
       </div>
     </Layout>

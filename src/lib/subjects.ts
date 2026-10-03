@@ -6,17 +6,25 @@
  * بأسماء حرة (s.r · level 3 · اقرا · grammer …) وكل كورس بسعره اليدوي، فالمدرس
  * والمجموعة بيتربطوا بكورس مش بمادة، والأسعار بتتحط بالغلط أو بصفر عند الاستيراد.
  *
- * الملف ده مصدر الحقيقة الوحيد للمواد:
- *  - المادة ليها `id` ثابت، اسم عربي/إنجليزي، سعر شهري افتراضي، أيقونة ولون وتصنيف.
+ * الملف ده مصدر الحقيقة للمواد:
+ *  - المادة ليها `id`، اسم عربي/إنجليزي، سعر شهري افتراضي، أيقونة ولون وتصنيف.
+ *  - يدعم إضافة مواد جديدة وتعديل المواد الحالية عبر `customSubjects` في إعدادات النظام.
  *  - `aliases` = كل الأسماء اللي ممكن تتكتب بيها المادة في الشيتات وأسماء الكورسات،
  *    وبيها بنطابق أي كورس/مجموعة قديمة بمادتها الصح (`matchSubject`).
- *  - الأسعار قابلة للتعديل من الإعدادات (`settings.subjectPrices`) والافتراضي هنا.
- *
- * أسعار الشهر الواحد المعتمدة:
- *   English 250 · Math (ماث) 250 · حساب/رياضيات 200 · عربي 200 · قرآن 200
  */
 
-export type SubjectId = 'english' | 'math' | 'hesab' | 'arabic' | 'quran';
+let customSubjectsCache: Subject[] | null = null;
+
+/** يحدّث كاش المواد المخصصة في الذاكرة */
+export function setCustomSubjectsCache(subjects: Subject[] | null): void {
+  customSubjectsCache = subjects;
+}
+
+export function getCustomSubjectsCache(): Subject[] | null {
+  return customSubjectsCache;
+}
+
+export type SubjectId = 'english' | 'math' | 'hesab' | 'arabic' | 'quran' | (string & {});
 
 export interface Subject {
   id: SubjectId;
@@ -35,6 +43,10 @@ export interface Subject {
   aliases: string[];
   /** وصف مختصر للكورس المتولّد من المادة */
   description: string;
+  /** هل المادة مخصصة ومضافة من قبل المستخدم */
+  isCustom?: boolean;
+  /** هل تم حذف/إخفاء المادة من القائمة */
+  deleted?: boolean;
 }
 
 export const SUBJECTS: Subject[] = [
@@ -114,14 +126,81 @@ export const SUBJECTS: Subject[] = [
   },
 ];
 
-/** تصنيفات الكورسات (متضمّنة تصنيفات المواد) */
+/** تصنيفات الكورسات الافتراضية */
 export const SUBJECT_CATEGORIES = [...new Set(SUBJECTS.map(s => s.category))];
 
 export const SUBJECT_IDS = SUBJECTS.map(s => s.id);
 
-export function getSubject(id?: string | null): Subject | undefined {
+/**
+ * جلب جميع المواد الفعالة (الأساسية + المخصصة من الإعدادات مع تطبيق التعديلات والحذف)
+ */
+export function getAllSubjects(customSubjects?: Subject[]): Subject[] {
+  const custom = customSubjects || customSubjectsCache;
+  if (!custom || custom.length === 0) {
+    return SUBJECTS;
+  }
+
+  const subjectMap = new Map<string, Subject>();
+  for (const s of SUBJECTS) {
+    subjectMap.set(s.id, { ...s });
+  }
+
+  for (const item of custom) {
+    if (item.deleted) {
+      subjectMap.delete(item.id);
+      continue;
+    }
+    const existing = subjectMap.get(item.id);
+    if (existing) {
+      subjectMap.set(item.id, { ...existing, ...item });
+    } else {
+      subjectMap.set(item.id, {
+        ...item,
+        aliases: item.aliases || [item.name, item.nameEn].filter(Boolean),
+        category: item.category || 'عام',
+        icon: item.icon || '📚',
+        color: item.color || '#6366f1',
+        description: item.description || '',
+        monthlyPrice: item.monthlyPrice ?? 0,
+      });
+    }
+  }
+
+  return Array.from(subjectMap.values());
+}
+
+/**
+ * جلب جميع تصنيفات المواد المتاحة
+ */
+export function getSubjectCategories(customSubjects?: Subject[]): string[] {
+  return [...new Set(getAllSubjects(customSubjects).map(s => s.category).filter(Boolean))];
+}
+
+/**
+ * جلب مادة حسب المعرّف
+ */
+export function getSubject(id?: string | null, customSubjects?: Subject[]): Subject | undefined {
   if (!id) return undefined;
-  return SUBJECTS.find(s => s.id === id);
+  return getAllSubjects(customSubjects).find(s => s.id === id);
+}
+
+/**
+ * جلب مادة بشكل آمن (مع كائن بديل افتراضي لتجنب أخطاء undefined في الواجهة)
+ */
+export function getSubjectSafe(id?: string | null, customSubjects?: Subject[]): Subject {
+  const found = getSubject(id, customSubjects);
+  if (found) return found;
+  return {
+    id: (id || 'general') as SubjectId,
+    name: id || 'عام',
+    nameEn: id || 'General',
+    monthlyPrice: 0,
+    category: 'عام',
+    icon: '📚',
+    color: '#6366f1',
+    aliases: [],
+    description: '',
+  };
 }
 
 // ==================== NORMALIZATION ====================
@@ -129,7 +208,6 @@ export function getSubject(id?: string | null): Subject | undefined {
 /**
  * توحيد النص قبل المطابقة:
  * تشكيل/تطويل، همزات، ى/ي، ة/ه، حروف لاتينية صغيرة، وأي رموز → مسافة.
- * (نفس فلسفة `foldArabic` في sheetImport بس مع اللاتيني والرموز كمان.)
  */
 export function normalizeSubjectText(input: unknown): string {
   return String(input ?? '')
@@ -144,13 +222,6 @@ export function normalizeSubjectText(input: unknown): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
-
-/** الأسماء البديلة موحّدة + مرتّبة بالأطول (عشان «english math» تسبق «math») */
-const ALIAS_INDEX: { subject: Subject; alias: string }[] = SUBJECTS
-  .flatMap(subject => [subject.name, subject.nameEn, ...subject.aliases]
-    .map(a => ({ subject, alias: normalizeSubjectText(a) })))
-  .filter(x => x.alias.length > 0)
-  .sort((a, b) => b.alias.length - a.alias.length);
 
 /** هل الـ alias موجود ككلمة (أو تتابع كلمات) كاملة داخل النص؟ */
 function containsWord(haystack: string, needle: string): boolean {
@@ -169,17 +240,20 @@ function containsWord(haystack: string, needle: string): boolean {
 
 /**
  * تخمين المادة من أي نص (اسم كورس / اسم مجموعة / عنوان عمود في الشيت / تخصص مدرس).
- * بيرجع `null` لو مفيش مادة واضحة — عشان ما نغيّرش سعر كورس مش متأكدين منه.
- *
- * ملاحظة: «ماث» و«math» مادة لوحدها (250) غير «حساب/رياضيات» بالعربي (200)،
- * وده مقصود لأن أسعارهم مختلفة.
  */
 export function matchSubject(...texts: (string | undefined | null)[]): Subject | null {
   const normalized = texts.map(normalizeSubjectText).filter(Boolean);
   if (normalized.length === 0) return null;
 
+  const all = getAllSubjects();
+  const aliasIndex = all
+    .flatMap(subject => [subject.name, subject.nameEn, ...subject.aliases]
+      .map(a => ({ subject, alias: normalizeSubjectText(a) })))
+    .filter(x => x.alias.length > 0)
+    .sort((a, b) => b.alias.length - a.alias.length);
+
   for (const text of normalized) {
-    for (const { subject, alias } of ALIAS_INDEX) {
+    for (const { subject, alias } of aliasIndex) {
       if (containsWord(text, alias)) return subject;
     }
   }
@@ -196,24 +270,27 @@ export function matchSubjectId(...texts: (string | undefined | null)[]): Subject
 /** خريطة أسعار المواد (id ← سعر شهري) */
 export type SubjectPrices = Partial<Record<SubjectId, number>>;
 
-export const DEFAULT_SUBJECT_PRICES: Record<SubjectId, number> = SUBJECTS.reduce(
+export const DEFAULT_SUBJECT_PRICES: Record<string, number> = SUBJECTS.reduce(
   (acc, s) => { acc[s.id] = s.monthlyPrice; return acc; },
-  {} as Record<SubjectId, number>,
+  {} as Record<string, number>,
 );
 
 /**
  * السعر الشهري المعتمد لمادة: من الإعدادات لو المستخدم عدّله، وإلا الافتراضي.
- * أي قيمة غير صالحة (سالبة/نص/صفرية بالغلط) بترجع للافتراضي.
  */
-export function subjectPrice(id: SubjectId, overrides?: SubjectPrices | null): number {
+export function subjectPrice(id: SubjectId, overrides?: SubjectPrices | null, customSubjects?: Subject[]): number {
   const custom = overrides?.[id];
   if (typeof custom === 'number' && Number.isFinite(custom) && custom > 0) {
     return Math.round(custom * 100) / 100;
   }
-  return DEFAULT_SUBJECT_PRICES[id];
+  const subj = getSubject(id, customSubjects);
+  if (subj && typeof subj.monthlyPrice === 'number' && subj.monthlyPrice > 0) {
+    return subj.monthlyPrice;
+  }
+  return DEFAULT_SUBJECT_PRICES[id] ?? 0;
 }
 
 /** كل المواد بأسعارها الفعلية (للعرض في الإعدادات وصفحة الكورسات) */
-export function subjectsWithPrices(overrides?: SubjectPrices | null): (Subject & { price: number })[] {
-  return SUBJECTS.map(s => ({ ...s, price: subjectPrice(s.id, overrides) }));
+export function subjectsWithPrices(overrides?: SubjectPrices | null, customSubjects?: Subject[]): (Subject & { price: number })[] {
+  return getAllSubjects(customSubjects).map(s => ({ ...s, price: subjectPrice(s.id, overrides, customSubjects) }));
 }

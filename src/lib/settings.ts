@@ -9,6 +9,8 @@ import { billingPolicy, type BillingPolicy } from '../domain/ledger/policy';
 import { readById } from '../data/readers';
 import type { Settings } from '../domain/models';
 
+import { setCustomSubjectsCache } from './subjects';
+
 export const DEFAULT_SETTINGS_VALUES: Settings = {
   id: 'main',
   centerName: 'EduCenter Pro',
@@ -31,6 +33,7 @@ let cache: Settings | null = null;
 /** يحدّث الكاش (بينادى عليها AppContext بعد كل تغيير) */
 export function setSettingsCache(s: Settings | null): void {
   cache = s ? { ...DEFAULT_SETTINGS_VALUES, ...s } : null;
+  setCustomSubjectsCache(cache?.customSubjects || null);
 }
 
 export function peekSettings(): Settings | null {
@@ -45,6 +48,7 @@ export async function getSettings(): Promise<Settings> {
   if (cache) return cache;
   const s = await readById<Settings>('settings', 'main');
   cache = { ...DEFAULT_SETTINGS_VALUES, ...(s || {}) };
+  setCustomSubjectsCache(cache?.customSubjects || null);
   return cache;
 }
 
