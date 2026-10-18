@@ -8,7 +8,7 @@ import { createCloudTransport } from './transport';
 
 const local: SyncLocal = {
   read: table => readAll<SyncRow>(table, { includeDeleted: true }),
-  write: (table, row) => dbPut(table, row),
+  write: (table, row) => dbPut(table, row, { trackCloudChanges: false }),
 };
 
 async function synchronize(direction: 'push' | 'pull', opts?: { silent?: boolean }): Promise<SyncReport> {

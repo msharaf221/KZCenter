@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { getDB } from '../data/database';
 import type { Settings, User } from '../domain/models';
 import { generateId } from '../lib/ids';
+import { dbPut } from '../data/records';
 
 // ==================== SEED DATA ====================
 
@@ -40,7 +41,7 @@ export async function seedDefaultData(): Promise<void> {
       notifyAbsence: true,
       notifyLatePayment: true,
     };
-    await db.put('settings', defaultSettings);
+    await dbPut('settings', defaultSettings);
   }
 }
 

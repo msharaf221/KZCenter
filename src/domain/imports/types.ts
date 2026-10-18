@@ -1,4 +1,4 @@
-import type { Subject, SubjectId, SubjectPrices } from '../../lib/subjects';
+import type { Subject, SubjectId, SubjectPrices } from '../subject';
 
 /**
  * طريقة تحويل المجموعات لكورسات:

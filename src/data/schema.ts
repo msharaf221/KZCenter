@@ -1,4 +1,5 @@
 import type { AuditEntry } from '../domain/audit';
+import type { SyncOutboxEntry } from './syncOutbox';
 import type {
   Attendance,
   CashSession,
@@ -51,6 +52,8 @@ export interface StoreRecords {
   message_logs: MessageLog;
   message_templates: MessageTemplate;
   waitlist: WaitlistEntry;
+  /** Internal durable queue; never backed up or synchronized as business data. */
+  sync_outbox: SyncOutboxEntry;
 }
 
 export type StoreName = keyof StoreRecords;

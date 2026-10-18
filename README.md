@@ -122,6 +122,20 @@ npm run electron:build:win  # حزمة ويندوز   (وكذلك :linux / :mac 
 ```
 الأيقونات (`build/icon.png|ico|icns`) مولّدة عبر `node scripts/make-icons.mjs`.
 
+### تطبيق المالك (Expo · Android / iOS)
+
+تطبيق موبايل مستقل للمالك لمتابعة التحصيل اليومي، المصروفات والاستردادات، الحضور، وسجل نشاط الفريق. التفاصيل والإعدادات في [`apps/owner-mobile/README.md`](apps/owner-mobile/README.md).
+
+```bash
+npm --prefix apps/owner-mobile ci
+cp apps/owner-mobile/.env.example apps/owner-mobile/.env
+# ضع عنوان Supabase والمفتاح العام فقط في ملف التطبيق
+npm run mobile:start
+npm run mobile:typecheck
+```
+
+> المالك يحصل حالياً على قراءة فقط عبر عضوية `center_memberships` وسياسات RLS. راجع ترحيل [`20261018_owner_mobile_realtime.sql`](docs/migrations/20261018_owner_mobile_realtime.sql) وقرار الصلاحيات قبل تطبيقه على Supabase.
+
 ### Docker
 ```bash
 docker-compose up -d
@@ -182,7 +196,7 @@ npm run verify         # التحقق المحلي الشامل
 src/
 ├── app/               # سجل المسارات والقائمة الجانبية + lazy routing
 ├── domain/            # عقود الكيانات؛ قواعد المرتبات والأرصدة والتقارير والاستيراد وسياسة النسخ
-├── data/              # IndexedDB v7، قراءات صارمة ولقطات متسقة، معاملات وتفضيلات النسخ
+├── data/              # IndexedDB v8، قراءات صارمة ولقطات متسقة، معاملات وتفضيلات النسخ
 ├── services/          # التسجيل والتحصيل والتجديد والتحويل والأرصدة والنسخ الاحتياطي
 │   ├── commands/      # صلاحيات + تحقق + معاملات الحفظ والحذف القادمة من الواجهة
 │   ├── payroll/       # إعدادات المدرس، الاعتماد، الصرف والسلف

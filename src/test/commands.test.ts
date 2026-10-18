@@ -12,7 +12,7 @@ import {
   deleteCatalogRecord,
 } from '../services/commands/catalog';
 import { saveExpense, deleteExpense } from '../services/commands/expenses';
-import { saveExam, saveExamGrades, saveAttendance, checkOutStudent } from '../services/commands/academic';
+import { saveExam, saveExamGrades, saveAttendance, checkOutStudent, type AttendanceSubmission } from '../services/commands/academic';
 import { createPayment, markPendingPaymentPaid, deletePendingPayment } from '../services/commands/payments';
 import { saveStudent, importStudentCSV } from '../services/commands/students';
 import { payrollStudent, payrollTeacher, payrollGroup, payrollInstallment, PAYROLL_NOW } from './helpers/payroll';
@@ -185,6 +185,8 @@ describe('academic transaction boundaries', () => {
     });
     const submitted = { groupId: 'group-1', date: '2026-09-10', studentIds: ['student-1'], statuses: {} };
     expect((await saveAttendance(teacher, submitted)).savedCount).toBe(0);
+    await expect(saveAttendance(teacher, { ...submitted, statuses: { 'student-1': 'absent' } })).rejects.toThrow('غير مشمول');
+    expect(await dbGetAll('attendance')).toEqual([]);
     await dbAdd('attendance', {
       id: 'historic',
       groupId: 'group-1',
@@ -196,6 +198,28 @@ describe('academic transaction boundaries', () => {
     });
     await saveAttendance(teacher, { ...submitted, statuses: { 'student-1': 'late' } });
     expect(await dbGetById('attendance', 'historic')).toMatchObject({ status: 'late', checkOutTime: '12:00' });
+  });
+  it('rejects invalid attendance states before writing any rows', async () => {
+    await expect(saveAttendance(teacher, {
+      groupId: 'group-1',
+      date: '2026-09-24',
+      studentIds: ['student-1'],
+      statuses: { 'student-1': 'unknown' } as unknown as AttendanceSubmission['statuses'],
+    })).rejects.toThrow('حالة الحضور غير صحيحة');
+    expect(await dbGetAll('attendance')).toEqual([]);
+  });
+  it('writes only explicitly selected attendance states and leaves omitted students without false absences', async () => {
+    await dbAdd('students', payrollStudent({ id: 'student-2', name: 'Second synthetic student' }));
+    await dbAdd('enrollments', { id: 'enrollment-2', groupId: 'group-1', studentId: 'student-2', status: 'active' });
+    const result = await saveAttendance(teacher, {
+      groupId: 'group-1',
+      date: '2026-09-24',
+      studentIds: ['student-1', 'student-2'],
+      statuses: { 'student-1': 'present' },
+    });
+    expect(result.savedCount).toBe(1);
+    expect(result.absent).toEqual([]);
+    expect(await dbGetAll('attendance')).toMatchObject([{ studentId: 'student-1', status: 'present' }]);
   });
   it('does not mark newly enrolled, unseen students absent from a stale form', async () => {
     await dbAdd('students', payrollStudent({ id: 'student-2' }));
@@ -218,7 +242,7 @@ describe('academic transaction boundaries', () => {
         groupId: 'group-1',
         date: '2026-09-24',
         studentIds: ['student-1', 'student-2'],
-        statuses: {},
+        statuses: { 'student-1': 'present', 'student-2': 'present' },
       }),
     ).rejects.toThrow('synthetic');
     expect(await dbGetAll('attendance')).toEqual([]);

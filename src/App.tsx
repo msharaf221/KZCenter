@@ -1,11 +1,15 @@
+import { useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { HashRouter } from 'react-router-dom';
 import AppRoutes from './app/AppRoutes';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AppProvider } from './contexts/AppContext';
 import { AuthProvider } from './contexts/AuthContext';
+import { startAutoSync } from './services/sync/auto';
 
 export default function App() {
+  useEffect(() => startAutoSync(), []);
+
   return (
     <ErrorBoundary>
       {/* HashRouter: يعمل مع بناء الملف الواحد على أي استضافة بدون إعدادات rewrite */}

@@ -1,4 +1,4 @@
-import type { Subject } from '../../lib/subjects';
+import type { Subject } from '../subject';
 import { matchSubject } from '../../lib/subjects';
 import { extractGroupName, isPlaceholderHeader, parseDays, parseTimeRange } from './matrixHeaders';
 import { extractPhone, foldArabic, normalize } from './normalization';

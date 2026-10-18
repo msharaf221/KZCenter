@@ -1,4 +1,4 @@
-import type { SubjectId } from '../../lib/subjects';
+import type { SubjectId } from '../subject';
 export type IssueSeverity = 'error' | 'warning' | 'info';
 
 export type IssueCode =

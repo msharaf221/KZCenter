@@ -107,11 +107,14 @@ export interface AttendanceSubmission {
   groupId: string;
   date: string;
   studentIds: string[];
-  statuses: Record<string, AttendanceStatus>;
+  /** Only explicit selections are saved; omitted students remain unmarked, not absent. */
+  statuses: Partial<Record<string, AttendanceStatus>>;
 }
 export async function saveAttendance(actor: Actor, input: AttendanceSubmission) {
   requirePermission(actor, 'attendance', 'edit');
   requireDate(input.date);
+  requireRule(Array.isArray(input.studentIds) && input.studentIds.every(id => typeof id === 'string'), 'قائمة الطلاب غير صحيحة');
+  requireRule(!!input.statuses && typeof input.statuses === 'object' && !Array.isArray(input.statuses), 'حالات الحضور غير صحيحة');
   const result = await writeTransaction(['groups', 'students', 'enrollments', 'attendance'], async tx => {
     const group = requireLive(await tx.objectStore('groups').get(input.groupId), 'المجموعة غير موجودة');
     requireGroupAccess(actor, group);
@@ -128,23 +131,33 @@ export async function saveAttendance(actor: Actor, input: AttendanceSubmission) 
       expected.size === students.length && students.every(student => expected.has(student.id)),
       'قائمة الطلاب تغيرت؛ أعد تحميل الحضور قبل الحفظ',
     );
-    for (const value of Object.values(input.statuses))
-      requireChoice(value, ['present', 'absent', 'late', 'excused'], 'حالة الحضور غير صحيحة');
     const store = tx.objectStore('attendance');
     const records = (
       store.indexNames.contains('by-groupDate')
         ? await store.index('by-groupDate').getAll([group.id, input.date])
         : (await store.getAll()).filter(row => row.groupId === group.id && row.date === input.date)
     ).filter(record => !isDeleted(record));
+    const recordsByStudent = new Map(records.map(record => [record.studentId, record]));
     const late = new Set(enrollments.filter(e => (e.enrolledAt || '').slice(0, 10) > input.date).map(e => e.studentId));
+    const eligibleIds = new Set(students
+      .filter(student => !late.has(student.id) || recordsByStudent.has(student.id))
+      .map(student => student.id));
+    const rosterIds = new Set(students.map(student => student.id));
+    for (const [studentId, value] of Object.entries(input.statuses)) {
+      if (!rosterIds.has(studentId)) continue; // stale saved rows for removed students are inert.
+      requireRule(eligibleIds.has(studentId), 'لا يمكن تسجيل حالة لطالب غير مشمول بهذا الكشف');
+      requireRule(value !== undefined, 'حالة الحضور غير صحيحة');
+      requireChoice(value, ['present', 'absent', 'late', 'excused'], 'حالة الحضور غير صحيحة');
+    }
     const newlyAbsent: Student[] = [],
       absent: Student[] = [];
     const now = new Date().toISOString();
     let savedCount = 0;
     for (const student of students) {
-      const previous = records.find(row => row.studentId === student.id);
+      const previous = recordsByStudent.get(student.id);
       if (late.has(student.id) && !previous) continue;
-      const status = input.statuses[student.id] || 'absent';
+      const status = input.statuses[student.id];
+      if (!status) continue; // يظل الطالب بلا سجل؛ عدم الاختيار ليس غياباً.
       if (status === 'absent') {
         absent.push(student);
         if (previous?.status !== 'absent') newlyAbsent.push(student);

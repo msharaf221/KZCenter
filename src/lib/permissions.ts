@@ -19,7 +19,7 @@ export type Entity =
   | 'attendance' | 'exams' | 'reports' | 'dailyReports'
   | 'users' | 'auditLog' | 'settings' | 'backup';
 
-export type Action = 'view' | 'create' | 'edit' | 'delete' | 'export' | 'money';
+export type Action = 'view' | 'create' | 'edit' | 'delete' | 'export' | 'money' | 'enroll';
 
 export const ROLE_LABEL: Record<UserRole, string> = {
   admin: 'مسؤول (كل الصلاحيات)',
@@ -48,7 +48,7 @@ const ALL: Action[] = ['view', 'create', 'edit', 'delete', 'export', 'money'];
 export const PERMISSIONS: Matrix = {
   // المسؤول: كل حاجة
   admin: {
-    students: ALL, teachers: ALL, courses: ALL, groups: ALL, inventory: ALL,
+    students: ALL, teachers: ALL, courses: ALL, groups: [...ALL, 'enroll'], inventory: ALL,
     payments: ALL, refunds: ALL, debtors: ALL, expenses: ALL, payroll: ALL,
     attendance: ALL, exams: ALL, reports: ALL, dailyReports: ALL,
     users: ALL, auditLog: ALL, settings: ALL, backup: ALL,
@@ -57,7 +57,7 @@ export const PERMISSIONS: Matrix = {
   // الاستقبال: تسجيل وتحصيل وحضور — من غير مصروفات ولا رواتب ولا حذف
   secretary: {
     students: ['view', 'create', 'edit', 'export'],
-    groups: ['view'],
+    groups: ['view', 'enroll'],
     courses: ['view'],
     teachers: ['view'],
     payments: ['view', 'create', 'export'],
@@ -89,7 +89,7 @@ export const PERMISSIONS: Matrix = {
   // المشرف الأكاديمي: مجموعات/حضور/اختبارات — من غير فلوس
   supervisor: {
     students: ['view', 'create', 'edit', 'export'],
-    groups: ['view', 'create', 'edit'],
+    groups: ['view', 'create', 'edit', 'enroll'],
     courses: ['view', 'create', 'edit'],
     teachers: ['view'],
     attendance: ['view', 'create', 'edit', 'export'],

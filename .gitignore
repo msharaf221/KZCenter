@@ -63,3 +63,13 @@ temp/
 tmp/
 backups/
 *.backup.json
+
+# Expo managed mobile app
+.expo/
+web-build/
+apps/owner-mobile/android/
+apps/owner-mobile/ios/
+apps/owner-mobile/dist-*/
+apps/owner-mobile/.env
+apps/owner-mobile/.env.local
+apps/owner-mobile/.env.*.local

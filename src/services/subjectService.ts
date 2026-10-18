@@ -1,4 +1,4 @@
-import type { Subject, SubjectId } from '../lib/subjects';
+import type { Subject, SubjectId } from '../domain/subject';
 import { getAllSubjects, normalizeSubjectText } from '../lib/subjects';
 
 /**

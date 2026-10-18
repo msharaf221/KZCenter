@@ -5,7 +5,7 @@ import { readAll, readById } from '../data/readers';
 import { dbPut } from '../data/records';
 import { enrollStudent } from '../services/enrollmentService';
 import { reviewWriteOff } from '../services/debtWriteOffService';
-import { cancelStudentPayment, collectStudentPayment, confirmDebtWriteOff, enrollGroupStudent, refundStudentPayment, removeGroupStudent, renewStudentSubscription, transferGroupStudent } from '../services/commands/studentFinance';
+import { cancelStudentPayment, collectStudentPayment, confirmDebtWriteOff, enrollGroupStudent, enrollGroupStudents, refundStudentPayment, removeGroupStudent, renewStudentSubscription, transferGroupStudent } from '../services/commands/studentFinance';
 import { addAuditEntry } from '../lib/audit';
 import { payrollStudent, payrollGroup, PAYROLL_NOW } from './helpers/payroll';
 
@@ -25,6 +25,7 @@ const actions = [
   ['cancel', () => cancelStudentPayment(teacher, { paymentId: 'missing', reason: 'Synthetic' })],
   ['refund', () => refundStudentPayment(teacher, { studentId: 'student-1', amount: 20, reason: 'Synthetic' })],
   ['enroll', () => enrollGroupStudent(teacher, 'student-1', 'group-1')],
+  ['bulk enroll', () => enrollGroupStudents(teacher, ['student-1'], 'group-1')],
   ['remove', () => removeGroupStudent(teacher, 'student-1', 'group-1')],
   ['renew', () => renewStudentSubscription(teacher, { studentId: 'student-1', groupId: 'group-1' })],
   ['transfer', () => transferGroupStudent(teacher, { studentId: 'student-1', fromGroupId: 'group-1', toGroupId: 'group-2' })],
@@ -42,6 +43,29 @@ it('does not let academic enrollment permissions silently authorize initial coll
   expect(await readAll('enrollments')).toEqual([]);
   expect((await enrollGroupStudent(supervisor, 'student-1', 'group-1')).success).toBe(true);
   await expect(renewStudentSubscription(supervisor, { studentId: 'student-1', groupId: 'group-1' })).rejects.toThrow('صلاحية');
+});
+it('lets reception add several students to one group atomically and creates each enrollment/charge without collecting money', async () => {
+  const secretary = { ...admin, role: 'secretary' as const };
+  await dbPut('students', payrollStudent({ id: 'student-2', name: 'طالب تجريبي ثان', enrolledGroups: [], parentPhone: '01000000002' }));
+  const result = await enrollGroupStudents(secretary, ['student-1', 'student-2'], 'group-1', { startSession: 3 });
+  expect(result).toMatchObject({ success: true, enrolledCount: 2 });
+  expect((await readAll('enrollments')).map(row => row.studentId).sort()).toEqual(['student-1', 'student-2']);
+  expect((await readAll('enrollments')).map(row => row.startSession)).toEqual([3, 3]);
+  expect((await readAll('installments')).map(row => row.studentId).sort()).toEqual(['student-1', 'student-2']);
+  expect((await readAll('installments')).map(row => row.amount)).toEqual([150, 150]);
+  expect((await readById('groups', 'group-1'))?.studentIds.sort()).toEqual(['student-1', 'student-2']);
+  expect(await readAll('payments')).toEqual([]);
+  expect(addAuditEntry).toHaveBeenCalledTimes(1);
+});
+it('rolls back the entire multi-student enrollment if the group fills before every selection fits', async () => {
+  const secretary = { ...admin, role: 'secretary' as const };
+  await dbPut('groups', payrollGroup({ studentIds: [], maxStudents: 1 }));
+  await dbPut('students', payrollStudent({ id: 'student-2', name: 'طالب تجريبي ثان', enrolledGroups: [], parentPhone: '01000000002' }));
+  await expect(enrollGroupStudents(secretary, ['student-1', 'student-2'], 'group-1')).rejects.toThrow('مكتملة');
+  expect(await readAll('enrollments')).toEqual([]);
+  expect(await readAll('installments')).toEqual([]);
+  expect((await readById('groups', 'group-1'))?.studentIds).toEqual([]);
+  expect(addAuditEntry).not.toHaveBeenCalled();
 });
 it('validates write-off confirmation and the reviewed snapshot before a destructive commit', async () => {
   await enrollStudent('student-1', 'group-1');
