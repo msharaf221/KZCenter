@@ -1,0 +1,37 @@
+export const theme = {
+  colors: {
+    background: '#F3F7F5',
+    surface: '#FFFFFF',
+    surfaceTint: '#F8FBF9',
+    primary: '#0D8A62',
+    primaryDark: '#075D43',
+    primarySoft: '#E5F5EE',
+    ink: '#152821',
+    muted: '#71827A',
+    border: '#E4ECE7',
+    success: '#14804A',
+    successSoft: '#E6F6EC',
+    warning: '#A4690A',
+    warningSoft: '#FFF5DF',
+    danger: '#B84040',
+    dangerSoft: '#FDECEC',
+    blue: '#3869BA',
+    blueSoft: '#EAF1FF',
+    white: '#FFFFFF',
+  },
+  radius: {
+    card: 22,
+    large: 28,
+    control: 15,
+    pill: 999,
+  },
+  shadow: {
+    card: {
+      shadowColor: '#15382A',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.055,
+      shadowRadius: 16,
+      elevation: 3,
+    },
+  },
+} as const;

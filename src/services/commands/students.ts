@@ -75,6 +75,7 @@ export async function saveStudent(actor: Actor, input: StudentSubmission) {
     const wanted = membershipSelection(old, draft.enrolledGroups, input.baselineGroupIds);
     const added = wanted.filter(id => !old.includes(id));
     const removed = old.filter(id => !wanted.includes(id));
+    if (added.length || removed.length) requirePermission(actor, 'groups', 'enroll');
     const now = new Date().toISOString();
     const student: Student = {
       totalPaid: 0, enrolledGroups: [], ...current, ...pickDraft(draft, profileFields),

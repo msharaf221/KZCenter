@@ -23,7 +23,7 @@ describe('all-or-nothing local restores', () => {
     { students: [] , teachers: [{ name: 'no key' }] },
     { students: [], teachers: [null] }, { students: [], teachers: [{ id: '' }] },
     { students: [], teachers: 'wrong shape' }, { students: [], teachers: null },
-    { students: [], settings: { id: 'wrong' } }, { students: [], version: 8 },
+    { students: [], settings: { id: 'wrong' } }, { students: [], version: 9 },
   ])('validates every included container/key before touching the database: %j', async input => {
     const open = vi.spyOn(database, 'getDB');
     await expect(importAllData(input)).rejects.toBeDefined();
@@ -63,8 +63,8 @@ describe('all-or-nothing local restores', () => {
   it('retains legacy last-row-wins puts and requires core tables only for file-level validation', async () => {
     await importAllData({ students: [{ id: 'same', name: 'first' }, { id: 'same', name: 'last' }] });
     expect(await readAll('students')).toEqual([{ id: 'same', name: 'last' }]);
-    expect(() => planBackupImport({ students: [] }, ['students'], 7, true)).toThrow();
-    expect(() => planBackupImport({ students: [], teachers: [], groups: [], courses: [] }, ['students'], 7, true)).not.toThrow();
+    expect(() => planBackupImport({ students: [] }, ['students'], 8, true)).toThrow();
+    expect(() => planBackupImport({ students: [], teachers: [], groups: [], courses: [] }, ['students'], 8, true)).not.toThrow();
   });
 });
 
@@ -76,7 +76,7 @@ describe('backup read snapshots', () => {
     expect(local.students).toEqual([expect.objectContaining({ deleted: true })]);
     expect(local.users).toHaveLength(1);
     const cloud = await exportAllData({ includeUsers: false }) as Record<string, unknown>;
-    expect(cloud.version).toBe(7);
+    expect(cloud.version).toBe(8);
     expect(cloud.includeUsers).toBe(false);
     expect(cloud).not.toHaveProperty('users');
     expect(cloud).toHaveProperty('inventoryTransactions');

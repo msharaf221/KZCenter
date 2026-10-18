@@ -1,7 +1,7 @@
 import { readAll } from '../../data/readers';
 import type { Course, Group, Student, Teacher, UserRole } from '../../domain/models';
 import { visibleGroupIds } from '../../lib/permissions';
-import type { SubjectId } from '../../lib/subjects';
+import type { SubjectId } from '../../domain/subject';
 import { cleanGroupMembers } from '../groupService';
 
 export async function loadGroupsCatalog({ search, subjectFilter, role, teacherId }: { search: string; subjectFilter: SubjectId | ''; role?: UserRole; teacherId?: string }) {

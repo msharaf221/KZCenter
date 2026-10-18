@@ -30,8 +30,8 @@ import {
   SUBJECTS,
   getSubject,
   matchSubjectId, subjectPrice,
-  type SubjectId, type SubjectPrices,
 } from './subjects';
+import type { SubjectId, SubjectPrices } from '../domain/subject';
 
 export interface SubjectSyncOptions {
   /** إنشاء كورس لكل مادة ناقصة (عشان تقدر تفتح مجموعات عليها فوراً) */

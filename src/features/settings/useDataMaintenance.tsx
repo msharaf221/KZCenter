@@ -5,7 +5,7 @@ import type { QualityReport } from '../../domain/maintenance/qualityTypes';
 import { useCommandTask } from '../../hooks/useCommandTask';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 import { notify } from '../../lib/notifications';
-import type { SubjectPrices } from '../../lib/subjects';
+import type { SubjectPrices } from '../../domain/subject';
 import { repairCatalogData, repairDataLinks } from '../../services/commands/maintenance';
 import { auditData } from '../../services/maintenance/quality';
 

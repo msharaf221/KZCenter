@@ -1,27 +1,24 @@
 import { Plus, Search, Users } from 'lucide-react';
 import { useCallback, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import PageReadError from '../components/layout/PageReadError';
 import RenewDialog from '../components/RenewDialog';
-import SessionPicker from '../components/SessionPicker';
 import TransferDialog from '../components/TransferDialog';
+import GroupStudentsDialog from '../features/groups/GroupStudentsDialog';
 import Badge from '../components/ui/Badge';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Modal from '../components/ui/Modal';
 import { useApp } from '../contexts/AppContext';
 import { useAuth } from '../contexts/AuthContext';
-import type { Group, GroupStatus, ScheduleItem, PaymentMethod } from '../domain/models';
-import { METHOD_ORDER, METHOD_LABEL } from '../lib/cashbox';
+import type { Group, GroupStatus, ScheduleItem } from '../domain/models';
 import { useCommandTask } from '../hooks/useCommandTask';
 import { usePageResource } from '../hooks/usePageResource';
-import { resolveSessionsPerMonth, proratedFirstPeriod } from '../lib/billing';
 import { notify } from '../lib/notifications';
-import { getAllSubjects, getSubject, type SubjectId } from '../lib/subjects';
+import { getAllSubjects, getSubject } from '../lib/subjects';
+import type { SubjectId } from '../domain/subject';
 import { getContrastColor, formatCurrency } from '../lib/utils';
 import { deleteCatalogRecord, saveGroup } from '../services/commands/catalog';
-import { enrollGroupStudent, removeGroupStudent } from '../services/commands/studentFinance';
-import { calculateEffectivePrice } from '../services/pricingService';
+import { enrollGroupStudents, removeGroupStudent } from '../services/commands/studentFinance';
 import { loadGroupsCatalog } from '../services/queries/groups';
 
 const DAYS = [
@@ -36,11 +33,11 @@ const DAYS = [
 
 export default function GroupsPage() {
   const task = useCommandTask();
-  const navigate = useNavigate();
   const { settings } = useApp();
   const { user, can } = useAuth();
   const canWrite = can('groups', 'create') || can('groups', 'edit');
   const canDelete = can('groups', 'delete');
+  const canEnroll = can('groups', 'enroll');
   const [search, setSearch] = useState('');
   /** فلتر بالمادة ('' = الكل) */
   const [subjectFilter, setSubjectFilter] = useState<SubjectId | ''>('');
@@ -48,10 +45,7 @@ export default function GroupsPage() {
   const [editing, setEditing] = useState<Group | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [viewGroup, setViewGroup] = useState<Group | null>(null);
-  const [selectedStudentToAdd, setSelectedStudentToAdd] = useState('');
-  const [paymentAmountToAdd, setPaymentAmountToAdd] = useState<number | ''>('');
-  const [paymentMethodToAdd, setPaymentMethodToAdd] = useState<PaymentMethod>('cash');
-  const [startSessionToAdd, setStartSessionToAdd] = useState(1);
+  const [removeTarget, setRemoveTarget] = useState<{ groupId: string; studentId: string; studentName: string } | null>(null);
   const [transferTarget, setTransferTarget] = useState<{ studentId: string; studentName: string; fromGroupId: string } | null>(null);
   const [renewTarget, setRenewTarget] = useState<{ studentId: string; studentName: string; groupId: string } | null>(null);
   const [form, setForm] = useState({
@@ -111,15 +105,14 @@ export default function GroupsPage() {
       await refreshViewedGroup(groupId);
     });
   }
-  async function addStudentToGroup(groupId: string, studentId: string) {
-    if (!studentId) return;
-    await task.run(async () => {
-      await enrollGroupStudent(user, studentId, groupId, paymentAmountToAdd || undefined, { startSession: startSessionToAdd, paymentMethod: paymentMethodToAdd });
-      notify.success('تم إضافة الطالب إلى المجموعة');
+  async function addStudentsToGroup(groupId: string, ids: string[], startSession: number): Promise<boolean> {
+    const result = await task.run(async () => {
+      const enrollment = await enrollGroupStudents(user, ids, groupId, { startSession });
+      notify.success(`تم تسجيل ${enrollment.enrolledCount || ids.length} طالب في المجموعة`);
       await refreshViewedGroup(groupId);
-      if (!task.isActive()) return;
-      setSelectedStudentToAdd(''); setPaymentAmountToAdd(''); setPaymentMethodToAdd('cash'); setStartSessionToAdd(1);
+      return true;
     });
+    return result ?? false;
   }
 
   const selectedCourse = courses.find(c => c.id === form.courseId);
@@ -364,92 +357,38 @@ export default function GroupsPage() {
         </div>
       </Modal>
 
-      {/* View Students Modal */}
       {viewGroup && (
-        <Modal isOpen={!!viewGroup} onClose={() => { setViewGroup(null); setSelectedStudentToAdd(''); setPaymentAmountToAdd(''); setStartSessionToAdd(1); }} title={`طلاب مجموعة: ${viewGroup.name}`} size="md">
-          <div className="mb-4 space-y-2">
-            <div className="flex flex-col sm:flex-row gap-2">
-              <select value={selectedStudentToAdd} onChange={e => setSelectedStudentToAdd(e.target.value)}
-                className="flex-1 w-full sm:w-0 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white min-w-0 text-ellipsis">
-                <option value="">اختر طالباً للإضافة...</option>
-                {students.filter(s => !s.deleted && !viewGroup.studentIds.includes(s.id)).map(s => (
-                  <option key={s.id} value={s.id}>{s.name} - {s.parentPhone}</option>
-                ))}
-              </select>
-              <input type="number" placeholder="دفع دلوقتي" min="0"
-                value={paymentAmountToAdd} onChange={e => setPaymentAmountToAdd(e.target.value === '' ? '' : +e.target.value)}
-                className="w-full sm:w-24 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none min-w-0" />
-              {!!paymentAmountToAdd && (
-                <select value={paymentMethodToAdd} onChange={e => setPaymentMethodToAdd(e.target.value as PaymentMethod)}
-                  className="w-full sm:w-20 px-2 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white shrink-0">
-                  {METHOD_ORDER.map(m => <option key={m} value={m}>{METHOD_LABEL[m]}</option>)}
-                </select>
-              )}
-              <button disabled={task.pending || !can('groups', 'edit') || !selectedStudentToAdd} onClick={() => addStudentToGroup(viewGroup.id, selectedStudentToAdd)}
-                className="px-4 py-2 text-white rounded-xl text-sm font-medium transition-colors whitespace-nowrap shrink-0"
-                style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
-                إضافة
-              </button>
-            </div>
-            {selectedStudentToAdd && (() => {
-              const vc = courses.find(c => c.id === viewGroup.courseId);
-              const n = resolveSessionsPerMonth({
-                courseSessionsPerMonth: vc?.sessionsPerMonth,
-                settingSessionsPerMonth: settings?.sessionsPerMonth,
-              });
-              const monthly = vc ? calculateEffectivePrice({ group: viewGroup, course: vc }) : 0;
-              const firstMonth = startSessionToAdd > 1 ? proratedFirstPeriod(monthly, startSessionToAdd, n) : monthly;
-              return (
-                <div className="space-y-2">
-                  <SessionPicker
-                    size="sm"
-                    sessions={n}
-                    value={startSessionToAdd}
-                    onChange={setStartSessionToAdd}
-                  />
-                  <div className="bg-indigo-50 border border-indigo-100 px-3 py-2 rounded-lg text-xs flex justify-between items-center">
-                    <span className="text-indigo-700 font-semibold">المطلوب لهذا الشهر بناءً على الحصة المحددة:</span>
-                    <span className="font-bold text-indigo-900">{formatCurrency(firstMonth, settings?.currency)}</span>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-          <div className="space-y-2">
-            {viewGroup.studentIds.length === 0 ? (
-              <p className="text-center text-gray-400 py-6">لا يوجد طلاب في هذه المجموعة</p>
-            ) : viewGroup.studentIds.map(sid => {
-              const student = students.find(s => s.id === sid);
-              if (!student) return null;
-              return (
-                <div key={sid} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl gap-2">
-                  <div className="flex items-center gap-2 cursor-pointer group min-w-0 flex-1" onClick={() => navigate(`/students/${sid}`)} title="عرض ملف الطالب">
-                    <span className="text-xl shrink-0">{student.gender === 'male' ? '👦' : '👧'}</span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold group-hover:text-indigo-600 group-hover:underline transition-colors truncate">{student.name}</p>
-                      <p className="text-xs text-gray-500 truncate">{student.parentPhone}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button disabled={!can('payments', 'create') || task.pending} onClick={() => setRenewTarget({ studentId: sid, studentName: student.name, groupId: viewGroup.id })}
-                      className="text-xs text-green-700 bg-green-50 hover:bg-green-100 px-2 py-1 rounded-lg transition-colors whitespace-nowrap" title="تجديد / استكمال الاشتراك">
-                      تجديد
-                    </button>
-                    <button disabled={!can('students', 'edit') || task.pending} onClick={() => setTransferTarget({ studentId: sid, studentName: student.name, fromGroupId: viewGroup.id })}
-                      className="text-xs text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2 py-1 rounded-lg transition-colors whitespace-nowrap">
-                      تحويل
-                    </button>
-                    <button disabled={task.pending || !can('groups', 'edit')} onClick={() => removeStudentFromGroup(viewGroup.id, sid)}
-                      className="text-xs text-red-600 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors whitespace-nowrap">
-                      إزالة
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </Modal>
+        <GroupStudentsDialog
+          group={viewGroup}
+          courses={courses}
+          students={students}
+          settings={settings}
+          canEnroll={canEnroll}
+          canRenew={can('payments', 'create')}
+          canTransfer={can('students', 'edit') && canEnroll}
+          pending={task.pending}
+          onClose={() => { setViewGroup(null); setRemoveTarget(null); }}
+          onEnroll={addStudentsToGroup}
+          onRenew={(student, groupId) => setRenewTarget({ studentId: student.id, studentName: student.name, groupId })}
+          onTransfer={(student, fromGroupId) => setTransferTarget({ studentId: student.id, studentName: student.name, fromGroupId })}
+          onRemove={(student, groupId) => setRemoveTarget({ groupId, studentId: student.id, studentName: student.name })}
+        />
       )}
+
+      <ConfirmDialog
+        isOpen={!!removeTarget}
+        title="إزالة الطالب من المجموعة"
+        message={removeTarget ? `هل تريد إزالة ${removeTarget.studentName}؟ سيبقى الطالب في المركز، وتظل الدفعات المسجلة في سجله، ويُلغى المتبقي من أقساط هذه المجموعة غير المسددة أو المسددة جزئيًا.` : ''}
+        confirmLabel="نعم، إزالة"
+        danger
+        onConfirm={() => {
+          if (!removeTarget) return;
+          const target = removeTarget;
+          setRemoveTarget(null);
+          void removeStudentFromGroup(target.groupId, target.studentId);
+        }}
+        onCancel={() => setRemoveTarget(null)}
+      />
 
       {/* تجديد / استكمال اشتراك طالب في نفس المجموعة */}
       {renewTarget && (

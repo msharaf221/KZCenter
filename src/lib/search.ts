@@ -6,6 +6,7 @@
  */
 import { readAll } from '../data/readers';
 import type { Course, Group, Payment, Refund, Student, Teacher, UserRole } from '../domain/models';
+import { normalizeSearchText } from '../domain/searchText';
 import { can, visibleGroupIds } from './permissions';
 import { formatCurrency, formatDate } from './utils';
 
@@ -36,14 +37,7 @@ export function kindLabel(kind: SearchKind): string {
 }
 
 function norm(s: string): string {
-  return String(s || '')
-    .toLowerCase()
-    .replace(/[\u064B-\u0652\u0640]/g, '')          // تشكيل وتطويل
-    .replace(/[أإآ]/g, 'ا')
-    .replace(/ة/g, 'ه')
-    .replace(/ى/g, 'ي')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return normalizeSearchText(s);
 }
 
 /** ترتيب النتائج: المطابقة من أول الكلمة أولاً، ثم الأقصر */

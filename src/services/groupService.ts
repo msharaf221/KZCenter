@@ -2,6 +2,7 @@ import { getDB } from '../data/database';
 import { readByIndex } from '../data/readers';
 import { writeTransaction } from '../data/transactions';
 import type { Attendance, Group, Student } from '../domain/models';
+import { isDeleted } from '../domain/recordState';
 import { withBillingTransaction } from './billing/unitOfWork';
 
 /**
@@ -18,7 +19,7 @@ export async function getGroupAttendanceForDate(groupId: string, date: string): 
   try {
     const db = await getDB();
     const all = await db.getAllFromIndex('attendance', 'by-groupDate', [groupId, date]);
-    return all as Attendance[];
+    return (all as Attendance[]).filter(record => !isDeleted(record));
   } catch {
     const all = await readByIndex<Attendance>('attendance', 'by-groupId', groupId);
     return all.filter(a => a.date === date);

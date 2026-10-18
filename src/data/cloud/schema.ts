@@ -1,4 +1,5 @@
 import schemaSql from '../../../supabase_schema.sql?raw';
+import ownerMobileMigration from '../../../docs/migrations/20261018_owner_mobile_realtime.sql?raw';
 
 // ==================== DATABASE TYPES ====================
 
@@ -224,6 +225,6 @@ export interface Database {
 }
 
 // ==================== SQL SCHEMA ====================
-// يتم تحميل الـ Schema من ملف supabase_schema.sql (مصدر واحد للحقيقة)
-// عشان نضمن إن زر "نسخ الـ Schema" في الإعدادات بيطابق الملف الفعلي.
-export const SQL_SCHEMA: string = schemaSql;
+// يشمل مخطط القاعدة والترحيل الآمن لدخول المالك وRealtime حتى ينسخ زر الإعدادات
+// نفس ملفات SQL الموجودة في المستودع، بالترتيب المطلوب.
+export const SQL_SCHEMA: string = `${schemaSql.trim()}\n\n${ownerMobileMigration.trim()}\n`;

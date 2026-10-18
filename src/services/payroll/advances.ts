@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import { getDB } from '../../data/database';
+import { writeTransaction } from '../../data/transactions';
 import { readById, readByIndex } from '../../data/readers';
 import { dbAdd } from '../../data/records';
 import type { Teacher, TeacherAdvance } from '../../domain/models';
@@ -15,23 +15,12 @@ export async function settleAdvancesAgainst(
 ): Promise<{ settled: number; carried: number }> {
   if (!isPayrollPeriod(period) || !Number.isFinite(cappedAmount) || cappedAmount < 0)
     throw new Error('بيانات التسوية غير صحيحة');
-  const db = await getDB();
-  const tx = db.transaction('teacher_advances', 'readwrite');
-  try {
-    const all: TeacherAdvance[] = await tx.store.getAll();
+  return writeTransaction(['teacher_advances'], async tx => {
+    const all: TeacherAdvance[] = await tx.objectStore('teacher_advances').getAll();
     const plan = planAdvanceSettlement(all, teacherId, period, cappedAmount, new Date().toISOString());
-    for (const advance of plan.updates) await tx.store.put(advance);
-    await tx.done;
+    for (const advance of plan.updates) await tx.objectStore('teacher_advances').put(advance);
     return { settled: plan.settled, carried: plan.carried };
-  } catch (error) {
-    try {
-      tx.abort();
-    } catch {
-      /* المعاملة قد تكون انتهت */
-    }
-    await tx.done.catch(() => {});
-    throw error;
-  }
+  });
 }
 
 export async function addTeacherAdvance(opts: {

@@ -1,5 +1,6 @@
 import { readAll } from '../../data/readers';
 import type { Attendance, Course, Group, Student, UserRole } from '../../domain/models';
+import { normalizeSearchText } from '../../domain/searchText';
 import { newestFirst, paginate } from '../../lib/pagination';
 import { visibleGroupIds } from '../../lib/permissions';
 import type { ListQuery } from './types';
@@ -49,8 +50,8 @@ export async function loadStudentsList({
 
   const filtered = allStudents.filter(s => {
     if (allowed && !(s.enrolledGroups || []).some(gid => allowed.has(gid))) return false;
-    const q = search.toLowerCase();
-    const matchSearch = !q || s.name.toLowerCase().includes(q) || s.parentPhone.includes(q);
+    const q = normalizeSearchText(search);
+    const matchSearch = !q || [s.name, s.parentPhone, s.phone, s.gradeLevel].some(value => normalizeSearchText(value).includes(q));
     const matchStatus = !statusFilter || s.status === statusFilter;
     const matchGroup = !groupFilter || s.enrolledGroups?.includes(groupFilter);
 

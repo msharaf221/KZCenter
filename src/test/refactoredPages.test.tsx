@@ -161,8 +161,8 @@ describe('payment form and reversal dialogs', () => {
     );
     await user.click(screen.getByRole('button', { name: /إضافة دفعة/ }));
     const dialog = screen.getByRole('dialog', { name: 'إضافة دفعة جديدة' });
-    await waitFor(() => expect(within(dialog).getByRole('option', { name: /طالب تجريبي أول/ })).toBeInTheDocument());
-    await user.selectOptions(control(dialog, 'الطالب *'), 'student-1');
+    await user.type(within(dialog).getByRole('searchbox'), 'طالب تجريبي أول');
+    await user.click(within(dialog).getByRole('button', { name: /طالب تجريبي أول/ }));
     await within(dialog).findByText('المطلوب');
     expect(await within(dialog).findByText(/TEST-\d{4}-0000/)).toBeInTheDocument();
     const amount = control(dialog, 'المبلغ *');

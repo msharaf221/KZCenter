@@ -2,7 +2,7 @@ import { readSnapshot } from '../../data/readers';
 import { transactionSnapshot, writeTransaction } from '../../data/transactions';
 import { qualityReport } from '../../domain/maintenance/quality';
 import { planQualityRepair } from '../../domain/maintenance/qualityRepair';
-import type { SubjectId } from '../../lib/subjects';
+import type { SubjectId } from '../../domain/subject';
 
 const STORES = ['students', 'teachers', 'courses', 'groups', 'enrollments', 'installments'] as const;
 export async function auditData() { return qualityReport(await readSnapshot(STORES)); }

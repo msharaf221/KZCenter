@@ -1,4 +1,5 @@
-import { getSubject, matchSubjectId, type SubjectId } from '../../lib/subjects';
+import { getSubject, matchSubjectId } from '../../lib/subjects';
+import type { SubjectId } from '../subject';
 import type { Course, Group, Teacher } from '../models';
 import { requireMoney } from '../validation';
 import { qualityReport, type QualityData } from './quality';

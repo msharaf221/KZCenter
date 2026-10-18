@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import { getDB } from '../../data/database';
+import { writeTransaction } from '../../data/transactions';
 import { readAll, readByIndex } from '../../data/readers';
 import type { Expense, PayrollRecord, TeacherAdvance } from '../../domain/models';
 import { planAdvanceSettlement } from '../../domain/payroll/advances';
@@ -35,18 +36,15 @@ export async function savePayrollRecord(opts: {
   ) {
     throw new Error('قيم المستحقات أو الخصومات غير صحيحة');
   }
-  const db = await getDB();
-  const tx = db.transaction(['payroll', 'teacher_advances'], 'readwrite');
-  try {
+
+  return writeTransaction(['payroll', 'teacher_advances'], async tx => {
     const records: PayrollRecord[] = await tx
       .objectStore('payroll')
       .index('by-teacherPeriod')
       .getAll([opts.teacherId, opts.period]);
     const existing = records.find(r => !r.deleted);
-    if (existing) {
-      await tx.done;
-      return existing;
-    }
+    if (existing) return existing;
+
     const now = new Date().toISOString();
     const net = round2(gross - deductions - advances);
     const record: PayrollRecord = {
@@ -76,17 +74,8 @@ export async function savePayrollRecord(opts: {
     if (settlement.uncovered > 0) throw new Error('تغيّرت السلف؛ حدّث البيانات وراجع الحساب قبل الاعتماد');
     for (const advance of settlement.updates) await tx.objectStore('teacher_advances').put(advance);
     await tx.objectStore('payroll').put(record);
-    await tx.done;
     return record;
-  } catch (error) {
-    try {
-      tx.abort();
-    } catch {
-      /* المعاملة قد تكون انتهت */
-    }
-    await tx.done.catch(() => {});
-    throw error;
-  }
+  });
 }
 
 export async function findPayrollRecord(teacherId: string, period: string): Promise<PayrollRecord | null> {
@@ -131,58 +120,52 @@ export async function payPayroll(opts: {
   ) {
     return { success: false, error: 'أدخل مبلغ صرف صحيحاً أكبر من صفر بمنزلتين عشريتين بحد أقصى' };
   }
-  const db = await getDB();
-  const tx = db.transaction(['payroll', 'expenses', 'teacher_advances'], 'readwrite');
+
   try {
-    const record: PayrollRecord | undefined = await tx.objectStore('payroll').get(opts.payrollId);
-    if (!record || record.deleted) throw new Error('سجل الراتب غير موجود');
-    const remaining = round2(record.net - record.paidAmount);
-    if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('الراتب مدفوع بالكامل بالفعل');
-    const amount = opts.amount === undefined ? remaining : round2(opts.amount);
-    if (amount > remaining) throw new Error('مبلغ الصرف أكبر من المتبقي للمدرس');
-    const now = new Date().toISOString();
-    const paidAmount = round2(record.paidAmount + amount);
-    const expenseId = opts.autoExpense === false ? undefined : generateId();
-    const updated: PayrollRecord = {
-      ...record,
-      paidAmount,
-      status: paidAmount >= record.net ? 'paid' : 'partial',
-      expenseId: expenseId || record.expenseId,
-      updatedAt: now,
-    };
-    if (expenseId) {
-      await tx.objectStore('expenses').add({
-        id: expenseId,
-        category: 'salaries',
-        amount,
-        description: `راتب ${record.teacherName} — ${record.period}`,
-        date,
-        teacherId: record.teacherId,
-        payrollId: record.id,
-        userId: opts.userId,
-        username: opts.username,
-        method: 'cash',
-        createdAt: now,
+    return await writeTransaction(['payroll', 'expenses', 'teacher_advances'], async tx => {
+      const record: PayrollRecord | undefined = await tx.objectStore('payroll').get(opts.payrollId);
+      if (!record || record.deleted) throw new Error('سجل الراتب غير موجود');
+      const remaining = round2(record.net - record.paidAmount);
+      if (!Number.isFinite(remaining) || remaining <= 0) throw new Error('الراتب مدفوع بالكامل بالفعل');
+      const amount = opts.amount === undefined ? remaining : round2(opts.amount);
+      if (amount > remaining) throw new Error('مبلغ الصرف أكبر من المتبقي للمدرس');
+      const now = new Date().toISOString();
+      const paidAmount = round2(record.paidAmount + amount);
+      const expenseId = opts.autoExpense === false ? undefined : generateId();
+      const updated: PayrollRecord = {
+        ...record,
+        paidAmount,
+        status: paidAmount >= record.net ? 'paid' : 'partial',
+        expenseId: expenseId || record.expenseId,
         updatedAt: now,
-      } satisfies Expense);
-    }
-    // توافق مع كشوف قديمة كانت تسوّي السلف عند اكتمال الصرف.
-    if (updated.status === 'paid' && record.advances > 0) {
-      const all: TeacherAdvance[] = await tx.objectStore('teacher_advances').getAll();
-      const settlement = planAdvanceSettlement(all, record.teacherId, record.period, record.advances, now);
-      if (settlement.uncovered > 0) throw new Error('بيانات السلف غير مكتملة؛ راجعها قبل صرف الكشف');
-      for (const advance of settlement.updates) await tx.objectStore('teacher_advances').put(advance);
-    }
-    await tx.objectStore('payroll').put(updated);
-    await tx.done;
-    return { success: true, record: updated, expenseId };
+      };
+      if (expenseId) {
+        await tx.objectStore('expenses').add({
+          id: expenseId,
+          category: 'salaries',
+          amount,
+          description: `راتب ${record.teacherName} — ${record.period}`,
+          date,
+          teacherId: record.teacherId,
+          payrollId: record.id,
+          userId: opts.userId,
+          username: opts.username,
+          method: 'cash',
+          createdAt: now,
+          updatedAt: now,
+        } satisfies Expense);
+      }
+      // توافق مع كشوف قديمة كانت تسوّي السلف عند اكتمال الصرف.
+      if (updated.status === 'paid' && record.advances > 0) {
+        const all: TeacherAdvance[] = await tx.objectStore('teacher_advances').getAll();
+        const settlement = planAdvanceSettlement(all, record.teacherId, record.period, record.advances, now);
+        if (settlement.uncovered > 0) throw new Error('بيانات السلف غير مكتملة؛ راجعها قبل صرف الكشف');
+        for (const advance of settlement.updates) await tx.objectStore('teacher_advances').put(advance);
+      }
+      await tx.objectStore('payroll').put(updated);
+      return { success: true, record: updated, expenseId };
+    });
   } catch (error) {
-    try {
-      tx.abort();
-    } catch {
-      /* المعاملة قد تكون انتهت */
-    }
-    await tx.done.catch(() => {});
     return { success: false, error: error instanceof Error ? error.message : 'تعذّر صرف الراتب' };
   }
 }
