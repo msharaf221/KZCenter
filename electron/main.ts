@@ -4,7 +4,7 @@
  */
 
 import { app, BrowserWindow, shell, ipcMain, dialog, Notification } from 'electron';
-import { join } from 'path';
+import { join, resolve, sep } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync } from 'fs';
 import { homedir } from 'os';
@@ -38,7 +38,9 @@ function createWindow(): void {
     icon: join(__dirname, '../build/icon.png'),
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
-      sandbox: false,
+      // Sandboxed renderer: the preload only uses contextBridge/ipcRenderer,
+      // so the renderer process gets no Node.js capabilities at all.
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -140,6 +142,21 @@ ipcMain.on('window:refocus', () => {
   refocusMainWindow();
 });
 
+// ==================== PATH SAFETY ====================
+
+/**
+ * Renderer-supplied backup paths must stay inside BACKUP_DIR.
+ * Without this check a compromised renderer could read or delete arbitrary
+ * files (documents, SSH keys, ...) through the backup IPC handlers.
+ */
+function resolveBackupPath(filepath: string): string | null {
+  if (!filepath || typeof filepath !== 'string') return null;
+  const resolved = resolve(filepath);
+  const dir = resolve(BACKUP_DIR);
+  if (resolved !== dir && !resolved.startsWith(dir + sep)) return null;
+  return resolved;
+}
+
 // ==================== IPC HANDLERS - BACKUP SYSTEM ====================
 
 /**
@@ -179,7 +196,10 @@ ipcMain.handle('backup:save-local', async (_event, data: string) => {
  */
 ipcMain.handle('backup:restore-local', async (_event, filepath?: string) => {
   try {
-    let selectedPath = filepath;
+    let selectedPath = filepath ? resolveBackupPath(filepath) : undefined;
+    if (filepath && !selectedPath) {
+      return { success: false, error: 'مسار الملف غير مسموح — النسخ الاحتياطية في مجلد النسخ فقط' };
+    }
 
     if (!selectedPath) {
       const result = await dialog.showOpenDialog(mainWindow!, {
@@ -247,8 +267,12 @@ ipcMain.handle('backup:list-local', async () => {
  */
 ipcMain.handle('backup:delete-local', async (_event, filepath: string) => {
   try {
-    if (existsSync(filepath)) {
-      unlinkSync(filepath);
+    const safePath = resolveBackupPath(filepath);
+    if (!safePath || !safePath.endsWith('.json')) {
+      return { success: false, error: 'مسار الملف غير مسموح — النسخ الاحتياطية في مجلد النسخ فقط' };
+    }
+    if (existsSync(safePath)) {
+      unlinkSync(safePath);
       return { success: true };
     }
     return { success: false, error: 'الملف غير موجود' };
