@@ -5,7 +5,7 @@ import { DEFAULT_TABLE_IMPORT_OPTIONS } from '../../domain/imports/options';
 import type { TableImportOptions, TableImportReport, TableRecord } from '../../domain/imports/types';
 import type { Course, Group, ScheduleItem, Student, Teacher } from '../../domain/models';
 import { generateId } from '../../lib/ids';
-import type { Subject, SubjectId } from '../../lib/subjects';
+import type { Subject, SubjectId } from '../../domain/subject';
 import { getSubject, subjectPrice, SUBJECTS } from '../../lib/subjects';
 import { enrollStudent } from '../enrollmentService';
 import { syncGroupStatus } from '../groupService';

@@ -44,5 +44,16 @@ export function createCloudTransport(client = getSupabaseClient()): SyncRemote {
       const { error } = await client.from(table).upsert(rows, { onConflict });
       return error ? { error: error.message } : {};
     },
+    async remove(table, rowId) {
+      if (!client) return { error: 'Supabase غير مهيأ' };
+      const { error } = await client.from(table).delete().eq('id', rowId);
+      return error ? { error: error.message } : {};
+    },
+    async removeMany(table, rowIds) {
+      if (!client) return { error: 'Supabase غير مهيأ' };
+      if (!rowIds.length) return {};
+      const { error } = await client.from(table).delete().in('id', rowIds);
+      return error ? { error: error.message } : {};
+    },
   };
 }

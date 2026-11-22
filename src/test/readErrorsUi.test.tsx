@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import * as database from '../data/database';
 import { dbPut } from '../data/records';
+import { readAll } from '../data/readers';
 import { DEFAULT_SETTINGS_VALUES, setSettingsCache } from '../lib/settings';
 import StudentsPage from '../pages/StudentsPage';
 import TeachersPage from '../pages/TeachersPage';
@@ -22,6 +23,7 @@ import AttendancePage from '../pages/AttendancePage';
 import TeacherProfilePage from '../pages/TeacherProfilePage';
 import StudentProfilePage from '../pages/StudentProfilePage';
 import * as attendanceQueries from '../services/queries/attendance';
+import { enrollStudent } from '../services/enrollmentService';
 import { payrollGroup, payrollInstallment, payrollStudent, payrollTeacher } from './helpers/payroll';
 
 vi.mock('../components/layout/Layout', () => ({ default: ({ title, children }: { title: string; children: ReactNode }) => <main><h1>{title}</h1>{children}</main> }));
@@ -84,6 +86,27 @@ describe('visible page read failures and retry', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: /طباعة/ })).toBeEnabled();
   });
+
+  it('shows unmarked students explicitly and saves selected attendance without making others absent', async () => {
+    const user = userEvent.setup();
+    await dbPut('groups', payrollGroup({ studentIds: ['student-1', 'student-2'] }));
+    await dbPut('students', payrollStudent({ enrolledGroups: ['group-1'] }));
+    await dbPut('students', payrollStudent({ id: 'student-2', name: 'طالب ثان', enrolledGroups: ['group-1'] }));
+    await dbPut('enrollments', { id: 'enrollment-1', studentId: 'student-1', groupId: 'group-1', status: 'active', enrolledAt: '2026-09-01' });
+    await dbPut('enrollments', { id: 'enrollment-2', studentId: 'student-2', groupId: 'group-1', status: 'active', enrolledAt: '2026-09-01' });
+    render(<MemoryRouter><AttendancePage /></MemoryRouter>);
+    await screen.findByText('طلاب: مجموعة رياضيات تجريبية');
+    expect(screen.getAllByText('غير محدد — لن يُحتسب غيابًا')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: /حفظ الحالات المحددة/ })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'تسجيل حاضر للطالب طالب تجريبي أول' }));
+    await user.click(screen.getByRole('button', { name: 'حفظ الحالات المحددة (1)' }));
+    await waitFor(async () => {
+      expect(await readAll('attendance')).toHaveLength(1);
+      expect(screen.queryByRole('button', { name: /جاري الحفظ/ })).not.toBeInTheDocument();
+    });
+    expect(await readAll('attendance')).toMatchObject([{ studentId: 'student-1', status: 'present' }]);
+    expect((await readAll('attendance')).some(record => record.studentId === 'student-2')).toBe(false);
+  });
 });
 
 
@@ -110,6 +133,45 @@ it('keeps group search/filter/actions wrapped within narrow viewports', async ()
   expect(actions).toHaveClass('flex-wrap', 'max-w-full');
   expect(screen.getByPlaceholderText('بحث بالاسم...').parentElement).toHaveClass('min-w-0', 'basis-full');
   await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+});
+
+it('searches, reviews and atomically adds a group of students without a payment', async () => {
+  const user = userEvent.setup();
+  await dbPut('students', payrollStudent({ id: 'candidate-1', name: 'طالب مطلوب', enrolledGroups: [] }));
+  await dbPut('groups', payrollGroup({ studentIds: [], price: 200 }));
+  render(<MemoryRouter><GroupsPage /></MemoryRouter>);
+  await user.click(await screen.findByRole('button', { name: 'الطلاب' }));
+  expect(await screen.findByText('إضافة طلاب للمجموعة')).toBeInTheDocument();
+  const search = screen.getByRole('searchbox');
+  await user.type(search, 'مطلوب');
+  await user.click(screen.getByRole('checkbox', { name: /طالب مطلوب/ }));
+  await user.click(screen.getByRole('button', { name: /مراجعة الإضافة/ }));
+  const confirmation = screen.getByRole('alertdialog');
+  expect(confirmation).toHaveTextContent('القسط الأول لكل طالب');
+  expect(confirmation).toHaveTextContent('لن يتم تسجيل أي دفعة الآن');
+  await user.click(screen.getByRole('button', { name: 'تأكيد التسجيل' }));
+  await waitFor(async () => expect(await readAll('enrollments')).toHaveLength(1));
+  expect(await readAll('payments')).toEqual([]);
+  expect(await readAll('installments')).toMatchObject([{ studentId: 'candidate-1', amount: 200, paidAmount: 0 }]);
+});
+
+it('confirms group removal and keeps the student and collection history', async () => {
+  const user = userEvent.setup();
+  await dbPut('students', payrollStudent({ enrolledGroups: [] }));
+  await dbPut('groups', payrollGroup({ studentIds: [], price: 200 }));
+  await enrollStudent('student-1', 'group-1', 20);
+  render(<MemoryRouter><GroupsPage /></MemoryRouter>);
+  await user.click(await screen.findByRole('button', { name: 'الطلاب' }));
+  await user.click(await screen.findByRole('button', { name: 'إزالة' }));
+  const confirmation = screen.getByRole('alertdialog');
+  expect(confirmation).toHaveTextContent('سيبقى الطالب في المركز');
+  expect(confirmation).toHaveTextContent('تظل الدفعات المسجلة في سجله');
+  await user.click(screen.getByRole('button', { name: 'نعم، إزالة' }));
+  await screen.findByText('لا يوجد طلاب في هذه المجموعة');
+  expect((await readAll('enrollments'))[0]?.status).toBe('dropped');
+  expect((await readAll('students')).some(student => student.id === 'student-1')).toBe(true);
+  expect(await readAll('payments')).toMatchObject([{ studentId: 'student-1', amount: 20, status: 'paid' }]);
+  expect(await readAll('installments')).toMatchObject([{ studentId: 'student-1', paidAmount: 20, status: 'cancelled' }]);
 });
 
 

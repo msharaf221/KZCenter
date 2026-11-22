@@ -1,7 +1,7 @@
 import { requireRule } from '../../domain/errors';
 import { WRITE_OFF_CONFIRM_WORD, type WriteOffScope } from '../../domain/ledger/writeOff';
 import { writeOffDebts } from '../debtWriteOffService';
-import { enrollStudent, unenrollStudent, type EnrollOptions } from '../enrollmentService';
+import { enrollStudent, enrollStudentsInGroup, unenrollStudent, type EnrollOptions } from '../enrollmentService';
 import { recordInstallmentPayment, recordRefund, voidPayment, type RecordPaymentOptions } from '../paymentService';
 import { renewEnrollment, type RenewOptions } from '../renewalService';
 import { transferStudent } from '../transferService';
@@ -29,15 +29,30 @@ export async function refundStudentPayment(actor: Actor, options: Parameters<typ
   return result;
 }
 export async function enrollGroupStudent(actor: Actor, studentId: string, groupId: string, initialPayment?: number, options?: EnrollOptions) {
-  requirePermission(actor, 'groups', 'edit');
+  requirePermission(actor, 'groups', 'enroll');
   if ((initialPayment || 0) > 0) requirePermission(actor, 'payments', 'create');
   const result = await enrollStudent(studentId, groupId, initialPayment, { ...options, collectedBy: actor.id, collectedByName: actor.username });
   requireRule(result.success, result.error || 'تعذّر التسجيل');
   commandAudit(actor, { action: 'update', entity: 'group', entityId: groupId, details: `تسجيل الطالب ${studentId}${initialPayment ? ` — دفعة ${initialPayment}` : ''}` });
   return result;
 }
+export async function enrollGroupStudents(actor: Actor, studentIds: string[], groupId: string, options?: EnrollOptions) {
+  requirePermission(actor, 'groups', 'enroll');
+  requireRule(Array.isArray(studentIds) && studentIds.every(id => typeof id === 'string' && !!id.trim()), 'قائمة الطلاب غير صحيحة');
+  const uniqueIds = [...new Set(studentIds)];
+  requireRule(uniqueIds.length > 0, 'اختر طالباً واحداً على الأقل');
+  const result = await enrollStudentsInGroup(uniqueIds, groupId, { ...options, collectedBy: actor.id, collectedByName: actor.username });
+  requireRule(result.success, result.error || 'تعذّر التسجيل الجماعي');
+  commandAudit(actor, {
+    action: 'update',
+    entity: 'group',
+    entityId: groupId,
+    details: `تسجيل جماعي لـ${result.enrolledCount} طالب في المجموعة`,
+  });
+  return result;
+}
 export async function removeGroupStudent(actor: Actor, studentId: string, groupId: string, reason?: string) {
-  requirePermission(actor, 'groups', 'edit');
+  requirePermission(actor, 'groups', 'enroll');
   const result = await unenrollStudent(studentId, groupId, reason);
   requireRule(result.success, result.error || 'تعذّر إلغاء التسجيل');
   commandAudit(actor, { action: 'update', entity: 'group', entityId: groupId, details: `إزالة الطالب ${studentId} — ${reason || 'إزالة يدوية'}` });
@@ -52,6 +67,7 @@ export async function renewStudentSubscription(actor: Actor, options: RenewOptio
 }
 export async function transferGroupStudent(actor: Actor, options: Parameters<typeof transferStudent>[0]) {
   requirePermission(actor, 'students', 'edit');
+  requirePermission(actor, 'groups', 'enroll');
   const result = await transferStudent(options);
   requireRule(result.success, result.error || 'تعذّر التحويل');
   commandAudit(actor, { action: 'update', entity: 'enrollment', entityId: `${options.studentId}:${options.fromGroupId}`, details: `تحويل إلى ${options.toGroupId} — ${options.reason || ''}` });

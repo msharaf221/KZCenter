@@ -179,7 +179,7 @@ describe('QuickCollectDialog', () => {
     const onClose = vi.fn();
     const onSuccess = vi.fn();
 
-    vi.spyOn(commands, 'collectStudentPayment').mockResolvedValue({
+    const collect = vi.spyOn(commands, 'collectStudentPayment').mockResolvedValue({
       success: true,
       remainingAfter: 0,
     } as unknown as Awaited<ReturnType<typeof commands.collectStudentPayment>>);
@@ -193,9 +193,14 @@ describe('QuickCollectDialog', () => {
       />
     );
 
+    await user.selectOptions(screen.getByLabelText('طريقة الدفع *'), 'bank');
     await user.click(screen.getByRole('button', { name: 'تأكيد التحصيل' }));
     await waitFor(() => expect(onSuccess).toHaveBeenCalledOnce());
     expect(onClose).toHaveBeenCalledOnce();
+    expect(collect).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'admin' }),
+      expect.objectContaining({ studentId, amount: 100, method: 'bank' }),
+    );
   });
 });
 

@@ -13,6 +13,9 @@
  *    وبيها بنطابق أي كورس/مجموعة قديمة بمادتها الصح (`matchSubject`).
  */
 
+import type { Subject, SubjectId, SubjectPrices } from '../domain/subject';
+export type { Subject, SubjectId, SubjectPrices } from '../domain/subject';
+
 let customSubjectsCache: Subject[] | null = null;
 
 /** يحدّث كاش المواد المخصصة في الذاكرة */
@@ -22,31 +25,6 @@ export function setCustomSubjectsCache(subjects: Subject[] | null): void {
 
 export function getCustomSubjectsCache(): Subject[] | null {
   return customSubjectsCache;
-}
-
-export type SubjectId = 'english' | 'math' | 'hesab' | 'arabic' | 'quran' | (string & {});
-
-export interface Subject {
-  id: SubjectId;
-  /** الاسم اللي بيتعرض في الواجهة */
-  name: string;
-  nameEn: string;
-  /** سعر الاشتراك الشهري الافتراضي (جنيه) */
-  monthlyPrice: number;
-  category: string;
-  icon: string;
-  color: string;
-  /**
-   * أسماء بديلة للمطابقة (بتتوحّد قبل المقارنة: تشكيل/همزات/حروف صغيرة).
-   * الترتيب مش مهم — المطابقة بتفضّل أطول alias.
-   */
-  aliases: string[];
-  /** وصف مختصر للكورس المتولّد من المادة */
-  description: string;
-  /** هل المادة مخصصة ومضافة من قبل المستخدم */
-  isCustom?: boolean;
-  /** هل تم حذف/إخفاء المادة من القائمة */
-  deleted?: boolean;
 }
 
 export const SUBJECTS: Subject[] = [
@@ -268,8 +246,6 @@ export function matchSubjectId(...texts: (string | undefined | null)[]): Subject
 // ==================== PRICES ====================
 
 /** خريطة أسعار المواد (id ← سعر شهري) */
-export type SubjectPrices = Partial<Record<SubjectId, number>>;
-
 export const DEFAULT_SUBJECT_PRICES: Record<string, number> = SUBJECTS.reduce(
   (acc, s) => { acc[s.id] = s.monthlyPrice; return acc; },
   {} as Record<string, number>,

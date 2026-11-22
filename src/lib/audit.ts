@@ -11,6 +11,7 @@
  */
 import { readAll, readById } from '../data/readers';
 import { dbAdd } from '../data/records';
+import { writeTransaction } from '../data/transactions';
 import { generateId } from './ids';
 
 import type { AuditEntry } from '../domain/audit';
@@ -62,19 +63,20 @@ export function addAuditEntry(entry: Omit<AuditEntry, 'id' | 'timestamp'>): void
 
 /** مسح السجل (للمسؤول فقط — وبيسجّل نفسه كحدث) */
 export async function clearAuditLog(by?: { userId: string; username: string }): Promise<void> {
-  const db = await (await import('../data/database')).getDB();
-  await db.clear('audit_logs');
-  if (by) {
-    await dbAdd('audit_logs', {
-      id: generateId(),
-      userId: by.userId,
-      username: by.username,
-      action: 'delete',
-      entity: 'audit_log',
-      details: 'تم مسح سجل المراجعة',
-      timestamp: new Date().toISOString(),
-    } satisfies AuditEntry);
-  }
+  await writeTransaction(['audit_logs'], async tx => {
+    await tx.objectStore('audit_logs').clear();
+    if (by) {
+      await tx.objectStore('audit_logs').put({
+        id: generateId(),
+        userId: by.userId,
+        username: by.username,
+        action: 'delete',
+        entity: 'audit_log',
+        details: 'تم مسح سجل المراجعة',
+        timestamp: new Date().toISOString(),
+      } satisfies AuditEntry);
+    }
+  });
   window.dispatchEvent(new Event('audit_log_updated'));
 }
 
@@ -85,11 +87,9 @@ async function trimAuditLog(): Promise<void> {
   if (all.length <= MAX_ENTRIES) return;
 
   const sorted = all.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
-  const tx = db.transaction('audit_logs', 'readwrite');
-  for (const old of sorted.slice(MAX_ENTRIES)) {
-    await tx.store.delete(old.id);
-  }
-  await tx.done;
+  await writeTransaction(['audit_logs'], async tx => {
+    for (const old of sorted.slice(MAX_ENTRIES)) await tx.objectStore('audit_logs').delete(old.id);
+  });
 }
 
 /** نقل السجل القديم من localStorage (مرة واحدة) */

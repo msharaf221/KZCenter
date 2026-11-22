@@ -40,6 +40,20 @@ function failPut(store: string, predicate: (row: Record<string, unknown>) => boo
 }
 
 describe('atomic profile and multi-membership submission', () => {
+  it('lets reception add and remove group membership through the student form under the dedicated membership permission', async () => {
+    const secretary = { ...actor, role: 'secretary' as const };
+    const created = await saveStudent(secretary, { draft: draft(['group-1']) });
+    expect(created.student.enrolledGroups).toEqual(['group-1']);
+    const current = (await readById('students', created.student.id))!;
+    await saveStudent(secretary, {
+      id: current.id,
+      draft: { ...current, enrolledGroups: [] },
+      baselineGroupIds: current.enrolledGroups,
+    });
+    expect((await readById('students', current.id))?.enrolledGroups).toEqual([]);
+    expect((await readById('groups', 'group-1'))?.studentIds).toEqual([]);
+    expect((await readAll('enrollments')).map(row => row.status)).toEqual(['dropped']);
+  });
   it('commits the full fresh student, both registrations, payments and counters', async () => {
     const result = await saveStudent(actor, { draft: draft(), initialPayments: { 'group-1': 20, 'group-2': 30 } });
     expect(result.student).toMatchObject({ enrolledGroups: ['group-1', 'group-2'], totalPaid: 50, totalOwed: 400 });

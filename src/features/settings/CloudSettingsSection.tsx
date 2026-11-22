@@ -10,11 +10,13 @@ import { notify } from '../../lib/notifications';
 import { getContrastColor, validateEmail } from '../../lib/utils';
 import { testSupabaseConnection } from '../../services/cloud/connection';
 import { syncCloudToLocal, syncLocalToCloud } from '../../services/sync/actions';
+import { getAutoSyncStatus, subscribeAutoSyncStatus, type AutoSyncStatus } from '../../services/sync/auto';
 
 export default function CloudSettingsSection({ primaryColor }: { primaryColor: string }) {
   const { isCloudEnabled } = useApp();
   const { confirm, dialog: confirmDialog } = useConfirmDialog();
   const [syncReport, setSyncReport] = useState<SyncReport | null>(null);
+  const [autoSyncStatus, setAutoSyncStatus] = useState<AutoSyncStatus>(() => getAutoSyncStatus());
 
   const [syncing, setSyncing] = useState(false);
 
@@ -35,6 +37,7 @@ export default function CloudSettingsSection({ primaryColor }: { primaryColor: s
   const [connectionStatus, setConnectionStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   const [supabaseExpanded, setSupabaseExpanded] = useState(false);
+  useEffect(() => subscribeAutoSyncStatus(setAutoSyncStatus), []);
   useEffect(() => {
     const config = getStoredSupabaseConfig();
     setSupabaseUrl(config.url);
@@ -171,6 +174,55 @@ export default function CloudSettingsSection({ primaryColor }: { primaryColor: s
             </button>
           </div>
         </div>
+
+        {isCloudEnabled && (
+          <div
+            role="status"
+            aria-live="polite"
+            className={`p-4 rounded-xl mb-5 border ${
+              autoSyncStatus.phase === 'error'
+                ? 'bg-red-50 border-red-100'
+                : autoSyncStatus.phase === 'offline'
+                  ? 'bg-amber-50 border-amber-100'
+                  : 'bg-indigo-50 border-indigo-100'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              {autoSyncStatus.phase === 'syncing' ? (
+                <Loader2 size={17} className="animate-spin text-indigo-600" />
+              ) : autoSyncStatus.phase === 'error' ? (
+                <XCircle size={17} className="text-red-600" />
+              ) : autoSyncStatus.phase === 'offline' ? (
+                <Cloud size={17} className="text-amber-600" />
+              ) : (
+                <CheckCircle size={17} className="text-green-600" />
+              )}
+              <p className="text-sm font-semibold text-gray-800">
+                {autoSyncStatus.phase === 'syncing'
+                  ? 'المزامنة التلقائية شغّالة…'
+                  : autoSyncStatus.phase === 'offline'
+                    ? 'مفيش اتصال — التغييرات محفوظة وهتترفع عند رجوع الإنترنت'
+                    : autoSyncStatus.phase === 'error'
+                      ? 'تعذّرت مزامنة بعض التغييرات'
+                      : autoSyncStatus.phase === 'disabled'
+                        ? 'المزامنة التلقائية غير مهيأة'
+                        : autoSyncStatus.pending
+                          ? 'فيه تغييرات مستنية الرفع'
+                          : 'المزامنة التلقائية جاهزة'}
+              </p>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
+              <span>معلّق: {autoSyncStatus.pending}</span>
+              <span>
+                آخر رفع ناجح:{' '}
+                {autoSyncStatus.lastSyncedAt
+                  ? new Date(autoSyncStatus.lastSyncedAt).toLocaleString('ar-EG')
+                  : 'لم يحدث بعد'}
+              </span>
+            </div>
+            {autoSyncStatus.lastError && <p className="mt-2 text-xs text-red-700">{autoSyncStatus.lastError}</p>}
+          </div>
+        )}
 
         {/* Supabase URL & Key Configuration */}
         {supabaseExpanded && (
@@ -352,8 +404,8 @@ export default function CloudSettingsSection({ primaryColor }: { primaryColor: s
         {/* Storage model note */}
         <div className="mb-4 p-3 bg-gray-50 rounded-xl border border-gray-100 text-sm text-gray-600">
           <p>
-            <strong className="text-gray-900">النظام يعمل محلياً</strong> — تُحفظ البيانات على هذا الجهاز. عند ربط
-            Supabase يمكنك رفع نسخة احتياطية للسحابة أو تنزيلها يدوياً من الأزرار أدناه.
+            <strong className="text-gray-900">النظام محلي أولاً</strong> — تُحفظ العملية على هذا الجهاز، ثم تُرفع
+            التغييرات تلقائياً وبشكل تدريجي عند الاتصال. أزرار الرفع والتنزيل الكاملين تظل متاحة للتهيئة أو المراجعة.
           </p>
         </div>
 

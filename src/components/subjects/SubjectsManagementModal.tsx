@@ -13,7 +13,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useApp } from '../../contexts/AppContext';
-import { getAllSubjects, getSubjectCategories, type Subject, type SubjectId } from '../../lib/subjects';
+import { getAllSubjects, getSubjectCategories } from '../../lib/subjects';
+import type { Subject, SubjectId } from '../../domain/subject';
 import { saveSubject, removeSubject } from '../../services/subjectService';
 import { notify } from '../../lib/notifications';
 import Modal from '../ui/Modal';

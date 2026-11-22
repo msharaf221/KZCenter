@@ -1,6 +1,5 @@
 import { isDeleted } from '../domain/recordState';
 import { type PageResult } from '../lib/pagination';
-import { getDB } from './database';
 import { readAll, readById, readByIndex, readPage } from './readers';
 import type { StoreName, StoreRecords } from './schema';
 import { writeTransaction } from './transactions';
@@ -34,18 +33,18 @@ export async function dbGetById(storeName: StoreName, id: string): Promise<unkno
   }
 }
 
-export async function dbAdd<T>(storeName: StoreName, item: T): Promise<void> {
+export async function dbAdd<T>(storeName: StoreName, item: T, options: { trackCloudChanges?: boolean } = {}): Promise<void> {
   try {
-    await (await getDB()).add(storeName, item as StoreRecords[StoreName]);
+    await writeTransaction([storeName], tx => tx.objectStore(storeName).add(item as StoreRecords[typeof storeName]), options);
   } catch (error) {
     console.error(`dbAdd(${storeName}) error:`, error);
     throw error;
   }
 }
 
-export async function dbPut<T>(storeName: StoreName, item: T): Promise<void> {
+export async function dbPut<T>(storeName: StoreName, item: T, options: { trackCloudChanges?: boolean } = {}): Promise<void> {
   try {
-    await (await getDB()).put(storeName, item as StoreRecords[StoreName]);
+    await writeTransaction([storeName], tx => tx.objectStore(storeName).put(item as StoreRecords[typeof storeName]), options);
   } catch (error) {
     console.error(`dbPut(${storeName}) error:`, error);
     throw error;
@@ -69,18 +68,11 @@ export async function dbSoftDelete(storeName: StoreName, id: string, meta: SoftD
 }
 
 export async function dbBulkAdd<T>(storeName: StoreName, items: T[]): Promise<void> {
-  const db = await getDB();
-  const tx = db.transaction(storeName, 'readwrite');
   try {
-    for (const item of items) await tx.store.put(item as StoreRecords[StoreName]);
-    await tx.done;
+    await writeTransaction([storeName], async tx => {
+      for (const item of items) await tx.objectStore(storeName).put(item as StoreRecords[typeof storeName]);
+    });
   } catch (error) {
-    try {
-      tx.abort();
-    } catch {
-      /* already aborted */
-    }
-    await tx.done.catch(() => { });
     console.error(`dbBulkAdd(${storeName}) error:`, error);
     throw error;
   }
@@ -88,7 +80,7 @@ export async function dbBulkAdd<T>(storeName: StoreName, items: T[]): Promise<vo
 
 export async function dbClearStore(storeName: StoreName): Promise<void> {
   try {
-    await (await getDB()).clear(storeName);
+    await writeTransaction([storeName], tx => tx.objectStore(storeName).clear());
   } catch (error) {
     console.error(`dbClearStore(${storeName}) error:`, error);
     throw error;

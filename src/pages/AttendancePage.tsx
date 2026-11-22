@@ -40,6 +40,8 @@ export default function AttendancePage() {
     !catalogLoading && !catalogError && !!selectedDate && groups.some(group => group.id === selectedGroup),
   );
   const { records: existingAttendance, students: groupStudents, statuses: attendanceMap, lateJoiners } = register;
+  const attendanceByStudent = new Map(existingAttendance.map(record => [record.studentId, record]));
+  const eligibleStudents = groupStudents.filter(student => !lateJoiners.has(student.id) || attendanceByStudent.has(student.id));
   function setAttendanceMap(action: SetStateAction<Record<string, AttendanceStatus>>) {
     setRegister(current => ({ ...current, statuses: typeof action === 'function' ? action(current.statuses) : action }));
   }
@@ -53,17 +55,15 @@ export default function AttendancePage() {
   function setAll(status: AttendanceStatus) {
     setAttendanceMap(prev => {
       const map: Record<string, AttendanceStatus> = { ...prev };
-      groupStudents.forEach(s => {
-        // اللي التحق بعد تاريخ الكشف ماياخدش حالة بالجملة (مكانش موجود)
-        if (lateJoiners.has(s.id)) return;
-        map[s.id] = status;
+      eligibleStudents.forEach(student => {
+        map[student.id] = status;
       });
       return map;
     });
   }
 
   async function handleSave() {
-    if (!registerReady) return;
+    if (!registerReady || markedCount === 0) return;
     await task.run(async () => {
       const saved = await saveAttendance(user, { groupId: selectedGroup, date: selectedDate, studentIds: groupStudents.map(student => student.id), statuses: attendanceMap });
       for (const student of saved.newlyAbsent) notifyAbsence(student.name, saved.group.name);
@@ -92,10 +92,10 @@ export default function AttendancePage() {
     const statusLabel: Record<AttendanceStatus, string> = {
       present: 'حاضر', absent: 'غائب', late: 'متأخر', excused: 'مستأذن',
     };
-    const rows = eligibleStudents.map((s, i) => ({
-      no: i + 1,
-      name: s.name,
-      status: attendanceMap[s.id] ? statusLabel[attendanceMap[s.id]] : statusLabel.absent,
+    const rows = eligibleStudents.map((student, index) => ({
+      no: index + 1,
+      name: student.name,
+      status: attendanceMap[student.id] ? statusLabel[attendanceMap[student.id]] : 'غير محدد',
     }));
     printTable({
       title: `ورقة حضور — ${group?.name ?? ''}`,
@@ -110,6 +110,7 @@ export default function AttendancePage() {
         { label: 'غائب', value: String(counts.absent) },
         { label: 'متأخر', value: String(counts.late) },
         { label: 'مستأذن', value: String(counts.excused) },
+        { label: 'غير محدد', value: String(counts.unmarked) },
       ],
       rows,
       columns: [
@@ -141,15 +142,14 @@ export default function AttendancePage() {
     { status: 'excused' as AttendanceStatus, label: 'مستأذن', icon: <AlertCircle size={14} />, color: 'bg-blue-100 text-blue-700 border-blue-200' },
   ];
 
-  /** الطلاب اللي ينطبق عليهم الكشف ده (الموجودين فعلًا في تاريخه) */
-  const eligibleStudents = groupStudents.filter(s => !lateJoiners.has(s.id));
-
   const counts = {
-    present: eligibleStudents.filter(s => attendanceMap[s.id] === 'present').length,
-    absent: eligibleStudents.filter(s => (attendanceMap[s.id] || 'absent') === 'absent').length,
-    late: eligibleStudents.filter(s => attendanceMap[s.id] === 'late').length,
-    excused: eligibleStudents.filter(s => attendanceMap[s.id] === 'excused').length,
+    present: eligibleStudents.filter(student => attendanceMap[student.id] === 'present').length,
+    absent: eligibleStudents.filter(student => attendanceMap[student.id] === 'absent').length,
+    late: eligibleStudents.filter(student => attendanceMap[student.id] === 'late').length,
+    excused: eligibleStudents.filter(student => attendanceMap[student.id] === 'excused').length,
+    unmarked: eligibleStudents.filter(student => !attendanceMap[student.id]).length,
   };
+  const markedCount = eligibleStudents.length - counts.unmarked;
 
   if (catalogError) return <PageReadError title="تسجيل الحضور" onRetry={reloadCatalog} />;
 
@@ -184,24 +184,25 @@ export default function AttendancePage() {
                 className="py-2.5 px-3 bg-indigo-50 text-indigo-700 rounded-xl text-sm font-medium hover:bg-indigo-100 transition-colors no-print">
                 <CreditCard size={16} />
               </button>
-              <button onClick={() => setAll('present')}
-                className="flex-1 py-2.5 bg-green-50 text-green-700 rounded-xl text-sm font-medium hover:bg-green-100 transition-colors">
+              <button onClick={() => setAll('present')} disabled={saving || !registerReady || !canRecord}
+                className="flex-1 py-2.5 bg-green-50 text-green-700 rounded-xl text-sm font-medium hover:bg-green-100 transition-colors disabled:opacity-50">
                 ✓ الكل حاضر
               </button>
-              <button onClick={() => setAll('absent')}
-                className="flex-1 py-2.5 bg-red-50 text-red-700 rounded-xl text-sm font-medium hover:bg-red-100 transition-colors">
+              <button onClick={() => setAll('absent')} disabled={saving || !registerReady || !canRecord}
+                className="flex-1 py-2.5 bg-red-50 text-red-700 rounded-xl text-sm font-medium hover:bg-red-100 transition-colors disabled:opacity-50">
                 ✗ الكل غائب
               </button>
             </div>
           </div>
 
           {/* Summary */}
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             {[
               { label: 'حاضر', count: counts.present, color: 'text-green-600 bg-green-50' },
               { label: 'غائب', count: counts.absent, color: 'text-red-600 bg-red-50' },
               { label: 'متأخر', count: counts.late, color: 'text-yellow-600 bg-yellow-50' },
               { label: 'مستأذن', count: counts.excused, color: 'text-blue-600 bg-blue-50' },
+              { label: 'غير محدد', count: counts.unmarked, color: 'text-amber-700 bg-amber-50' },
             ].map(item => (
               <div key={item.label} className={`p-3 rounded-xl text-center ${item.color}`}>
                 <p className="text-2xl font-bold">{registerReady ? item.count : '—'}</p>
@@ -209,6 +210,9 @@ export default function AttendancePage() {
               </div>
             ))}
           </div>
+          <p role="status" className="mt-3 text-xs text-gray-600">
+            غير المحدد لا يُسجّل غيابًا. سيُحفظ فقط ما تم تحديده؛ استخدم «الكل غائب» لتسجيل الغياب صراحةً للجميع.
+          </p>
         </div>
 
         {/* شريط المسح السريع بالباركود و QR */}
@@ -232,7 +236,7 @@ export default function AttendancePage() {
             <div className="divide-y divide-gray-50">
               {groupStudents.map((student, idx) => {
                 const status = attendanceMap[student.id];
-                const attendance = existingAttendance.find(r => r.studentId === student.id);
+                const attendance = attendanceByStudent.get(student.id);
                 const isLateJoiner = lateJoiners.has(student.id) && !attendance;
                 return (
                   <div key={student.id} className={`flex items-center gap-4 p-4 transition-colors ${isLateJoiner ? 'bg-gray-50/60 opacity-70' : 'hover:bg-gray-50'}`}>
@@ -250,6 +254,9 @@ export default function AttendancePage() {
                         )}
                       </p>
                       <p className="text-xs text-gray-500">{student.parentPhone}</p>
+                      {!isLateJoiner && !status && (
+                        <p className="mt-1 text-xs font-semibold text-amber-700">غير محدد — لن يُحتسب غيابًا</p>
+                      )}
                       {attendance?.checkInTime && (
                         <p className="text-xs text-green-600">دخول: {attendance.checkInTime}
                           {attendance.checkOutTime && ` • خروج: ${attendance.checkOutTime}`}
@@ -262,7 +269,10 @@ export default function AttendancePage() {
                       )}
                       {statusButtons.map(btn => (
                         <button key={btn.status}
-                          disabled={isLateJoiner}
+                          type="button"
+                          aria-label={`تسجيل ${btn.label} للطالب ${student.name}`}
+                          aria-pressed={status === btn.status}
+                          disabled={isLateJoiner || saving || !registerReady || !canRecord}
                           onClick={() => !isLateJoiner && setStatus(student.id, btn.status)}
                           className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all disabled:opacity-40 disabled:cursor-not-allowed
                             ${status === btn.status ? btn.color + ' border-current shadow-sm' : 'bg-gray-50 text-gray-400 border-gray-100 hover:bg-gray-100'}`}>
@@ -290,12 +300,12 @@ export default function AttendancePage() {
               })}
             </div>
             <div className="p-4 border-t border-gray-100">
-              <button onClick={handleSave} disabled={saving || !canRecord || !registerReady}
-                title={canRecord ? '' : 'ليس لديك صلاحية تسجيل الحضور'}
+              <button onClick={handleSave} disabled={saving || !canRecord || !registerReady || markedCount === 0}
+                title={!canRecord ? 'ليس لديك صلاحية تسجيل الحضور' : markedCount === 0 ? 'حدد حالة طالب واحد على الأقل قبل الحفظ' : ''}
                 className="w-full flex items-center justify-center gap-2 py-3 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-60"
                 style={{ backgroundColor: settings?.primaryColor || '#6366f1', color: getContrastColor(settings?.primaryColor || '#6366f1') }}>
                 <Save size={18} />
-                {saving ? 'جاري الحفظ...' : 'حفظ الحضور'}
+                {saving ? 'جاري الحفظ...' : counts.unmarked > 0 ? `حفظ الحالات المحددة (${markedCount})` : 'حفظ الحضور'}
               </button>
             </div>
           </div>

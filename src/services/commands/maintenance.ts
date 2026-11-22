@@ -1,5 +1,5 @@
 import { requireRule } from '../../domain/errors';
-import type { SubjectId } from '../../lib/subjects';
+import type { SubjectId } from '../../domain/subject';
 import { runIntegrityFix } from '../maintenance/integrity';
 import { repairQuality } from '../maintenance/quality';
 import { commandAudit, requirePermission, type Actor } from './access';

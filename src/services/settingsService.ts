@@ -1,4 +1,4 @@
-import { getDB } from '../data/database';
+import { writeTransaction } from '../data/transactions';
 import { readById } from '../data/readers';
 import type { Settings } from '../domain/models';
 import { DEFAULT_SETTINGS_VALUES, setSettingsCache } from '../lib/settings';
@@ -11,21 +11,12 @@ export async function loadApplicationSettings(): Promise<Settings> {
 export async function updateApplicationSettings(
   patch: Partial<Settings> | ((current: Settings) => Partial<Settings>),
 ): Promise<Settings> {
-  const tx = (await getDB()).transaction('settings', 'readwrite');
-  try {
-    const current = { ...DEFAULT_SETTINGS_VALUES, ...(await tx.store.get('main')) };
-    const updated = { ...current, ...(typeof patch === 'function' ? patch(current) : patch), id: 'main' };
-    await tx.store.put(updated);
-    await tx.done;
-    setSettingsCache(updated);
-    return updated;
-  } catch (error) {
-    try {
-      tx.abort();
-    } catch {
-      /* already finished */
-    }
-    await tx.done.catch(() => {});
-    throw error;
-  }
+  const updated = await writeTransaction(['settings'], async tx => {
+    const current = { ...DEFAULT_SETTINGS_VALUES, ...(await tx.objectStore('settings').get('main')) };
+    const next = { ...current, ...(typeof patch === 'function' ? patch(current) : patch), id: 'main' };
+    await tx.objectStore('settings').put(next);
+    return next;
+  });
+  setSettingsCache(updated);
+  return updated;
 }

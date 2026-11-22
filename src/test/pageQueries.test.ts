@@ -75,6 +75,7 @@ beforeEach(async () => {
     payrollStudent({
       id: 's1',
       name: 'Alpha Student',
+      phone: '01123456789',
       parentPhone: '00000000001',
       enrolledGroups: ['g1'],
       totalOwed: 200,
@@ -246,8 +247,9 @@ describe('student list query', () => {
     expect(data.attStatsById.s1).toEqual({ total: 4, absent: 3 });
   });
 
-  it('retains phone search, settled-balance and no-attendance filtering', async () => {
+  it('searches student and guardian phones with normalized digits, alongside balance and attendance filters', async () => {
     expect((await loadStudentsList({ ...filters, search: '00000000002' })).students.map(s => s.id)).toEqual(['s2']);
+    expect((await loadStudentsList({ ...filters, search: '٠١١٢٣٤٥٦' })).students.map(s => s.id)).toEqual(['s1']);
     expect((await loadStudentsList({ ...filters, balanceFilter: 'settled' })).students.map(s => s.id)).toEqual([
       's4',
       's3',

@@ -29,7 +29,7 @@ export const BACKUP_STORES: StoreName[] = [
 ];
 
 /** كل المتاجر المحلية */
-export type TableName = Exclude<StoreName, 'users'>;
+export type TableName = Exclude<StoreName, 'users' | 'sync_outbox'>;
 
 /**
  * الجداول اللي بتتزامن.
@@ -62,5 +62,5 @@ export const CLOUD_TABLES: TableName[] = [
   'settings',
 ];
 
-/** ممنوع من المزامنة (بيانات اعتماد) */
-export const NEVER_SYNC_TABLES = ['users'] as const;
+/** متاجر داخلية ممنوعة من المزامنة (اعتمادات وطابور محلي) */
+export const NEVER_SYNC_TABLES = ['users', 'sync_outbox'] as const;

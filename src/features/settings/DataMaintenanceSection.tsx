@@ -1,6 +1,6 @@
 import { Download, Loader2, RefreshCw, ShieldCheck, Wand2, Wrench } from 'lucide-react';
 import { useState } from 'react';
-import { type SubjectPrices } from '../../lib/subjects';
+import type { SubjectPrices } from '../../domain/subject';
 import { getContrastColor } from '../../lib/utils';
 import { executeBackup } from '../../services/backup/runner';
 import { useDataMaintenance } from './useDataMaintenance';

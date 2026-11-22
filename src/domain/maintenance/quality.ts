@@ -1,5 +1,6 @@
 import type { Installment } from '../../lib/billing';
-import { getSubject, type SubjectId } from '../../lib/subjects';
+import { getSubject } from '../../lib/subjects';
+import type { SubjectId } from '../subject';
 import { membershipKey } from '../membership/keys';
 import type { Course, Enrollment, Group, Student, Teacher } from '../models';
 import type { DataIssue, IssueCode, IssueSeverity, QualityReport } from './qualityTypes';

@@ -1,7 +1,7 @@
 import { readAll } from '../../data/readers';
 import { dbPut } from '../../data/records';
 import type { Course, Group } from '../../domain/models';
-import type { SubjectId } from '../../lib/subjects';
+import type { SubjectId } from '../../domain/subject';
 import { matchSubjectId } from '../../lib/subjects';
 
 /**

@@ -162,6 +162,7 @@ export default function StudentsPage() {
   }
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
+  const tableColumnCount = (showMoney ? 11 : 9) - (canDelete ? 0 : 1);
 
   if (error) return <PageReadError title="الطلاب" onRetry={loadStudents} />;
 
@@ -178,7 +179,7 @@ export default function StudentsPage() {
                 type="text"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="بحث بالاسم أو هاتف ولي الأمر..."
+                placeholder="بحث بالاسم أو هاتف الطالب/ولي الأمر..."
                 className="w-full pr-9 pl-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
@@ -329,14 +330,14 @@ export default function StudentsPage() {
             <table className="w-full">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="p-4 text-right">
+                  {canDelete && <th className="p-4 text-right">
                     <button type="button" role="checkbox" aria-label="اختيار كل الطلاب المعروضين" aria-checked={allVisibleSelected ? true : someVisibleSelected ? 'mixed' : false} disabled={loading || task.pending || !students.length} onClick={toggleSelectAll}>
                       {allVisibleSelected
                         ? <CheckSquare size={16} className="text-indigo-600" />
                         : <Square size={16} className="text-gray-400" />
                       }
                     </button>
-                  </th>
+                  </th>}
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">#</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">الطالب</th>
                   <th className="p-4 text-right text-xs font-semibold text-gray-600 uppercase">العمر</th>
@@ -351,21 +352,21 @@ export default function StudentsPage() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {loading ? (
-                  <tr><td colSpan={showMoney ? 11 : 9} className="p-8 text-center">
+                  <tr><td colSpan={tableColumnCount} className="p-8 text-center">
                     <div className="animate-spin w-6 h-6 border-4 border-indigo-500 border-t-transparent rounded-full mx-auto" />
                   </td></tr>
                 ) : students.length === 0 ? (
-                  <tr><td colSpan={showMoney ? 11 : 9} className="p-8 text-center text-gray-400">لا يوجد طلاب</td></tr>
+                  <tr><td colSpan={tableColumnCount} className="p-8 text-center text-gray-400">لا يوجد طلاب</td></tr>
                 ) : students.map((student, idx) => (
                   <tr key={student.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="p-4">
+                    {canDelete && <td className="p-4">
                       <button type="button" role="checkbox" aria-label={`اختيار ${student.name}`} aria-checked={selectedIds.includes(student.id)} disabled={task.pending} onClick={() => toggleSelect(student.id)}>
                         {selectedIds.includes(student.id)
                           ? <CheckSquare size={16} className="text-indigo-600" />
                           : <Square size={16} className="text-gray-400" />
                         }
                       </button>
-                    </td>
+                    </td>}
                     <td className="p-4 text-sm text-gray-500">{(page - 1) * PAGE_SIZE + idx + 1}</td>
                     <td className="p-4">
                       <div className="flex items-center gap-3">

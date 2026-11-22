@@ -28,7 +28,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe('v7 data connection', () => {
+describe('v8 data connection', () => {
   it('shares one connection-opening promise across concurrent callers', async () => {
     const first = getDB();
     const second = getDB();
@@ -36,8 +36,8 @@ describe('v7 data connection', () => {
     const connections = await Promise.all([first, second, getDB()]);
     expect(new Set(connections).size).toBe(1);
     expect(connections[0].name).toBe('EduCenterProDB');
-    expect(connections[0].version).toBe(7);
-    expect(DB_VERSION).toBe(7);
+    expect(connections[0].version).toBe(8);
+    expect(DB_VERSION).toBe(8);
   });
 
   it('can close/reopen without losing rows', async () => {
@@ -67,7 +67,7 @@ describe('v7 data connection', () => {
       expect(upgraded.version).toBe(DB_VERSION + 1);
       expect(() => first.transaction('students')).toThrow();
     } finally { upgraded.close(); }
-    // A stale v7 connection is never returned after a different client upgrades the database.
+    // A stale v8 connection is never returned after a different client upgrades the database.
     await expect(getDB()).rejects.toMatchObject({ name: 'VersionError' });
   });
 
@@ -77,10 +77,10 @@ describe('v7 data connection', () => {
       throw failure;
     });
     await expect(getDB()).rejects.toBe(failure);
-    expect((await getDB()).version).toBe(7);
+    expect((await getDB()).version).toBe(8);
   });
 
-  it('retains existing data while applying the existing v6→v7 upgrade', async () => {
+  it('retains existing data while applying the v6→v8 upgrades', async () => {
     const previous = await openDB(DB_NAME, 6, {
       upgrade(db) {
         const students = db.createObjectStore('students', { keyPath: 'id' });
@@ -98,6 +98,7 @@ describe('v7 data connection', () => {
     const db = await getDB();
     expect(await db.get('students', 'student-1')).toMatchObject({ name: 'طالب تجريبي أول' });
     expect(db.objectStoreNames.contains('payroll')).toBe(true);
+    expect(db.objectStoreNames.contains('sync_outbox')).toBe(true);
     const tx = db.transaction('payments');
     expect(tx.store.indexNames.contains('by-groupId')).toBe(true);
     await tx.done;
@@ -105,10 +106,12 @@ describe('v7 data connection', () => {
 
   it('keeps local/backup/cloud stores consistent and never syncs local credentials', async () => {
     const db = await getDB();
-    expect([...db.objectStoreNames].sort()).toEqual([...BACKUP_STORES, 'settings', 'users'].sort());
+    expect([...db.objectStoreNames].sort()).toEqual([...BACKUP_STORES, 'settings', 'users', 'sync_outbox'].sort());
     expect([...CLOUD_TABLES].sort()).toEqual([...BACKUP_STORES, 'settings'].sort());
-    expect(NEVER_SYNC_TABLES).toEqual(['users']);
+    expect(NEVER_SYNC_TABLES).toEqual(['users', 'sync_outbox']);
     expect(CLOUD_TABLES).not.toContain('users');
+    expect(BACKUP_STORES).not.toContain('sync_outbox');
+    expect(CLOUD_TABLES).not.toContain('sync_outbox');
     expect(new Set(BACKUP_STORES).size).toBe(BACKUP_STORES.length);
   });
 });
@@ -134,7 +137,7 @@ describe('record contracts and compatibility', () => {
     const deleted = (await dbGetAll('students', { includeDeleted: true }))[0];
     expect(deleted).toMatchObject({ deleted: true, deletedBy: 'test-user', deleteReason: 'synthetic test' });
     const backup = (await exportAllData()) as { students: Student[]; version: number };
-    expect(backup.version).toBe(7);
+    expect(backup.version).toBe(8);
     expect(backup.students).toHaveLength(1);
   });
 

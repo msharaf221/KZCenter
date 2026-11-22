@@ -3,6 +3,8 @@ import { useState, useEffect } from 'react';
 import Modal from '../../components/ui/Modal';
 import { useApp } from '../../contexts/AppContext';
 import { useAuth } from '../../contexts/AuthContext';
+import type { PaymentMethod } from '../../domain/models';
+import { METHOD_LABEL, METHOD_ORDER } from '../../lib/cashbox';
 import { useCommandTask } from '../../hooks/useCommandTask';
 import { notify } from '../../lib/notifications';
 import { formatCurrency, getContrastColor } from '../../lib/utils';
@@ -38,12 +40,14 @@ export default function QuickCollectDialog({
   const [payAmount, setPayAmount] = useState<number>(0);
   const [payDate, setPayDate] = useState(dayjs().format('YYYY-MM-DD'));
   const [payNotes, setPayNotes] = useState('');
+  const [payMethod, setPayMethod] = useState<PaymentMethod>('cash');
 
   useEffect(() => {
     if (target) {
       setPayAmount(target.remaining);
       setPayDate(dayjs().format('YYYY-MM-DD'));
       setPayNotes('');
+      setPayMethod('cash');
     }
   }, [target]);
 
@@ -70,7 +74,7 @@ export default function QuickCollectDialog({
         amount: payAmount,
         date: payDate,
         notes: payNotes.trim() || undefined,
-        method: 'cash',
+        method: payMethod,
         collectedBy: user?.id,
         collectedByName: user?.username,
       });
@@ -152,6 +156,18 @@ export default function QuickCollectDialog({
             className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none"
           />
         </div>
+
+        <label className="block text-sm font-semibold text-gray-700 mb-1">
+          طريقة الدفع *
+          <select
+            value={payMethod}
+            onChange={event => setPayMethod(event.target.value as PaymentMethod)}
+            disabled={saving}
+            className="mt-1 w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white disabled:bg-gray-50"
+          >
+            {METHOD_ORDER.map(method => <option key={method} value={method}>{METHOD_LABEL[method]}</option>)}
+          </select>
+        </label>
 
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-1">ملاحظات</label>

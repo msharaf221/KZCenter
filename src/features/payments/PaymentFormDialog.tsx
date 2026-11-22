@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import { useCallback } from 'react';
 import Modal from '../../components/ui/Modal';
 import ResourceError from '../../components/ui/ResourceError';
+import StudentPicker from '../students/StudentPicker';
 import { useApp } from '../../contexts/AppContext';
 import { useAuth } from '../../contexts/AuthContext';
 import type { Course, PaymentMethod, PaymentStatus, PaymentType, Student } from '../../domain/models';
@@ -87,25 +88,13 @@ export default function PaymentFormDialog({
         )}
         <div>
           <label className="block text-sm font-semibold text-gray-700 mb-1">الطالب *</label>
-          <select
-            value={form.studentId}
-            onChange={e => {
-              const studentId = e.target.value;
-              setForm({ ...form, studentId });
-            }}
-            className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none bg-white"
-          >
-            <option value="">اختر طالباً</option>
-            {students.map(s => {
-              const debt = (s.totalOwed || 0) - s.totalPaid;
-              return (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                  {debt > 0 ? ` — عليه ${debt.toLocaleString('ar-EG')}` : ''}
-                </option>
-              );
-            })}
-          </select>
+          <StudentPicker
+            students={students}
+            selectedIds={form.studentId ? [form.studentId] : []}
+            onChange={ids => setForm(current => ({ ...current, studentId: ids[0] || '' }))}
+            placeholder="ابحث باسم الطالب أو رقم الطالب/ولي الأمر..."
+            emptyHint="اكتب الاسم أو أي رقم هاتف للعثور على الطالب."
+          />
         </div>
 
         {/* رصيد الطالب المختار */}

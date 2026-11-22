@@ -223,7 +223,7 @@ export function notifyPaymentReceived(studentName: string, amount: number) {
 }
 
 export function notifyAttendanceSaved(groupName: string, count: number) {
-  notify.success(`تم حفظ حضور ${count} طالب في ${groupName}`);
+  notify.success(`تم حفظ حالات الحضور لـ${count} طالب في ${groupName}`);
 }
 
 /** تنبيه غياب متكرر (3+ متتالية) — مؤشر انسحاب محتمل */

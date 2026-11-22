@@ -12,8 +12,9 @@ export const DB_NAME = 'EduCenterProDB';
  *      refunds (استرداد) · cashbox_sessions (الخزينة/التقفيل) · payroll + teacher_advances
  *      (رواتب المدرسين) · message_logs + message_templates (تواصل أولياء الأمور)
  *      waitlist (قائمة الانتظار) + فهارس إضافية على payments
+ *  8 → sync_outbox (طابور محلي دائم لمزامنة التغييرات فقط؛ لا يحتوي نسخاً من بيانات الصفوف)
  */
-export const DB_VERSION = 7;
+export const DB_VERSION = 8;
 
 export type AppDatabase = IDBPDatabase<DatabaseSchema>;
 let connection: Promise<AppDatabase> | null = null;
@@ -227,6 +228,14 @@ export function getDB(): Promise<AppDatabase> {
           ensureIndex('payments', 'by-collectedBy', 'collectedBy');
           ensureIndex('expenses', 'by-teacherId', 'teacherId');
           ensureIndex('students', 'by-updatedAt', 'updatedAt');
+
+          // ==================== v8: durable auto-sync outbox ====================
+          if (!db.objectStoreNames.contains('sync_outbox')) {
+            const s = db.createObjectStore('sync_outbox', { keyPath: 'id' });
+            s.createIndex('by-nextAttemptAt', 'nextAttemptAt');
+            s.createIndex('by-updatedAt', 'updatedAt');
+            s.createIndex('by-table', 'table');
+          }
         },
       }),
     )

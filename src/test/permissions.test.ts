@@ -40,9 +40,12 @@ describe('can() — المصفوفة', () => {
 });
 
 describe('فصل المهام بين الأدوار', () => {
-  it('الاستقبال: تسجيل وتحصيل — من غير مصروفات ولا رواتب', () => {
+  it('الاستقبال: تسجيل وتحصيل وإدارة عضوية الطلاب — من غير تعديل إعدادات المجموعات أو مصروفات أو رواتب', () => {
     expect(can('secretary', 'students', 'create')).toBe(true);
     expect(can('secretary', 'students', 'edit')).toBe(true);
+    expect(can('secretary', 'groups', 'enroll')).toBe(true);
+    expect(can('secretary', 'groups', 'edit')).toBe(false);
+    expect(can('secretary', 'groups', 'create')).toBe(false);
     expect(can('secretary', 'payments', 'create')).toBe(true);
     expect(can('secretary', 'expenses', 'view')).toBe(false);
     expect(can('secretary', 'payroll', 'view')).toBe(false);
@@ -69,6 +72,7 @@ describe('فصل المهام بين الأدوار', () => {
 
   it('المشرف: أكاديمي من غير فلوس', () => {
     expect(can('supervisor', 'groups', 'create')).toBe(true);
+    expect(can('supervisor', 'groups', 'enroll')).toBe(true);
     expect(can('supervisor', 'attendance', 'edit')).toBe(true);
     expect(can('supervisor', 'exams', 'create')).toBe(true);
     expect(can('supervisor', 'payments', 'view')).toBe(false);
@@ -335,7 +339,7 @@ describe('سلامة المصفوفة', () => {
   });
 
   it('كل الإجراءات المخزنة معروفة', () => {
-    const valid: Action[] = ['view', 'create', 'edit', 'delete', 'export', 'money'];
+    const valid: Action[] = ['view', 'create', 'edit', 'delete', 'export', 'money', 'enroll'];
     for (const r of ROLES) {
       for (const actions of Object.values(PERMISSIONS[r])) {
         for (const a of actions || []) expect(valid).toContain(a);

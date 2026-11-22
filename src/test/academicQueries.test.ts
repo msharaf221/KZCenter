@@ -39,6 +39,14 @@ describe('academic read models', () => {
       date: '2026-09-10',
       status: 'present',
     });
+    await dbAdd('attendance', {
+      id: 'deleted-record',
+      studentId: 'student-1',
+      groupId: 'group-1',
+      date: '2026-09-10',
+      status: 'absent',
+      deleted: true,
+    });
     const data = await loadAttendanceRegister('group-1', '2026-09-10');
     expect(data.statuses).toEqual({ 'student-1': 'present' });
     expect(data.lateJoiners.has('student-1')).toBe(true);
